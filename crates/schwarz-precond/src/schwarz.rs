@@ -18,12 +18,11 @@
 //! Internal structure:
 //! - `planning` — [`ReductionStrategy`] enum, `Auto` heuristic, build-time
 //!   diagnostics
-//! - `executor` — owns the subdomain entries and dispatches `try_apply`
-//! - `buffers` — pooled scratch and accumulator buffers for zero-allocation
-//!   steady-state apply
+//! - `executor` — owns the subdomain entries, dispatches `try_apply`, and
+//!   manages the pooled scratch and accumulator buffers used to keep
+//!   steady-state apply allocation-free
 //! - `preconditioner` — the public [`SchwarzPreconditioner`] type
 
-mod buffers;
 mod executor;
 mod planning;
 mod preconditioner;
