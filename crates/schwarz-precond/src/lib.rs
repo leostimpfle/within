@@ -1,8 +1,8 @@
 //! Schwarz domain decomposition preconditioner library.
 //!
 //! Provides one-level additive and multiplicative Schwarz preconditioners,
-//! generic over local solvers and residual update strategies. Includes
-//! iterative solvers (CG, GMRES).
+//! generic over local solvers and residual update strategies. Includes a
+//! Modified LSMR iterative solver for rectangular least-squares problems.
 //!
 //! # Why domain decomposition?
 //!
@@ -10,9 +10,9 @@
 //! `A x = b` into overlapping *subdomains*, solving each
 //! one cheaply, and stitching the local solutions back together.
 //!
-//! The result is a preconditioner `M^{-1}` that approximates `A^{-1}` well
-//! enough for a Krylov solver (CG or GMRES) to converge in far fewer
-//! iterations than it would unpreconditioned. Because the local solves are
+//! The result is a preconditioner `M^{-1}` that approximates `(AᵀA)^{-1}`
+//! well enough for an iterative solver to converge in far fewer iterations
+//! than it would unpreconditioned. Because the local solves are
 //! independent in the additive variant, they parallelize naturally.
 //!
 //! ## The additive Schwarz formula
@@ -53,8 +53,7 @@
 //! │   ├── additive       SchwarzPreconditioner (parallel local solves)
 //! │   └── multiplicative MultiplicativeSchwarzPreconditioner, ResidualUpdater
 //! ├── solve           Iterative solvers
-//! │   ├── cg             Preconditioned conjugate gradient
-//! │   └── gmres          Right-preconditioned GMRES(m) with restarts
+//! │   └── lsmr           Modified LSMR for rectangular least-squares
 //! ├── sparse_matrix   SparseMatrix (internal CSR representation)
 //! └── error           Typed errors for build and runtime failures
 //! ```
@@ -131,9 +130,6 @@ pub trait Operator: Send + Sync {
 }
 
 /// Identity operator: applies the identity map (y = x).
-///
-/// Used to deduplicate CG: unpreconditioned CG delegates to preconditioned CG
-/// with this as the preconditioner. The monomorphizer fully inlines the copies.
 pub struct IdentityOperator {
     n: usize,
 }

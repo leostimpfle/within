@@ -22,16 +22,14 @@ and this project follows [Semantic Versioning](https://semver.org/).
   failures. Downstream Rust consumers matching on `SolveError` must add a
   wildcard arm. Future variant additions will not be breaking.
 - `SolveResult.iterations` and `BatchSolveResult.iterations` now report the
-  total Krylov iterations across the initial solve and any iterative-refinement
+  total iterations across the initial solve and any iterative-refinement
   correction solves (previously: outer solve only).
 
-### Fixed
+### Removed
 
-- CG stagnation guard threshold tightened from `EPS * rz_init` to
-  `EPS^2 * rz_init`. The old threshold fired at `||r||/||b|| ~ sqrt(EPS)`,
-  colliding with user tolerances near `1e-8` and causing spurious
-  non-convergence on well-conditioned problems. The new threshold fires
-  only at the true numerical-noise floor `||r|| ~ EPS * ||b||`.
+- **BREAKING:** `schwarz_precond::solve::{cg, gmres}` removed. Migrate to
+  `solve::lsmr::mlsmr`, which folds the unpreconditioned case into
+  `Option<&M>`.
 
 ## [0.1.0] - 2026-03-12
 

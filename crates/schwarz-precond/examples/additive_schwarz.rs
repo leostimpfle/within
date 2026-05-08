@@ -1,9 +1,9 @@
-//! Additive Schwarz preconditioned CG on a tridiagonal system.
+//! Additive Schwarz preconditioned MLSMR on a tridiagonal system.
 //!
 //! Demonstrates the simplest use of `SchwarzPreconditioner` with hand-built
 //! subdomains and diagonal local solvers.
 
-use schwarz_precond::solve::cg::{cg_solve, cg_solve_preconditioned};
+use schwarz_precond::solve::lsmr::{lsmr, mlsmr};
 use schwarz_precond::{
     LocalSolveError, LocalSolver, Operator, SchwarzPreconditioner, SubdomainCore, SubdomainEntry,
 };
@@ -104,20 +104,20 @@ fn main() {
     let rhs = vec![1.0; n];
     let a = TridiagOperator { n };
 
-    // --- Unpreconditioned CG ---
-    let result_plain = cg_solve(&a, &rhs, 1e-10, 200).expect("unpreconditioned cg");
+    // --- Unpreconditioned LSMR ---
+    let result_plain = lsmr(&a, &rhs, 1e-10, 200, None).expect("unpreconditioned lsmr");
     println!(
-        "Unpreconditioned CG : converged={}, iterations={:>3}, residual={:.3e}",
+        "Unpreconditioned LSMR : converged={}, iterations={:>3}, residual={:.3e}",
         result_plain.converged, result_plain.iterations, result_plain.residual_norm,
     );
 
-    // --- Additive Schwarz preconditioned CG ---
+    // --- Additive Schwarz preconditioned LSMR ---
     let precond = SchwarzPreconditioner::new(build_entries(n), n)
         .expect("valid additive schwarz preconditioner");
     let result_schwarz =
-        cg_solve_preconditioned(&a, &precond, &rhs, 1e-10, 200).expect("preconditioned cg");
+        mlsmr(&a, &rhs, Some(&precond), 1e-10, 200, None).expect("preconditioned lsmr");
     println!(
-        "Additive Schwarz CG : converged={}, iterations={:>3}, residual={:.3e}",
+        "Additive Schwarz LSMR : converged={}, iterations={:>3}, residual={:.3e}",
         result_schwarz.converged, result_schwarz.iterations, result_schwarz.residual_norm,
     );
 }

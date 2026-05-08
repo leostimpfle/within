@@ -21,10 +21,9 @@
 //! - Application-specific updaters (e.g. observation-space updates in the
 //!   `within` crate) that exploit problem structure for cheaper updates
 //!
-//! Because the sweep is sequential and non-symmetric, this preconditioner
-//! requires GMRES (not CG). Setting `symmetric = true` adds a backward
-//! sweep after the forward sweep, making the overall operator symmetric
-//! (at double the cost).
+//! The forward sweep is sequential and non-symmetric. Setting
+//! `symmetric = true` adds a backward sweep after the forward sweep,
+//! making the overall operator symmetric (at double the cost).
 
 use std::sync::Mutex;
 
