@@ -7,9 +7,8 @@ use std::time::{Duration, Instant};
 
 use rayon::prelude::*;
 use schwarz_precond::domain::PartitionWeights;
-use schwarz_precond::solve::lsmr::{lsmr, mlsmr};
 use schwarz_precond::{
-    LocalSolveError, LocalSolveInvoker, LocalSolver, Operator, ReductionStrategy,
+    lsmr, mlsmr, LocalSolveError, LocalSolveInvoker, LocalSolver, Operator, ReductionStrategy,
     SchwarzPreconditioner, SubdomainCore, SubdomainEntry,
 };
 

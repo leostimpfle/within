@@ -44,10 +44,8 @@
 //! schwarz-precond
 //! ├── domain          SubdomainCore, PartitionWeights
 //! ├── local_solve     LocalSolver trait, LocalSolveInvoker, SubdomainEntry
-//! ├── schwarz         Additive Schwarz preconditioner
-//! │   └── additive       SchwarzPreconditioner (parallel local solves)
-//! ├── solve           Iterative solvers
-//! │   └── lsmr           Modified LSMR for rectangular least-squares
+//! ├── schwarz         Additive Schwarz preconditioner (parallel local solves)
+//! ├── lsmr            Modified LSMR for rectangular least-squares
 //! ├── sparse_matrix   SparseMatrix (internal CSR representation)
 //! └── error           Typed errors for build and runtime failures
 //! ```
@@ -131,9 +129,8 @@ pub trait Operator: Send + Sync {
 pub mod domain;
 mod error;
 mod local_solve;
+mod lsmr;
 mod schwarz;
-/// Iterative solvers.
-pub mod solve;
 mod sparse_matrix;
 
 pub use domain::{PartitionWeights, SubdomainCore};
@@ -142,5 +139,6 @@ pub use error::{
     SubdomainEntryBuildError,
 };
 pub use local_solve::{DefaultLocalSolveInvoker, LocalSolveInvoker, LocalSolver, SubdomainEntry};
+pub use lsmr::{lsmr, mlsmr, LsmrResult, LsmrStopReason};
 pub use schwarz::{AdditiveSchwarzDiagnostics, ReductionStrategy, SchwarzPreconditioner};
 pub use sparse_matrix::SparseMatrix;

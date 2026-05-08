@@ -2,7 +2,7 @@
 
 use super::bidiag::{Bidiagonalization, GolubKahan};
 use super::*;
-use crate::solve::{dot, vec_norm};
+use super::{dot, vec_norm};
 use crate::{Operator, SolveError};
 
 /// Identity operator used by mlsmr equivalence tests.

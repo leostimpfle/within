@@ -3,9 +3,9 @@
 //! Demonstrates the simplest use of `SchwarzPreconditioner` with hand-built
 //! subdomains and diagonal local solvers.
 
-use schwarz_precond::solve::lsmr::{lsmr, mlsmr};
 use schwarz_precond::{
-    LocalSolveError, LocalSolver, Operator, SchwarzPreconditioner, SubdomainCore, SubdomainEntry,
+    lsmr, mlsmr, LocalSolveError, LocalSolver, Operator, SchwarzPreconditioner, SubdomainCore,
+    SubdomainEntry,
 };
 
 // ---------------------------------------------------------------------------

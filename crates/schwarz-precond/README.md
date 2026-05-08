@@ -23,10 +23,8 @@ cargo add schwarz-precond
 
 ```rust
 use schwarz_precond::{
-    LocalSolver, Operator, SubdomainCore, SubdomainEntry,
-    SchwarzPreconditioner,
+    mlsmr, LocalSolver, Operator, SchwarzPreconditioner, SubdomainCore, SubdomainEntry,
 };
-use schwarz_precond::solve::lsmr::mlsmr;
 
 // --- Tridiagonal SPD operator: A = tridiag(-1, 3, -1) ---
 struct TridiagOp(usize);

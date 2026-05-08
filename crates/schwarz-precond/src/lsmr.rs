@@ -53,10 +53,25 @@ mod recurrence;
 #[cfg(test)]
 mod tests;
 
-use super::vec_norm;
 use crate::{Operator, SolveError};
 use bidiag::{BidiagStep, Bidiagonalization, GolubKahan, ModifiedGolubKahan};
 use recurrence::{ConvergenceState, LsmrRecurrenceState, RotationStep, SolutionState, Stop};
+
+/// Inner product of two vectors.
+#[inline]
+pub(crate) fn dot(a: &[f64], b: &[f64]) -> f64 {
+    a.iter().zip(b).map(|(a, b)| a * b).sum()
+}
+
+/// Euclidean norm of a vector.
+#[inline]
+pub(crate) fn vec_norm(v: &[f64]) -> f64 {
+    let mut s = 0.0f64;
+    for &x in v {
+        s += x * x;
+    }
+    s.sqrt()
+}
 
 /// Below this count the per-iteration vector kernels run sequentially —
 /// rayon wake/steal overhead would dominate otherwise. Matches the threshold

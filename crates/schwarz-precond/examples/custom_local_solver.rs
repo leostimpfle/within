@@ -5,10 +5,9 @@
 
 use faer::{MatRef, Side};
 
-use schwarz_precond::solve::lsmr::mlsmr;
 use schwarz_precond::{
-    LocalSolveError, LocalSolver, Operator, SchwarzPreconditioner, SparseMatrix, SubdomainCore,
-    SubdomainEntry,
+    mlsmr, LocalSolveError, LocalSolver, Operator, SchwarzPreconditioner, SparseMatrix,
+    SubdomainCore, SubdomainEntry,
 };
 
 // ---------------------------------------------------------------------------
