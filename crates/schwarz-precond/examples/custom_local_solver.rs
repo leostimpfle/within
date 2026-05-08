@@ -195,7 +195,7 @@ fn main() {
 
     let precond = SchwarzPreconditioner::new(build_entries(&a_sparse, n), n)
         .expect("valid additive schwarz preconditioner");
-    let result = mlsmr(&a, &rhs, Some(&precond), 1e-10, 200, None).expect("preconditioned lsmr");
+    let result = mlsmr(&a, &rhs, &precond, 1e-10, 200, None).expect("preconditioned lsmr");
     println!(
         "Dense Cholesky Schwarz LSMR: converged={}, iterations={:>3}, residual={:.3e}",
         result.converged, result.iterations, result.residual_norm,

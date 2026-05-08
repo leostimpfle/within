@@ -77,7 +77,7 @@ fn main() {
         .collect();
 
     let precond = SchwarzPreconditioner::new(entries, n).expect("valid preconditioner");
-    let result = mlsmr(&a, &b, Some(&precond), 1e-10, 500, None).expect("lsmr should converge");
+    let result = mlsmr(&a, &b, &precond, 1e-10, 500, None).expect("lsmr should converge");
 
     println!("converged={} iters={} res={:.3e}",
         result.converged, result.iterations, result.residual_norm);

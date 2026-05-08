@@ -213,7 +213,7 @@ fn test_additive_schwarz_reduces_iterations() {
 
     let schwarz = SchwarzPreconditioner::new(make_schwarz_entries(n), n)
         .expect("valid additive schwarz preconditioner");
-    let precond = mlsmr(&a, &rhs, Some(&schwarz), 1e-8, 200, None).expect("preconditioned lsmr");
+    let precond = mlsmr(&a, &rhs, &schwarz, 1e-8, 200, None).expect("preconditioned lsmr");
     assert!(precond.converged, "Preconditioned LSMR did not converge");
 
     assert!(

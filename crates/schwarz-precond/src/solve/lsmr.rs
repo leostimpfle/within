@@ -1,10 +1,11 @@
 //! LSMR for rectangular least-squares.
 //!
-//! Solves `min ‖b − A x‖₂` with an optional preconditioner `M ≈ AᵀA`.
-//! Without `M`, the standard Golub-Kahan bidiagonalization is used. With
-//! `M`, the Modified Golub-Kahan variant requires only **one** `M⁻¹`
-//! application per iteration — no square-root factorization of `M` is
-//! needed.
+//! Solves `min ‖b − A x‖₂`. Two entry points:
+//!
+//! - [`lsmr`] — standard Golub-Kahan bidiagonalization, no preconditioner.
+//! - [`mlsmr`] — preconditioned with `M ≈ AᵀA`, using the Modified
+//!   Golub-Kahan variant. Requires only **one** `M⁻¹` application per
+//!   iteration — no square-root factorization of `M` is needed.
 //!
 //! # Modified Golub-Kahan Bidiagonalization
 //!
@@ -99,40 +100,6 @@ pub enum LsmrStopReason {
     MaxIterations,
 }
 
-/// LSMR with optional preconditioner `M ≈ AᵀA`.
-///
-/// Solves `min ‖b − A x‖₂`. Without `M`, runs standard LSMR over the
-/// Golub-Kahan bidiagonalization. With `M`, runs the Modified variant
-/// requiring one `M⁻¹` apply per iteration. Minimizes the normal-equation
-/// residual `‖Aᵀ r‖`, giving smoother convergence than LSQR.
-///
-/// `operator` is rectangular (m × n). `preconditioner` is square
-/// (n × n) and symmetric positive definite.
-///
-/// `local_size` is the number of past `v` vectors to reorthogonalize
-/// against via windowed modified Gram-Schmidt. `None` (default) disables
-/// the correction — the short-recurrence bidiagonalization is used as is.
-/// `Some(N)` enables a window of `N` past `v` vectors. `Some(5..20)` is
-/// cheap insurance for ill-conditioned problems where rounding causes the
-/// `v_k` sequence to lose orthogonality and convergence to stall. Values
-/// up to `min(m, n)` approach full reorthogonalization. Memory cost is
-/// `local_size · n` doubles for the unpreconditioned path and
-/// `2 · local_size · n` for the preconditioned path (it stores
-/// `(v_j, M v_j)` pairs).
-pub fn mlsmr<A: Operator + ?Sized, M: Operator + ?Sized>(
-    operator: &A,
-    b: &[f64],
-    preconditioner: Option<&M>,
-    tol: f64,
-    maxiter: usize,
-    local_size: Option<usize>,
-) -> Result<LsmrResult, SolveError> {
-    match preconditioner {
-        None => lsmr(operator, b, tol, maxiter, local_size),
-        Some(m) => preconditioned_lsmr(operator, b, m, tol, maxiter, local_size),
-    }
-}
-
 /// Unpreconditioned LSMR.
 ///
 /// Solves `min ‖b − A x‖₂` using the standard Golub-Kahan
@@ -161,7 +128,7 @@ pub fn lsmr<A: Operator + ?Sized>(
 ///
 /// Uses the Modified Golub-Kahan variant requiring one `M⁻¹` application per
 /// iteration.
-pub fn preconditioned_lsmr<A: Operator + ?Sized, M: Operator + ?Sized>(
+pub fn mlsmr<A: Operator + ?Sized, M: Operator + ?Sized>(
     operator: &A,
     b: &[f64],
     preconditioner: &M,

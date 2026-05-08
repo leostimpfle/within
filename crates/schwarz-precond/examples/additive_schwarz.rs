@@ -114,8 +114,7 @@ fn main() {
     // --- Additive Schwarz preconditioned LSMR ---
     let precond = SchwarzPreconditioner::new(build_entries(n), n)
         .expect("valid additive schwarz preconditioner");
-    let result_schwarz =
-        mlsmr(&a, &rhs, Some(&precond), 1e-10, 200, None).expect("preconditioned lsmr");
+    let result_schwarz = mlsmr(&a, &rhs, &precond, 1e-10, 200, None).expect("preconditioned lsmr");
     println!(
         "Additive Schwarz LSMR : converged={}, iterations={:>3}, residual={:.3e}",
         result_schwarz.converged, result_schwarz.iterations, result_schwarz.residual_norm,
