@@ -3,7 +3,27 @@
 use super::bidiag::{Bidiagonalization, GolubKahan};
 use super::*;
 use crate::solve::{dot, vec_norm};
-use crate::{IdentityOperator, Operator, SolveError};
+use crate::{Operator, SolveError};
+
+/// Identity operator used by mlsmr equivalence tests.
+struct IdentityOp {
+    n: usize,
+}
+
+impl Operator for IdentityOp {
+    fn nrows(&self) -> usize {
+        self.n
+    }
+    fn ncols(&self) -> usize {
+        self.n
+    }
+    fn apply(&self, x: &[f64], y: &mut [f64]) {
+        y.copy_from_slice(x);
+    }
+    fn apply_adjoint(&self, x: &[f64], y: &mut [f64]) {
+        y.copy_from_slice(x);
+    }
+}
 
 /// Simple 4×3 overdetermined system.
 /// A = [1 0 0; 0 1 0; 0 0 1; 1 1 0]
@@ -266,7 +286,7 @@ fn test_mlsmr_dispatch_matches_wrappers() {
     }
 }
 
-/// `None` (GolubKahan path) and `Some(&IdentityOperator)`
+/// `None` (GolubKahan path) and `Some(&IdentityOp)`
 /// (ModifiedGolubKahan with M = I) are mathematically the same algorithm.
 /// They should produce numerically equivalent solutions and iteration
 /// counts; this guards against future drift between the two
@@ -274,7 +294,7 @@ fn test_mlsmr_dispatch_matches_wrappers() {
 #[test]
 fn test_mlsmr_none_matches_identity_precond() {
     let b = vec![1.0, 2.0, 3.0, 3.0];
-    let id = IdentityOperator::new(3);
+    let id = IdentityOp { n: 3 };
 
     let none_result = lsmr(&OverdeterminedOp, &b, 1e-12, 100, None).expect("lsmr solve");
     let id_result = preconditioned_lsmr(&OverdeterminedOp, &b, &id, 1e-12, 100, None)
@@ -323,7 +343,7 @@ fn test_mlsmr_none_matches_identity_precond_windowed() {
             (1.0 + x).ln()
         })
         .collect();
-    let id = IdentityOperator::new(op.cols);
+    let id = IdentityOp { n: op.cols };
     let local = Some(10);
 
     // Tight tolerance with headroom in maxiter: drives both paths to the

@@ -89,7 +89,7 @@
 #![warn(clippy::all)]
 
 // ============================================================================
-// Operator trait + IdentityOperator
+// Operator trait
 // ============================================================================
 
 /// A linear operator A: R^ncols -> R^nrows with its adjoint A^T.
@@ -120,35 +120,6 @@ pub trait Operator: Send + Sync {
     fn try_apply_adjoint(&self, x: &[f64], y: &mut [f64]) -> Result<(), error::ApplyError> {
         self.apply_adjoint(x, y);
         Ok(())
-    }
-}
-
-/// Identity operator: applies the identity map (y = x).
-pub struct IdentityOperator {
-    n: usize,
-}
-
-impl IdentityOperator {
-    /// Create an identity operator of dimension `n`.
-    pub fn new(n: usize) -> Self {
-        Self { n }
-    }
-}
-
-impl Operator for IdentityOperator {
-    fn nrows(&self) -> usize {
-        self.n
-    }
-    fn ncols(&self) -> usize {
-        self.n
-    }
-    #[inline(always)]
-    fn apply(&self, x: &[f64], y: &mut [f64]) {
-        y.copy_from_slice(x);
-    }
-    #[inline(always)]
-    fn apply_adjoint(&self, x: &[f64], y: &mut [f64]) {
-        y.copy_from_slice(x);
     }
 }
 

@@ -395,40 +395,11 @@ fn test_additive_auto_matches_resolved_backend() {
     }
 }
 
-// ============================================================================
-// IdentityOperator tests
-// ============================================================================
-
 use schwarz_precond::{
-    ApplyError, IdentityOperator, PreconditionerBuildError, SolveError, SubdomainCoreBuildError,
+    ApplyError, PreconditionerBuildError, SolveError, SubdomainCoreBuildError,
     SubdomainEntryBuildError,
 };
 use std::error::Error;
-
-#[test]
-fn test_identity_operator_dimensions() {
-    let id = IdentityOperator::new(7);
-    assert_eq!(id.nrows(), 7);
-    assert_eq!(id.ncols(), 7);
-}
-
-#[test]
-fn test_identity_operator_apply() {
-    let id = IdentityOperator::new(4);
-    let x = vec![1.0, 2.0, 3.0, 4.0];
-    let mut y = vec![0.0; 4];
-    id.apply(&x, &mut y);
-    assert_eq!(y, x);
-}
-
-#[test]
-fn test_identity_operator_apply_adjoint() {
-    let id = IdentityOperator::new(4);
-    let x = vec![5.0, 6.0, 7.0, 8.0];
-    let mut y = vec![0.0; 4];
-    id.apply_adjoint(&x, &mut y);
-    assert_eq!(y, x);
-}
 
 // ============================================================================
 // Default try_apply / try_apply_adjoint tests
