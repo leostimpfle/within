@@ -30,6 +30,9 @@ and this project follows [Semantic Versioning](https://semver.org/).
 - **BREAKING:** `schwarz_precond::solve::{cg, gmres}` removed. Migrate to
   `solve::lsmr::mlsmr`, which folds the unpreconditioned case into
   `Option<&M>`.
+- **BREAKING:** `schwarz_precond::schwarz::multiplicative` removed, along
+  with `MultiplicativeSchwarzPreconditioner`, `ResidualUpdater`, and
+  `OperatorResidualUpdater`. Use `SchwarzPreconditioner` (additive) instead.
 
 ## [0.1.0] - 2026-03-12
 

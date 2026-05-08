@@ -1,8 +1,8 @@
 //! Schwarz domain decomposition preconditioner library.
 //!
-//! Provides one-level additive and multiplicative Schwarz preconditioners,
-//! generic over local solvers and residual update strategies. Includes a
-//! Modified LSMR iterative solver for rectangular least-squares problems.
+//! Provides a one-level additive Schwarz preconditioner generic over local
+//! solvers, plus a Modified LSMR iterative solver for rectangular
+//! least-squares problems.
 //!
 //! # Why domain decomposition?
 //!
@@ -38,20 +38,14 @@
 //! double-counting. Concretely, if a DOF belongs to *c* subdomains its
 //! weight in each is `1/√c`, so the squared weights sum to one.
 //!
-//! The **multiplicative** variant applies subdomains sequentially, updating
-//! the residual after each local solve. This is analogous to block
-//! Gauss-Seidel vs. block Jacobi: it converges faster per iteration but
-//! cannot parallelize the subdomain loop.
-//!
 //! # Module structure
 //!
 //! ```text
 //! schwarz-precond
 //! ├── domain          SubdomainCore, PartitionWeights
 //! ├── local_solve     LocalSolver trait, LocalSolveInvoker, SubdomainEntry
-//! ├── schwarz         Schwarz preconditioners
-//! │   ├── additive       SchwarzPreconditioner (parallel local solves)
-//! │   └── multiplicative MultiplicativeSchwarzPreconditioner, ResidualUpdater
+//! ├── schwarz         Additive Schwarz preconditioner
+//! │   └── additive       SchwarzPreconditioner (parallel local solves)
 //! ├── solve           Iterative solvers
 //! │   └── lsmr           Modified LSMR for rectangular least-squares
 //! ├── sparse_matrix   SparseMatrix (internal CSR representation)
@@ -177,8 +171,5 @@ pub use error::{
     SubdomainEntryBuildError,
 };
 pub use local_solve::{DefaultLocalSolveInvoker, LocalSolveInvoker, LocalSolver, SubdomainEntry};
-pub use schwarz::{
-    AdditiveSchwarzDiagnostics, MultiplicativeSchwarzPreconditioner, OperatorResidualUpdater,
-    ReductionStrategy, ResidualUpdater, SchwarzPreconditioner,
-};
+pub use schwarz::{AdditiveSchwarzDiagnostics, ReductionStrategy, SchwarzPreconditioner};
 pub use sparse_matrix::SparseMatrix;

@@ -9,15 +9,11 @@ use rayon::prelude::*;
 use schwarz_precond::domain::PartitionWeights;
 use schwarz_precond::solve::lsmr::{lsmr, mlsmr};
 use schwarz_precond::{
-    LocalSolveError, LocalSolveInvoker, LocalSolver, MultiplicativeSchwarzPreconditioner, Operator,
-    OperatorResidualUpdater, ReductionStrategy, SchwarzPreconditioner, SubdomainCore,
-    SubdomainEntry,
+    LocalSolveError, LocalSolveInvoker, LocalSolver, Operator, ReductionStrategy,
+    SchwarzPreconditioner, SubdomainCore, SubdomainEntry,
 };
 
-use common::{
-    make_schwarz_entries, DiagLocalSolver, DiagOperator, FailingLocalSolver, TridiagOperator,
-    UniformDiagLocalSolver,
-};
+use common::{make_schwarz_entries, FailingLocalSolver, TridiagOperator, UniformDiagLocalSolver};
 
 fn make_entry<S: LocalSolver>(core: SubdomainCore, solver: S) -> SubdomainEntry<S> {
     SubdomainEntry::try_new(core, solver).expect("valid subdomain entry")
@@ -400,183 +396,6 @@ fn test_additive_auto_matches_resolved_backend() {
 }
 
 // ============================================================================
-// Multiplicative Schwarz tests
-// ============================================================================
-
-#[test]
-fn test_multiplicative_single_subdomain_exact() {
-    let a = DiagOperator {
-        values: vec![2.0, 3.0, 4.0],
-    };
-    let solver = DiagLocalSolver::new(&[2.0, 3.0, 4.0]);
-    let core = SubdomainCore::uniform(vec![0, 1, 2]);
-    let entry = make_entry(core, solver);
-
-    let updater = OperatorResidualUpdater::new(&a, 3);
-    let prec = MultiplicativeSchwarzPreconditioner::new(vec![entry], updater, 3, false)
-        .expect("valid multiplicative preconditioner");
-
-    let r = vec![6.0, 9.0, 12.0];
-    let mut z = vec![0.0; 3];
-    prec.apply(&r, &mut z);
-
-    assert!((z[0] - 3.0).abs() < 1e-12);
-    assert!((z[1] - 3.0).abs() < 1e-12);
-    assert!((z[2] - 3.0).abs() < 1e-12);
-}
-
-#[test]
-fn test_multiplicative_two_nonoverlapping_subdomains() {
-    let a = DiagOperator {
-        values: vec![2.0, 3.0, 1.0, 5.0],
-    };
-
-    let solver0 = DiagLocalSolver::new(&[2.0, 3.0]);
-    let core0 = SubdomainCore::uniform(vec![0, 1]);
-    let entry0 = make_entry(core0, solver0);
-
-    let solver1 = DiagLocalSolver::new(&[1.0, 5.0]);
-    let core1 = SubdomainCore::uniform(vec![2, 3]);
-    let entry1 = make_entry(core1, solver1);
-
-    let updater = OperatorResidualUpdater::new(&a, 4);
-    let prec = MultiplicativeSchwarzPreconditioner::new(vec![entry0, entry1], updater, 4, false)
-        .expect("valid multiplicative preconditioner");
-
-    let r = vec![4.0, 9.0, 3.0, 10.0];
-    let mut z = vec![0.0; 4];
-    prec.apply(&r, &mut z);
-
-    assert!((z[0] - 2.0).abs() < 1e-12);
-    assert!((z[1] - 3.0).abs() < 1e-12);
-    assert!((z[2] - 3.0).abs() < 1e-12);
-    assert!((z[3] - 2.0).abs() < 1e-12);
-}
-
-#[test]
-fn test_multiplicative_overlapping_residual_update() {
-    let a = DiagOperator {
-        values: vec![2.0, 3.0, 4.0],
-    };
-
-    let solver0 = DiagLocalSolver::new(&[2.0, 3.0]);
-    let core0 = weighted_core(vec![0, 1], vec![1.0, 0.5]);
-    let entry0 = make_entry(core0, solver0);
-
-    let solver1 = DiagLocalSolver::new(&[3.0, 4.0]);
-    let core1 = weighted_core(vec![1, 2], vec![0.5, 1.0]);
-    let entry1 = make_entry(core1, solver1);
-
-    let updater = OperatorResidualUpdater::new(&a, 3);
-    let prec = MultiplicativeSchwarzPreconditioner::new(vec![entry0, entry1], updater, 3, false)
-        .expect("valid multiplicative preconditioner");
-
-    let r = vec![2.0, 6.0, 8.0];
-    let mut z = vec![0.0; 3];
-    prec.apply(&r, &mut z);
-
-    for &v in &z {
-        assert!(v.is_finite(), "z contains non-finite value: {}", v);
-    }
-
-    let mut residual = vec![0.0; 3];
-    a.apply(&z, &mut residual);
-    let resid_norm: f64 = (0..3)
-        .map(|i| (r[i] - residual[i]).powi(2))
-        .sum::<f64>()
-        .sqrt();
-    let r_norm: f64 = r.iter().map(|v| v * v).sum::<f64>().sqrt();
-    assert!(
-        resid_norm < r_norm,
-        "Preconditioner did not reduce residual: {} >= {}",
-        resid_norm,
-        r_norm
-    );
-}
-
-#[test]
-fn test_symmetric_multiplicative_reduces_residual_more() {
-    let a = DiagOperator {
-        values: vec![2.0, 3.0, 4.0, 5.0],
-    };
-
-    let make_entries = || {
-        let s0 = DiagLocalSolver::new(&[2.0, 3.0]);
-        let c0 = weighted_core(vec![0, 1], vec![1.0, 0.5]);
-        let s1 = DiagLocalSolver::new(&[3.0, 4.0]);
-        let c1 = weighted_core(vec![1, 2], vec![0.5, 0.5]);
-        let s2 = DiagLocalSolver::new(&[4.0, 5.0]);
-        let c2 = weighted_core(vec![2, 3], vec![0.5, 1.0]);
-        vec![make_entry(c0, s0), make_entry(c1, s1), make_entry(c2, s2)]
-    };
-
-    let r = vec![4.0, 9.0, 12.0, 15.0];
-
-    let updater_fwd = OperatorResidualUpdater::new(&a, 4);
-    let prec_fwd = MultiplicativeSchwarzPreconditioner::new(make_entries(), updater_fwd, 4, false)
-        .expect("valid forward multiplicative preconditioner");
-    let mut z_fwd = vec![0.0; 4];
-    prec_fwd.apply(&r, &mut z_fwd);
-
-    let updater_sym = OperatorResidualUpdater::new(&a, 4);
-    let prec_sym = MultiplicativeSchwarzPreconditioner::new(make_entries(), updater_sym, 4, true)
-        .expect("valid symmetric multiplicative preconditioner");
-    let mut z_sym = vec![0.0; 4];
-    prec_sym.apply(&r, &mut z_sym);
-
-    let resid_norm = |z: &[f64]| -> f64 {
-        let mut az = vec![0.0; 4];
-        a.apply(z, &mut az);
-        (0..4).map(|i| (r[i] - az[i]).powi(2)).sum::<f64>().sqrt()
-    };
-
-    let rn_fwd = resid_norm(&z_fwd);
-    let rn_sym = resid_norm(&z_sym);
-    assert!(
-        rn_sym <= rn_fwd + 1e-12,
-        "Symmetric should not be worse: sym={} > fwd={}",
-        rn_sym,
-        rn_fwd
-    );
-}
-
-#[test]
-fn test_multiplicative_with_tridiag() {
-    let n = 6;
-    let a = TridiagOperator::new(n, 3.0);
-    let make_solver = |diag_val: f64| DiagLocalSolver::new(&[diag_val, diag_val]);
-
-    let e0 = make_entry(SubdomainCore::uniform(vec![0, 1]), make_solver(3.0));
-    let e1 = make_entry(SubdomainCore::uniform(vec![2, 3]), make_solver(3.0));
-    let e2 = make_entry(SubdomainCore::uniform(vec![4, 5]), make_solver(3.0));
-
-    let updater = OperatorResidualUpdater::new(&a, n);
-    let prec = MultiplicativeSchwarzPreconditioner::new(vec![e0, e1, e2], updater, n, true)
-        .expect("valid multiplicative preconditioner");
-
-    let r = vec![1.0; n];
-    let mut z = vec![0.0; n];
-    prec.apply(&r, &mut z);
-
-    for (i, &v) in z.iter().enumerate() {
-        assert!(v.is_finite(), "z[{}] = {} is not finite", i, v);
-    }
-    let z_norm: f64 = z.iter().map(|v| v * v).sum::<f64>().sqrt();
-    assert!(z_norm > 1e-14, "z is zero");
-
-    let mut az = vec![0.0; n];
-    a.apply(&z, &mut az);
-    let resid_norm: f64 = (0..n).map(|i| (r[i] - az[i]).powi(2)).sum::<f64>().sqrt();
-    let r_norm: f64 = r.iter().map(|v| v * v).sum::<f64>().sqrt();
-    assert!(
-        resid_norm < r_norm,
-        "No residual reduction: {} >= {}",
-        resid_norm,
-        r_norm
-    );
-}
-
-// ============================================================================
 // IdentityOperator tests
 // ============================================================================
 
@@ -677,26 +496,6 @@ fn test_additive_schwarz_apply_subdomain_empty_indices() {
             // Validation prevents empty subdomain — that's acceptable too
         }
     }
-}
-
-// ============================================================================
-// Multiplicative Schwarz accessor
-// ============================================================================
-
-#[test]
-fn test_multiplicative_schwarz_subdomains_accessor() {
-    let a = DiagOperator {
-        values: vec![2.0, 3.0, 4.0],
-    };
-    let solver = DiagLocalSolver::new(&[2.0, 3.0, 4.0]);
-    let core = SubdomainCore::uniform(vec![0, 1, 2]);
-    let entry = make_entry(core, solver);
-
-    let updater = OperatorResidualUpdater::new(&a, 3);
-    let prec = MultiplicativeSchwarzPreconditioner::new(vec![entry], updater, 3, false)
-        .expect("valid multiplicative preconditioner");
-
-    assert_eq!(prec.subdomains().len(), 1);
 }
 
 // ============================================================================
@@ -971,80 +770,6 @@ fn test_additive_schwarz_apply_fills_nan_on_solver_failure() {
         z.iter().all(|v| v.is_nan()),
         "all outputs should be NaN when solver fails, got: {:?}",
         z,
-    );
-}
-
-#[test]
-fn test_multiplicative_schwarz_apply_fills_nan_on_solver_failure() {
-    let n = 4;
-    let a = DiagOperator {
-        values: vec![2.0, 3.0, 4.0, 5.0],
-    };
-
-    let solver = FailingLocalSolver {
-        n_local: 2,
-        scratch_size: 2,
-    };
-    let core = SubdomainCore::uniform(vec![0u32, 1]);
-    let entry = make_entry(core, solver);
-
-    let updater = OperatorResidualUpdater::new(&a, n);
-    let prec = MultiplicativeSchwarzPreconditioner::new(vec![entry], updater, n, false)
-        .expect("valid multiplicative preconditioner with failing solver");
-
-    let rhs = vec![1.0; n];
-    let mut z = vec![0.0; n];
-    prec.apply(&rhs, &mut z);
-
-    assert!(
-        z.iter().all(|v| v.is_nan()),
-        "all outputs should be NaN when solver fails, got: {:?}",
-        z,
-    );
-}
-
-// ============================================================================
-// Multiplicative Schwarz with empty subdomain
-// ============================================================================
-
-#[test]
-fn test_multiplicative_schwarz_empty_subdomain_ignored() {
-    // First entry has empty global_indices (contributes nothing).
-    // Second entry covers [0, 1] with exact diagonal inverse.
-    let n = 3;
-    let a = DiagOperator {
-        values: vec![2.0, 3.0, 1.0],
-    };
-
-    // Empty subdomain: n_local=0, scratch_size=0.
-    // Use DiagLocalSolver with an empty slice so both entries share the same type.
-    let empty_solver = DiagLocalSolver::new(&[]);
-    let empty_core = SubdomainCore::uniform(vec![]);
-    let empty_entry = make_entry(empty_core, empty_solver);
-
-    // Real subdomain over DOFs [0, 1] with exact diagonal solver (diag = [2.0, 3.0]).
-    let real_solver = DiagLocalSolver::new(&[2.0, 3.0]);
-    let real_core = SubdomainCore::uniform(vec![0u32, 1]);
-    let real_entry = make_entry(real_core, real_solver);
-
-    let updater = OperatorResidualUpdater::new(&a, n);
-    let prec =
-        MultiplicativeSchwarzPreconditioner::new(vec![empty_entry, real_entry], updater, n, false)
-            .expect("valid multiplicative preconditioner with empty subdomain");
-
-    let rhs = vec![4.0, 9.0, 1.0];
-    let mut z = vec![0.0; n];
-    let result = prec.try_apply(&rhs, &mut z);
-    assert!(result.is_ok(), "try_apply should succeed: {:?}", result);
-
-    // DOFs [0, 1] are solved: z[0] = 4/2 = 2.0, z[1] = 9/3 = 3.0
-    // DOF [2] is not covered by any subdomain: z[2] = 0.0
-    assert!((z[0] - 2.0).abs() < 1e-12, "z[0] = {}, expected 2.0", z[0]);
-    assert!((z[1] - 3.0).abs() < 1e-12, "z[1] = {}, expected 3.0", z[1]);
-    assert!(
-        z[2].abs() < 1e-12,
-        "z[2] = {}, expected 0.0 (uncovered DOF)",
-        z[2]
     );
 }
 

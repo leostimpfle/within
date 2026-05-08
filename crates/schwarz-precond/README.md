@@ -1,10 +1,10 @@
 # schwarz-precond
 
-Generic domain decomposition library for additive and multiplicative Schwarz
-preconditioners. Provides one-level variants with pluggable local solvers and
-a Modified LSMR iterative solver for rectangular least-squares problems.
-Suitable for symmetric positive (semi-)definite systems arising in finite
-elements, graph Laplacians, and fixed-effects models.
+Generic domain decomposition library providing a one-level additive Schwarz
+preconditioner with pluggable local solvers, plus a Modified LSMR iterative
+solver for rectangular least-squares problems. Suitable for symmetric
+positive (semi-)definite systems arising in finite elements, graph
+Laplacians, and fixed-effects models.
 
 ## Install
 
