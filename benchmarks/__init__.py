@@ -21,10 +21,14 @@ from ._framework import (
 
 # Import suite modules so their @suite decorators execute.
 from .suites import (  # noqa: F401
+    ac_comparison,
+    akm_panel,
+    fixest_comparison,
     high_fe,
     many_components,
     scaling,
     subdomain_regimes,
+    verify,
 )
 
 
