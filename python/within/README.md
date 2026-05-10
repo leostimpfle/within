@@ -4,7 +4,7 @@
 
 By the Frisch-Waugh-Lovell theorem, estimating a regression of the form *y = Xβ + Dα + ε* reduces to a sequence of least-squares projections, one for y and one for each column of X, followed by a cheap regression fit on the resulting residuals. The projection step of solving the normal equations *D'Dx = D'z* is the computational bottleneck, which is the problem `within` is designed to solve.
 
-`within`'s solvers are tailored to the structure of fixed effects problems, which can be represented as a graph (as first noted by Correia, 2016). Concretely, `within` uses iterative methods (preconditioned CG, right-preconditioned GMRES) with domain decomposition (Schwarz) preconditioners, backed by approximate Cholesky local solvers (Gao et al, 2025).
+`within`'s solvers are tailored to the structure of fixed effects problems, which can be represented as a graph (as first noted by Correia, 2016). Concretely, `within` uses modified LSMR with a domain decomposition (Schwarz) preconditioner, backed by approximate Cholesky local solvers (Gao et al, 2025).
 
 ## Installation
 
@@ -30,7 +30,7 @@ fe = np.asfortranarray(np.column_stack([
 ]))
 y = np.random.randn(n)
 
-result = solve(fe, y)                          # Schwarz-preconditioned CG
+result = solve(fe, y)                          # Schwarz-preconditioned LSMR
 result = solve(fe, y, weights=np.ones(n))      # weighted solve
 ```
 
@@ -85,15 +85,13 @@ solver2 = Solver(fe, preconditioner=precond)   # skip re-factorization
 
 | Class | Description |
 |---|---|
-| `CG(tol=1e-8, maxiter=1000, operator=Implicit)` | Conjugate gradient on the normal equations. Default solver. |
-| `GMRES(tol=1e-8, maxiter=1000, restart=30, operator=Implicit)` | Right-preconditioned GMRES. |
+| `LSMR(tol=1e-8, maxiter=1000, local_size=None)` | Modified LSMR. `local_size` enables windowed reorthogonalization. |
 
 ### Preconditioners
 
 | Class | Description |
 |---|---|
-| `AdditiveSchwarz(local_solver?)` | Additive one-level Schwarz. Works with CG and GMRES. |
-| `MultiplicativeSchwarz(local_solver?)` | Multiplicative one-level Schwarz. GMRES only. |
+| `AdditiveSchwarz(local_solver?)` | Additive one-level Schwarz. |
 | `Preconditioner.Off` | Disable preconditioning. |
 
 Pass `None` (the default) to use additive Schwarz with the default local solver.

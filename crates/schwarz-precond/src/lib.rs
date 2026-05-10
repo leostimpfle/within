@@ -1,8 +1,8 @@
 //! Schwarz domain decomposition preconditioner library.
 //!
-//! Provides one-level additive and multiplicative Schwarz preconditioners,
-//! generic over local solvers and residual update strategies. Includes
-//! iterative solvers (CG, GMRES).
+//! Provides a one-level additive Schwarz preconditioner generic over local
+//! solvers, plus a Modified LSMR iterative solver for rectangular
+//! least-squares problems.
 //!
 //! # Why domain decomposition?
 //!
@@ -10,9 +10,9 @@
 //! `A x = b` into overlapping *subdomains*, solving each
 //! one cheaply, and stitching the local solutions back together.
 //!
-//! The result is a preconditioner `M^{-1}` that approximates `A^{-1}` well
-//! enough for a Krylov solver (CG or GMRES) to converge in far fewer
-//! iterations than it would unpreconditioned. Because the local solves are
+//! The result is a preconditioner `M^{-1}` that approximates `(AᵀA)^{-1}`
+//! well enough for an iterative solver to converge in far fewer iterations
+//! than it would unpreconditioned. Because the local solves are
 //! independent in the additive variant, they parallelize naturally.
 //!
 //! ## The additive Schwarz formula
@@ -38,23 +38,14 @@
 //! double-counting. Concretely, if a DOF belongs to *c* subdomains its
 //! weight in each is `1/√c`, so the squared weights sum to one.
 //!
-//! The **multiplicative** variant applies subdomains sequentially, updating
-//! the residual after each local solve. This is analogous to block
-//! Gauss-Seidel vs. block Jacobi: it converges faster per iteration but
-//! cannot parallelize the subdomain loop.
-//!
 //! # Module structure
 //!
 //! ```text
 //! schwarz-precond
 //! ├── domain          SubdomainCore, PartitionWeights
 //! ├── local_solve     LocalSolver trait, LocalSolveInvoker, SubdomainEntry
-//! ├── schwarz         Schwarz preconditioners
-//! │   ├── additive       SchwarzPreconditioner (parallel local solves)
-//! │   └── multiplicative MultiplicativeSchwarzPreconditioner, ResidualUpdater
-//! ├── solve           Iterative solvers
-//! │   ├── cg             Preconditioned conjugate gradient
-//! │   └── gmres          Right-preconditioned GMRES(m) with restarts
+//! ├── schwarz         Additive Schwarz preconditioner (parallel local solves)
+//! ├── lsmr            Modified LSMR for rectangular least-squares
 //! ├── sparse_matrix   SparseMatrix (internal CSR representation)
 //! └── error           Typed errors for build and runtime failures
 //! ```
@@ -96,7 +87,7 @@
 #![warn(clippy::all)]
 
 // ============================================================================
-// Operator trait + IdentityOperator
+// Operator trait
 // ============================================================================
 
 /// A linear operator A: R^ncols -> R^nrows with its adjoint A^T.
@@ -130,38 +121,6 @@ pub trait Operator: Send + Sync {
     }
 }
 
-/// Identity operator: applies the identity map (y = x).
-///
-/// Used to deduplicate CG: unpreconditioned CG delegates to preconditioned CG
-/// with this as the preconditioner. The monomorphizer fully inlines the copies.
-pub struct IdentityOperator {
-    n: usize,
-}
-
-impl IdentityOperator {
-    /// Create an identity operator of dimension `n`.
-    pub fn new(n: usize) -> Self {
-        Self { n }
-    }
-}
-
-impl Operator for IdentityOperator {
-    fn nrows(&self) -> usize {
-        self.n
-    }
-    fn ncols(&self) -> usize {
-        self.n
-    }
-    #[inline(always)]
-    fn apply(&self, x: &[f64], y: &mut [f64]) {
-        y.copy_from_slice(x);
-    }
-    #[inline(always)]
-    fn apply_adjoint(&self, x: &[f64], y: &mut [f64]) {
-        y.copy_from_slice(x);
-    }
-}
-
 // ============================================================================
 // Modules
 // ============================================================================
@@ -170,9 +129,8 @@ impl Operator for IdentityOperator {
 pub mod domain;
 mod error;
 mod local_solve;
+mod lsmr;
 mod schwarz;
-/// Iterative solvers.
-pub mod solve;
 mod sparse_matrix;
 
 pub use domain::{PartitionWeights, SubdomainCore};
@@ -181,8 +139,6 @@ pub use error::{
     SubdomainEntryBuildError,
 };
 pub use local_solve::{DefaultLocalSolveInvoker, LocalSolveInvoker, LocalSolver, SubdomainEntry};
-pub use schwarz::{
-    AdditiveSchwarzDiagnostics, MultiplicativeSchwarzPreconditioner, OperatorResidualUpdater,
-    ReductionStrategy, ResidualUpdater, SchwarzPreconditioner,
-};
+pub use lsmr::{lsmr, mlsmr, LsmrResult, LsmrStopReason};
+pub use schwarz::{AdditiveSchwarzDiagnostics, ReductionStrategy, SchwarzPreconditioner};
 pub use sparse_matrix::SparseMatrix;

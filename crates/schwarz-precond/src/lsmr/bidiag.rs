@@ -7,8 +7,7 @@
 //! helpers — they are implementation detail of this stream, not an
 //! independent subsystem.
 
-use crate::solve::dot;
-use crate::solve::lsmr::{LSMR_PAR_THRESHOLD, LSMR_UPDATE_CHUNK};
+use super::{dot, LSMR_PAR_THRESHOLD, LSMR_UPDATE_CHUNK};
 use crate::{Operator, SolveError};
 use rayon::iter::{IndexedParallelIterator, ParallelIterator};
 use rayon::prelude::{ParallelSlice, ParallelSliceMut};

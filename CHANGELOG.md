@@ -7,31 +7,42 @@ and this project follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+Modified LSMR is now the sole iterative solver, replacing CG and GMRES.
+
 ### Added
 
-- **LSMR rectangular least-squares solver**: a preconditioned LSMR variant
-  operating directly on the weighted design operator (`sqrt(W) D`), exposed
-  via a new `KrylovMethod::Lsmr` and dispatched inline from `Solver::solve`.
-  Avoids explicit normal-equation formation for improved numerical
-  conditioning.
+- Preconditioned modified LSMR on `sqrt(W) D`, avoiding explicit
+  normal-equation formation.
+- `SolverParams.local_size: Option<usize>` — optional windowed modified
+  Gram-Schmidt reorthogonalization for ill-conditioned problems.
+- `LsmrStopReason` and `stop_reason` on the LSMR result.
+- `lsmr`/`mlsmr` reject non-finite input with `SolveError::InvalidInput`
+  (Python: `ValueError`); previously silent NaN propagation.
 
 ### Changed
 
-- **`schwarz_precond::SolveError` is now `#[non_exhaustive]`** and gained an
-  `InvalidInput { context, message }` variant for pre-iteration validation
-  failures. Downstream Rust consumers matching on `SolveError` must add a
-  wildcard arm. Future variant additions will not be breaking.
-- `SolveResult.iterations` and `BatchSolveResult.iterations` now report the
-  total Krylov iterations across the initial solve and any iterative-refinement
-  correction solves (previously: outer solve only).
+- **BREAKING:** `Preconditioner`, `FePreconditioner`, and
+  `schwarz_precond::SolveError` are now `#[non_exhaustive]`. External
+  `match` sites need a wildcard arm. `SolveError` gains an
+  `InvalidInput { context, message }` variant.
+- LSMR vector kernels parallelized via Rayon.
 
-### Fixed
+### Removed
 
-- CG stagnation guard threshold tightened from `EPS * rz_init` to
-  `EPS^2 * rz_init`. The old threshold fired at `||r||/||b|| ~ sqrt(EPS)`,
-  colliding with user tolerances near `1e-8` and causing spurious
-  non-convergence on well-conditioned problems. The new threshold fires
-  only at the true numerical-noise floor `||r|| ~ EPS * ||b||`.
+- **BREAKING:** CG, GMRES, multiplicative Schwarz, iterative refinement,
+  and their support types (`KrylovMethod`, `OperatorRepr`,
+  `Preconditioner::Multiplicative`, `FePreconditioner::Multiplicative`,
+  `SolverParams.max_refinements`, Python `CG`/`GMRES`/
+  `MultiplicativeSchwarz`, `MultiplicativeSchwarzPreconditioner`,
+  `ResidualUpdater`, `OperatorResidualUpdater`, `IdentityOperator`).
+- **BREAKING:** `Gramian`, `GramianOperator`, `DesignOperator`,
+  `build_schwarz`, `FeSchwarz`, and `WithinError::Overflow` removed from
+  the `within` public surface. LSMR uses `WeightedDesignOperator` directly.
+- **BREAKING:** `schwarz_precond::solve::{cg, gmres}` and the `solve`
+  module removed; use crate-root `lsmr`/`mlsmr`.
+  `schwarz_precond::schwarz::{additive, multiplicative}` flattened into
+  `schwarz_precond::schwarz`; crate-root `SchwarzPreconditioner` re-export
+  unchanged.
 
 ## [0.1.0] - 2026-03-12
 

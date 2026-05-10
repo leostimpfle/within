@@ -2,11 +2,7 @@ use ndarray::Array2;
 use proptest::prelude::*;
 use schwarz_precond::Operator;
 use within::observation::{ArrayStore, ObservationWeights};
-use within::operator::gramian::{Gramian, GramianOperator};
-use within::{
-    solve, FePreconditioner, LocalSolverConfig, Preconditioner, ReductionStrategy, SolverParams,
-    WeightedDesign,
-};
+use within::{solve, FePreconditioner, Preconditioner, SolverParams, WeightedDesign};
 
 /// Generate a random fixed-effects problem as (categories Array2<u32>, y Vec<f64>).
 fn random_fe_problem_strategy() -> impl Strategy<Value = (Array2<u32>, Vec<f64>)> {
@@ -43,54 +39,13 @@ fn default_params() -> SolverParams {
 }
 
 fn additive_precond() -> Preconditioner {
-    Preconditioner::Additive(LocalSolverConfig::solver_default(), ReductionStrategy::Auto)
+    Preconditioner::default()
 }
 
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(10))]
 
-    #[test]
-    fn prop_gramian_symmetry((cats, _y) in random_fe_problem_strategy()) {
-        let store = ArrayStore::new(cats.view(), ObservationWeights::Unit).unwrap();
-        let design = WeightedDesign::from_store(store).unwrap();
-        let gramian = GramianOperator::new(&design);
-        let n = design.n_dofs;
-
-        // Test x^T G y == y^T G x for random vectors
-        let x: Vec<f64> = (0..n).map(|i| (i as f64 * 0.3).sin()).collect();
-        let y: Vec<f64> = (0..n).map(|i| (i as f64 * 0.7).cos()).collect();
-
-        let mut gx = vec![0.0; n];
-        let mut gy = vec![0.0; n];
-        gramian.apply(&x, &mut gx);
-        gramian.apply(&y, &mut gy);
-
-        let xt_gy: f64 = x.iter().zip(gy.iter()).map(|(a, b)| a * b).sum();
-        let yt_gx: f64 = y.iter().zip(gx.iter()).map(|(a, b)| a * b).sum();
-
-        prop_assert!((xt_gy - yt_gx).abs() < 1e-8, "Gramian not symmetric: {} vs {}", xt_gy, yt_gx);
-    }
-
-    #[test]
-    fn prop_explicit_equals_implicit_gramian((cats, _y) in random_fe_problem_strategy()) {
-        let store = ArrayStore::new(cats.view(), ObservationWeights::Unit).unwrap();
-        let design = WeightedDesign::from_store(store).unwrap();
-        let explicit = Gramian::build(&design);
-        let implicit = GramianOperator::new(&design);
-        let n = design.n_dofs;
-
-        let x: Vec<f64> = (0..n).map(|i| (i as f64 * 0.3).sin()).collect();
-        let mut y_explicit = vec![0.0; n];
-        let mut y_implicit = vec![0.0; n];
-        explicit.matvec(&x, &mut y_explicit);
-        implicit.apply(&x, &mut y_implicit);
-
-        for (a, b) in y_explicit.iter().zip(y_implicit.iter()) {
-            prop_assert!((a - b).abs() < 1e-10, "explicit vs implicit: {} vs {}", a, b);
-        }
-    }
-
-    #[test]
+#[test]
     fn prop_preconditioner_serde_roundtrip((cats, _y) in random_fe_problem_strategy()) {
         let params = default_params();
         let precond = additive_precond();

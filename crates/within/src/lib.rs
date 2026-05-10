@@ -3,10 +3,8 @@
 //!
 //! `within` solves the linear fixed-effects problem **y = D x + e** where D is a
 //! sparse categorical design matrix (each row has exactly Q ones, one per factor).
-//! The normal equations **G x = D^T W y** (G = D^T W D) are solved via
-//! preconditioned CG or right-preconditioned GMRES with additive or
-//! multiplicative Schwarz preconditioners backed by approximate Cholesky
-//! local solvers.
+//! The system is solved via modified LSMR with a Gramian-shaped Schwarz
+//! preconditioner backed by approximate Cholesky local solvers.
 //!
 //! # Problem formulation
 //!
@@ -64,11 +62,12 @@
 //! factors. With millions of firms, workers, or products, **G** can easily
 //! reach millions of rows. Direct factorization is infeasible. However, **G**
 //! is extremely sparse — each observation contributes at most Q*(Q+1)/2
-//! entries — so iterative Krylov solvers (CG, GMRES) with good
-//! preconditioners are the natural approach. That is where domain
-//! decomposition comes in: each factor pair defines a subdomain, and a
-//! Schwarz preconditioner applies local approximate solves on these
-//! overlapping subdomains.
+//! entries — so iterative Krylov methods with good preconditioners are the
+//! natural approach. We use modified LSMR (working on **D** directly, with
+//! condition number `kappa(D) = sqrt(kappa(G))`) with a Gramian-shaped
+//! Schwarz preconditioner: each factor pair defines a subdomain, and the
+//! preconditioner applies local approximate solves on these overlapping
+//! subdomains.
 //!
 //! # Quick start
 //!
@@ -98,14 +97,11 @@
 //! ├── domain              WeightedDesign<S> + factor-pair subdomains
 //! │   └── factor_pairs      Domain construction, partition-of-unity weights
 //! ├── operator            Linear algebra layer
-//! │   ├── gramian           G = D^T W D (explicit CSR / implicit matvec)
-//! │   │   ├── cross_tab       Bipartite block for a single factor pair
-//! │   │   └── explicit        Full Gramian CSR assembly
+//! │   ├── gramian           CrossTab (per-pair bipartite blocks)
 //! │   ├── schwarz           Schwarz preconditioner builders (FE → generic API)
-//! │   ├── preconditioner    FePreconditioner enum dispatch
+//! │   ├── preconditioner    FePreconditioner wrapper
 //! │   ├── local_solver      ApproxChol + BlockElim backends
 //! │   ├── schur_complement  Exact + approximate Schur (GKS 2023)
-//! │   ├── residual_update   Observation-space vs sparse Gramian residuals
 //! │   └── csr_block         Internal rectangular CSR off-diagonal block
 //! ├── solver              Persistent Solver<S> with preconditioner reuse
 //! ├── orchestrate         Public API: solve(), solve_batch()
@@ -116,7 +112,7 @@
 //! # Crate dependency tree
 //!
 //! ```text
-//! schwarz-precond           Generic domain decomposition (traits + Krylov solvers)
+//! schwarz-precond           Generic domain decomposition (traits + LSMR)
 //! └── within                Fixed-effects solver (this crate)
 //!     └── within-py         PyO3 bridge → python/within
 //! ```
@@ -128,11 +124,10 @@
 //!   points. For repeated solves with different right-hand sides, use
 //!   [`Solver`] to amortize the preconditioner setup.
 //!
-//! - **Understanding the math** — Begin with
-//!   [`operator::gramian`] to see how the Gramian is built and applied,
-//!   then [`operator::schwarz`] for how factor-pair subdomains become a
-//!   Schwarz preconditioner. The internal `operator::schur_complement`
-//!   module implements block-elimination local solves.
+//! - **Understanding the math** — Begin with [`operator::schwarz`] for how
+//!   factor-pair subdomains become a Schwarz preconditioner. The internal
+//!   `operator::schur_complement` module implements block-elimination local
+//!   solves on the per-pair `CrossTab` (`operator::gramian::cross_tab`).
 //!
 //! - **Extending with new backends** — The [`ObservationStore`] trait in
 //!   [`observation`] abstracts over how factor-level data is laid out in
@@ -140,9 +135,9 @@
 //!   `schwarz-precond` crate) governs subdomain solvers.
 //!
 //! - **Tuning performance** — See the [`config`] module. [`SolverParams`]
-//!   controls operator representation (implicit vs explicit Gramian),
-//!   preconditioner variant (additive/multiplicative Schwarz, or none),
-//!   Krylov method (CG/GMRES), tolerances, and local-solver settings.
+//!   controls LSMR tolerances and reorthogonalization window;
+//!   [`Preconditioner`] selects the Schwarz variant and local-solver
+//!   settings.
 //!
 //! # Architecture
 //!
@@ -152,8 +147,9 @@
 //!   and the [`ObservationStore`] trait.
 //! - **`domain`** — Domain decomposition: [`WeightedDesign`] wraps a store with factor
 //!   metadata; factor-pair subdomains are built with partition-of-unity weights.
-//! - **`operator`** — Linear algebra primitives: [`Gramian`] (explicit CSR), [`GramianOperator`]
-//!   (implicit D^T W D), [`DesignOperator`] (D and D^T), Schwarz preconditioner builders.
+//! - **`operator`** — Linear algebra primitives: `WeightedDesignOperator`
+//!   (rectangular `sqrt(W) D` for LSMR), per-pair `CrossTab` blocks, and
+//!   Schwarz preconditioner builders.
 //! - **`orchestrate`** — End-to-end solve: [`solve`] with typed configuration.
 //!
 //! # References
@@ -184,8 +180,8 @@ pub use solver::Solver;
 // ---------------------------------------------------------------------------
 
 pub use config::{
-    ApproxCholConfig, ApproxSchurConfig, KrylovMethod, LocalSolverConfig, OperatorRepr,
-    Preconditioner, ReductionStrategy, SolverParams, DEFAULT_DENSE_SCHUR_THRESHOLD,
+    ApproxCholConfig, ApproxSchurConfig, LocalSolverConfig, Preconditioner, ReductionStrategy,
+    SolverParams, DEFAULT_DENSE_SCHUR_THRESHOLD,
 };
 pub use error::{WithinError, WithinResult};
 pub use orchestrate::SolveResult;
@@ -203,7 +199,4 @@ pub use observation::{
 // Operators & builders
 // ---------------------------------------------------------------------------
 
-pub use operator::gramian::{Gramian, GramianOperator};
-pub use operator::schwarz::{build_schwarz, FeSchwarz};
-pub use operator::DesignOperator;
 pub use schwarz_precond::Operator;

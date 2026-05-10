@@ -10,7 +10,7 @@ Public API
 - ``suite`` — decorator to register a suite
 - ``list_suites`` / ``get_suite`` — suite lookup
 - ``run_solve`` / ``run_problem_set`` — solve helpers
-- ``standard_solver_configs`` — default CG + GMRES + LSMR configs
+- ``standard_solver_configs`` — default LSMR config
 """
 
 from __future__ import annotations
@@ -21,12 +21,11 @@ from typing import Any, Callable, Literal, TypeVar
 import numpy as np
 from numpy.typing import NDArray
 
-from within import CG, GMRES, LSMR, solve
+from within import LSMR, solve
 from within._within import (
     AdditiveSchwarz,
     ApproxCholConfig,
     ApproxSchurConfig,
-    MultiplicativeSchwarz,
     ReductionStrategy,
     SchurComplement,
 )
@@ -55,7 +54,7 @@ class SolverConfig:
     """Configuration for a solve via the Rust-backed API."""
 
     label: str
-    config: CG | GMRES | LSMR
+    config: LSMR
     preconditioner: Any = None
 
 
@@ -175,22 +174,6 @@ def benchmark_solver_tol(tol: float) -> float:
     return max(tol, BENCHMARK_SOLVER_TOL_MIN)
 
 
-def benchmark_cg(opts: Any, *, maxiter: int | None = None) -> CG:
-    """Construct a CG config with benchmark-standard tolerance handling."""
-    return CG(
-        tol=benchmark_solver_tol(opts.tol),
-        maxiter=opts.maxiter if maxiter is None else maxiter,
-    )
-
-
-def benchmark_gmres(opts: Any, *, maxiter: int | None = None) -> GMRES:
-    """Construct a GMRES config with benchmark-standard tolerance handling."""
-    return GMRES(
-        tol=benchmark_solver_tol(opts.tol),
-        maxiter=opts.maxiter if maxiter is None else maxiter,
-    )
-
-
 def benchmark_lsmr(
     opts: Any, *, maxiter: int | None = None, local_size: int | None = None
 ) -> LSMR:
@@ -210,27 +193,17 @@ def make_additive_schwarz(local_solver: Any) -> AdditiveSchwarz:
 def standard_solver_configs(
     opts: Any, *, maxiter: int | None = None
 ) -> list[SolverConfig]:
-    """Standard CG + GMRES + LSMR configs used by most benchmark suites.
+    """Standard LSMR config used by most benchmark suites.
 
     *opts* must have ``seed``, ``tol``, and ``maxiter`` attributes
     (typically a ``SuiteOptions``).  Pass *maxiter* to override the
-    iteration cap applied to all three solvers.
+    iteration cap.
     """
     schur = SchurComplement(
         approx_chol=ApproxCholConfig(seed=opts.seed),
         approx_schur=ApproxSchurConfig(seed=opts.seed),
     )
     return [
-        SolverConfig(
-            "CG(Schwarz)",
-            benchmark_cg(opts, maxiter=maxiter),
-            preconditioner=make_additive_schwarz(local_solver=schur),
-        ),
-        SolverConfig(
-            "GMRES(Mult-Schwarz)",
-            benchmark_gmres(opts, maxiter=maxiter),
-            preconditioner=MultiplicativeSchwarz(local_solver=schur),
-        ),
         SolverConfig(
             "LSMR(Schwarz)",
             benchmark_lsmr(opts, maxiter=maxiter),

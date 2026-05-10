@@ -5,7 +5,7 @@
 mod design_tests {
     use crate::domain::WeightedDesign;
     use crate::observation::{FactorMajorStore, ObservationWeights};
-    use crate::operator::DesignOperator;
+    use crate::operator::WeightedDesignOperator;
     use schwarz_precond::Operator;
 
     fn make_test_design() -> WeightedDesign<FactorMajorStore> {
@@ -21,7 +21,7 @@ mod design_tests {
     #[test]
     fn test_design_operator_dimensions() {
         let schema = make_test_design();
-        let op = DesignOperator::new(&schema);
+        let op = WeightedDesignOperator::new(&schema);
         assert_eq!(op.nrows(), 5);
         assert_eq!(op.ncols(), 7);
     }
@@ -29,7 +29,7 @@ mod design_tests {
     #[test]
     fn test_design_operator_adjoint() {
         let schema = make_test_design();
-        let op = DesignOperator::new(&schema);
+        let op = WeightedDesignOperator::new(&schema);
 
         let x = vec![1.0, -0.5, 2.0, 0.3, -1.0, 0.7, 1.5];
         let r = vec![0.1, 0.2, -0.3, 0.4, -0.5];
@@ -48,7 +48,7 @@ mod design_tests {
     #[test]
     fn test_matvec_d() {
         let schema = make_test_design();
-        let op = DesignOperator::new(&schema);
+        let op = WeightedDesignOperator::new(&schema);
         let x = vec![1.0, 2.0, 3.0, 10.0, 20.0, 30.0, 40.0];
         let mut y = vec![0.0; 5];
         op.apply(&x, &mut y);
@@ -58,7 +58,7 @@ mod design_tests {
     #[test]
     fn test_rmatvec_dt() {
         let schema = make_test_design();
-        let op = DesignOperator::new(&schema);
+        let op = WeightedDesignOperator::new(&schema);
         let r = vec![1.0, 2.0, 3.0, 4.0, 5.0];
         let mut x = vec![0.0; 7];
         op.apply_adjoint(&r, &mut x);
@@ -164,187 +164,6 @@ mod csr_block_tests {
 }
 
 // ===========================================================================
-// residual_update tests
-// ===========================================================================
-
-mod residual_update_tests {
-    use crate::observation::{FactorMajorStore, ObservationWeights};
-    use crate::operator::gramian::Gramian;
-    use crate::operator::residual_update::SparseGramianUpdater;
-    use schwarz_precond::{OperatorResidualUpdater, ResidualUpdater};
-
-    /// Helper: build a design, explicit Gramian.
-    fn make_test_setup() -> (Gramian, usize) {
-        use crate::domain::WeightedDesign;
-        // 2 factors, 5 observations
-        // factor 0: [0, 1, 2, 0, 1] (3 levels)
-        // factor 1: [0, 1, 2, 3, 0] (4 levels)
-        // n_dofs = 7
-        let store = FactorMajorStore::new(
-            vec![vec![0, 1, 2, 0, 1], vec![0, 1, 2, 3, 0]],
-            ObservationWeights::Unit,
-            5,
-        )
-        .expect("valid factor-major store");
-        let design = WeightedDesign::from_store(store).expect("valid fixed-effects design");
-        let gramian = Gramian::build(&design);
-        let n_dofs = design.n_dofs;
-        (gramian, n_dofs)
-    }
-
-    #[test]
-    fn test_sparse_gramian_updater_matches_operator_updater_single_step() {
-        let (gramian, n_dofs) = make_test_setup();
-
-        let mut sparse_updater = SparseGramianUpdater::new(gramian.matrix.clone());
-        let mut op_updater = OperatorResidualUpdater::new(&gramian, n_dofs);
-
-        let r_original = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0];
-        op_updater.reset(&r_original);
-
-        let mut r_op = r_original.clone();
-        let mut r_sparse = r_original;
-
-        let global_indices: Vec<u32> = vec![0, 1, 3, 4];
-        let correction = vec![0.5, -0.3, 0.2, 0.1];
-
-        op_updater.update(&global_indices, &correction, &mut r_op);
-        sparse_updater.update(&global_indices, &correction, &mut r_sparse);
-
-        for i in 0..n_dofs {
-            assert!(
-                (r_op[i] - r_sparse[i]).abs() < 1e-12,
-                "mismatch at DOF {i}: op={}, sparse={}",
-                r_op[i],
-                r_sparse[i],
-            );
-        }
-    }
-
-    #[test]
-    fn test_sparse_gramian_updater_matches_operator_updater_two_steps() {
-        let (gramian, n_dofs) = make_test_setup();
-
-        let mut sparse_updater = SparseGramianUpdater::new(gramian.matrix.clone());
-        let mut op_updater = OperatorResidualUpdater::new(&gramian, n_dofs);
-
-        let r_original = vec![10.0, 20.0, 30.0, 40.0, 50.0, 60.0, 70.0];
-        op_updater.reset(&r_original);
-
-        let mut r_op = r_original.clone();
-        let mut r_sparse = r_original;
-
-        // First subdomain correction
-        let gi1: Vec<u32> = vec![0, 1, 3, 4];
-        let c1 = vec![0.5, -0.3, 0.2, 0.1];
-        op_updater.update(&gi1, &c1, &mut r_op);
-        sparse_updater.update(&gi1, &c1, &mut r_sparse);
-
-        for i in 0..n_dofs {
-            assert!(
-                (r_op[i] - r_sparse[i]).abs() < 1e-12,
-                "step 1 mismatch at DOF {i}: op={}, sparse={}",
-                r_op[i],
-                r_sparse[i],
-            );
-        }
-
-        // Second subdomain correction
-        let gi2: Vec<u32> = vec![2, 5, 6];
-        let c2 = vec![1.0, -0.5, 0.8];
-        op_updater.update(&gi2, &c2, &mut r_op);
-        sparse_updater.update(&gi2, &c2, &mut r_sparse);
-
-        for i in 0..n_dofs {
-            assert!(
-                (r_op[i] - r_sparse[i]).abs() < 1e-12,
-                "step 2 mismatch at DOF {i}: op={}, sparse={}",
-                r_op[i],
-                r_sparse[i],
-            );
-        }
-    }
-
-    #[test]
-    fn test_sparse_gramian_updater_zero_correction_is_noop() {
-        let (gramian, _) = make_test_setup();
-        let mut updater = SparseGramianUpdater::new(gramian.matrix);
-
-        let r_original = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0];
-        let mut r_work = r_original.clone();
-
-        let gi: Vec<u32> = vec![0, 1, 3];
-        let correction = vec![0.0, 0.0, 0.0];
-        updater.update(&gi, &correction, &mut r_work);
-
-        assert_eq!(r_work, r_original);
-    }
-
-    #[test]
-    fn test_sparse_gramian_updater_single_dof_correction() {
-        let (gramian, n_dofs) = make_test_setup();
-
-        let mut sparse_updater = SparseGramianUpdater::new(gramian.matrix.clone());
-        let mut op_updater = OperatorResidualUpdater::new(&gramian, n_dofs);
-
-        let r_original = vec![1.0; n_dofs];
-        op_updater.reset(&r_original);
-
-        let mut r_op = r_original.clone();
-        let mut r_sparse = r_original;
-
-        let gi: Vec<u32> = vec![0];
-        let correction = vec![1.0];
-        op_updater.update(&gi, &correction, &mut r_op);
-        sparse_updater.update(&gi, &correction, &mut r_sparse);
-
-        for i in 0..n_dofs {
-            assert!(
-                (r_op[i] - r_sparse[i]).abs() < 1e-12,
-                "single-DOF mismatch at {i}: op={}, sparse={}",
-                r_op[i],
-                r_sparse[i],
-            );
-        }
-    }
-
-    #[test]
-    fn test_sparse_gramian_updater_weighted_design() {
-        use crate::domain::WeightedDesign;
-
-        let fl = vec![vec![0u32, 1, 0, 1], vec![0, 0, 1, 1]];
-        let weights = vec![1.0, 2.0, 3.0, 4.0];
-
-        let store = FactorMajorStore::new(fl, ObservationWeights::Dense(weights), 4)
-            .expect("valid weighted store");
-        let design = WeightedDesign::from_store(store).expect("valid weighted design");
-        let gramian = Gramian::build(&design);
-        let n_dofs = design.n_dofs;
-
-        let mut sparse_updater = SparseGramianUpdater::new(gramian.matrix.clone());
-        let mut op_updater = OperatorResidualUpdater::new(&gramian, n_dofs);
-
-        let r_original = vec![5.0, 3.0, 7.0, 1.0];
-        op_updater.reset(&r_original);
-
-        let mut r_op = r_original.clone();
-        let mut r_sparse = r_original;
-
-        let gi: Vec<u32> = vec![0, 2];
-        let correction = vec![0.5, -0.3];
-        op_updater.update(&gi, &correction, &mut r_op);
-        sparse_updater.update(&gi, &correction, &mut r_sparse);
-
-        for i in 0..n_dofs {
-            assert!(
-                (r_op[i] - r_sparse[i]).abs() < 1e-12,
-                "weighted mismatch at {i}: op={}, sparse={}",
-                r_op[i],
-                r_sparse[i],
-            );
-        }
-    }
-}
 
 // ===========================================================================
 // schur_complement tests
@@ -615,8 +434,7 @@ mod schwarz_tests {
     use crate::operator::gramian::CrossTab;
     use crate::operator::local_solver::BlockElimSolver;
     use crate::operator::schwarz::{
-        build_additive, build_additive_with_strategy, build_entry, build_reduced_schur_factor,
-        build_schwarz, ReducedSchurConfig,
+        build_additive_with_strategy, build_entry, build_reduced_schur_factor, ReducedSchurConfig,
     };
     use schwarz_precond::{LocalSolver, Operator, ReductionStrategy};
 
@@ -927,10 +745,11 @@ mod schwarz_tests {
     }
 
     #[test]
-    fn test_build_schwarz() {
+    fn test_build_additive_with_strategy() {
         let (design, domain_pairs) = make_test_data();
         let config = LocalSolverConfig::default();
-        let schwarz = build_additive(domain_pairs, design.n_dofs, &config)
+        let strategy = schwarz_precond::ReductionStrategy::default();
+        let schwarz = build_additive_with_strategy(domain_pairs, design.n_dofs, &config, strategy)
             .expect("build schwarz with explicit domains");
         assert!(!schwarz.subdomains().is_empty());
 
@@ -938,14 +757,6 @@ mod schwarz_tests {
         let mut z = vec![0.0; design.n_dofs];
         schwarz.apply(&r, &mut z);
         assert!(z.iter().all(|&v| v.is_finite()));
-    }
-
-    #[test]
-    fn test_build_default() {
-        let (design, _) = make_test_data();
-        let config = LocalSolverConfig::default();
-        let schwarz = build_schwarz(&design, &config).expect("build default schwarz");
-        assert!(!schwarz.subdomains().is_empty());
     }
 
     #[test]
@@ -1188,81 +999,5 @@ mod block_elim_tests {
         // Solution must be non-trivial (not all-zero).
         let sol_norm: f64 = sol[..n_local].iter().map(|v| v * v).sum::<f64>().sqrt();
         assert!(sol_norm > 1e-15, "solution is unexpectedly all-zero");
-    }
-}
-
-// ===========================================================================
-// build_preconditioner_fused direct test
-// ===========================================================================
-
-mod preconditioner_fused_tests {
-    use schwarz_precond::Operator;
-
-    use crate::config::{LocalSolverConfig, Preconditioner, ReductionStrategy};
-    use crate::domain::WeightedDesign;
-    use crate::observation::{FactorMajorStore, ObservationWeights};
-    use crate::operator::preconditioner::build_preconditioner_fused;
-
-    fn make_test_design() -> WeightedDesign<FactorMajorStore> {
-        let store = FactorMajorStore::new(
-            vec![vec![0, 1, 0, 1, 2], vec![0, 0, 1, 1, 0]],
-            ObservationWeights::Unit,
-            5,
-        )
-        .expect("valid factor-major store");
-        WeightedDesign::from_store(store).expect("valid fixed-effects design")
-    }
-
-    #[test]
-    fn test_build_preconditioner_fused_additive_dimensions_and_apply() {
-        let design = make_test_design();
-        let config =
-            Preconditioner::Additive(LocalSolverConfig::default(), ReductionStrategy::Auto);
-
-        let (gramian, precond) =
-            build_preconditioner_fused(&design, &config).expect("fused build should succeed");
-
-        // Gramian dimensions must match n_dofs.
-        assert_eq!(gramian.matrix.n(), design.n_dofs);
-
-        // Preconditioner dimensions must match n_dofs.
-        assert_eq!(precond.nrows(), design.n_dofs);
-        assert_eq!(precond.ncols(), design.n_dofs);
-
-        // apply must produce finite output.
-        let r = vec![1.0; design.n_dofs];
-        let mut z = vec![0.0; design.n_dofs];
-        precond.apply(&r, &mut z);
-
-        for (i, &v) in z.iter().enumerate() {
-            assert!(
-                v.is_finite(),
-                "precond.apply output z[{i}] = {v} is not finite"
-            );
-        }
-    }
-
-    #[test]
-    fn test_build_preconditioner_fused_multiplicative_dimensions_and_apply() {
-        let design = make_test_design();
-        let config = Preconditioner::Multiplicative(LocalSolverConfig::default());
-
-        let (gramian, precond) =
-            build_preconditioner_fused(&design, &config).expect("fused build should succeed");
-
-        assert_eq!(gramian.matrix.n(), design.n_dofs);
-        assert_eq!(precond.nrows(), design.n_dofs);
-        assert_eq!(precond.ncols(), design.n_dofs);
-
-        let r = vec![1.0; design.n_dofs];
-        let mut z = vec![0.0; design.n_dofs];
-        precond.apply(&r, &mut z);
-
-        for (i, &v) in z.iter().enumerate() {
-            assert!(
-                v.is_finite(),
-                "precond.apply output z[{i}] = {v} is not finite"
-            );
-        }
     }
 }

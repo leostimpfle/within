@@ -4,14 +4,14 @@
 //! of the local submatrix extracted from the global operator.
 
 use faer::{MatRef, Side};
-use schwarz_precond::solve::cg::cg_solve_preconditioned;
+
 use schwarz_precond::{
-    LocalSolveError, LocalSolver, Operator, SchwarzPreconditioner, SparseMatrix, SubdomainCore,
-    SubdomainEntry,
+    mlsmr, LocalSolveError, LocalSolver, Operator, SchwarzPreconditioner, SparseMatrix,
+    SubdomainCore, SubdomainEntry,
 };
 
 // ---------------------------------------------------------------------------
-// Tridiagonal operator (for CG)
+// Tridiagonal operator
 // ---------------------------------------------------------------------------
 
 struct TridiagOperator {
@@ -194,10 +194,9 @@ fn main() {
 
     let precond = SchwarzPreconditioner::new(build_entries(&a_sparse, n), n)
         .expect("valid additive schwarz preconditioner");
-    let result =
-        cg_solve_preconditioned(&a, &precond, &rhs, 1e-10, 200).expect("preconditioned cg");
+    let result = mlsmr(&a, &rhs, &precond, 1e-10, 200, None).expect("preconditioned lsmr");
     println!(
-        "Dense Cholesky Schwarz CG: converged={}, iterations={:>3}, residual={:.3e}",
+        "Dense Cholesky Schwarz LSMR: converged={}, iterations={:>3}, residual={:.3e}",
         result.converged, result.iterations, result.residual_norm,
     );
 }

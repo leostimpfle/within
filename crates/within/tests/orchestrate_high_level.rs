@@ -1,8 +1,5 @@
 use ndarray::array;
-use within::{
-    solve, solve_batch, KrylovMethod, LocalSolverConfig, OperatorRepr, Preconditioner,
-    ReductionStrategy, SolverParams,
-};
+use within::{solve, solve_batch, Preconditioner, SolverParams};
 
 #[path = "common/orchestrate_helpers.rs"]
 mod common;
@@ -13,8 +10,7 @@ fn test_high_level_solve() {
     let y = [1.0, 2.0, 3.0, 4.0, 5.0];
 
     let params = SolverParams::default();
-    let precond =
-        Preconditioner::Additive(LocalSolverConfig::solver_default(), ReductionStrategy::Auto);
+    let precond = Preconditioner::default();
     let result = solve(categories.view(), &y, None, &params, Some(&precond)).expect("solve");
     common::assert_converged_with_small_residual(&result, 1e-6);
     common::assert_solution_finite(&result);
@@ -27,8 +23,7 @@ fn test_high_level_solve_weighted() {
     let weights = vec![1.0, 2.0, 1.5, 0.5, 3.0];
 
     let params = SolverParams::default();
-    let precond =
-        Preconditioner::Additive(LocalSolverConfig::solver_default(), ReductionStrategy::Auto);
+    let precond = Preconditioner::default();
     let result = solve(
         categories.view(),
         &y,
@@ -47,14 +42,11 @@ fn test_high_level_solve_preconditioned() {
     let y = [1.0, 2.0, 3.0, 4.0, 5.0];
 
     let params = SolverParams {
-        krylov: KrylovMethod::Cg,
-        operator: OperatorRepr::Implicit,
         tol: 1e-8,
         maxiter: 1000,
         ..Default::default()
     };
-    let precond =
-        Preconditioner::Additive(LocalSolverConfig::solver_default(), ReductionStrategy::Auto);
+    let precond = Preconditioner::default();
     let result =
         solve(categories.view(), &y, None, &params, Some(&precond)).expect("solve preconditioned");
     common::assert_converged_with_small_residual(&result, 1e-6);
@@ -68,8 +60,7 @@ fn test_solve_batch_matches_individual() {
     let y2 = vec![5.0, 4.0, 3.0, 2.0, 1.0];
 
     let params = SolverParams::default();
-    let precond =
-        Preconditioner::Additive(LocalSolverConfig::solver_default(), ReductionStrategy::Auto);
+    let precond = Preconditioner::default();
 
     let r1 = solve(categories.view(), &y1, None, &params, Some(&precond)).expect("solve y1");
     let r2 = solve(categories.view(), &y2, None, &params, Some(&precond)).expect("solve y2");
@@ -98,8 +89,7 @@ fn test_solve_batch_single_rhs() {
     let y = [1.0, 2.0, 3.0, 4.0, 5.0];
 
     let params = SolverParams::default();
-    let precond =
-        Preconditioner::Additive(LocalSolverConfig::solver_default(), ReductionStrategy::Auto);
+    let precond = Preconditioner::default();
 
     let batch = solve_batch(categories.view(), &[&y[..]], None, &params, Some(&precond))
         .expect("solve batch single");
@@ -117,8 +107,7 @@ fn test_solve_batch_weighted() {
     let weights = vec![1.0, 2.0, 1.5, 0.5, 3.0];
 
     let params = SolverParams::default();
-    let precond =
-        Preconditioner::Additive(LocalSolverConfig::solver_default(), ReductionStrategy::Auto);
+    let precond = Preconditioner::default();
 
     let batch = solve_batch(
         categories.view(),
@@ -140,8 +129,7 @@ fn test_batch_result_accessors() {
     let y2 = vec![5.0, 4.0, 3.0, 2.0, 1.0];
 
     let params = SolverParams::default();
-    let precond =
-        Preconditioner::Additive(LocalSolverConfig::solver_default(), ReductionStrategy::Auto);
+    let precond = Preconditioner::default();
 
     let batch = solve_batch(
         categories.view(),

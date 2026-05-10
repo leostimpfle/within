@@ -2,8 +2,28 @@
 
 use super::bidiag::{Bidiagonalization, GolubKahan};
 use super::*;
-use crate::solve::{dot, vec_norm};
-use crate::{IdentityOperator, Operator, SolveError};
+use super::{dot, vec_norm};
+use crate::{Operator, SolveError};
+
+/// Identity operator used by mlsmr equivalence tests.
+struct IdentityOp {
+    n: usize,
+}
+
+impl Operator for IdentityOp {
+    fn nrows(&self) -> usize {
+        self.n
+    }
+    fn ncols(&self) -> usize {
+        self.n
+    }
+    fn apply(&self, x: &[f64], y: &mut [f64]) {
+        y.copy_from_slice(x);
+    }
+    fn apply_adjoint(&self, x: &[f64], y: &mut [f64]) {
+        y.copy_from_slice(x);
+    }
+}
 
 /// Simple 4×3 overdetermined system.
 /// A = [1 0 0; 0 1 0; 0 0 1; 1 1 0]
@@ -79,7 +99,7 @@ fn test_mlsmr_unpreconditioned() {
 #[test]
 fn test_mlsmr_preconditioned() {
     let b = vec![1.0, 2.0, 3.0, 3.0];
-    let result = preconditioned_lsmr(&OverdeterminedOp, &b, &DiagPrecond, 1e-10, 100, None)
+    let result = mlsmr(&OverdeterminedOp, &b, &DiagPrecond, 1e-10, 100, None)
         .expect("preconditioned mlsmr solve");
     assert!(result.converged, "Preconditioned MLSMR did not converge");
     let err: f64 = result
@@ -236,49 +256,20 @@ fn test_mlsmr_maxiter_exhaustion() {
     assert_eq!(result.stop_reason, LsmrStopReason::MaxIterations);
 }
 
-#[test]
-fn test_mlsmr_dispatch_matches_wrappers() {
-    let b = vec![1.0, 2.0, 3.0, 3.0];
-    let direct = lsmr(&OverdeterminedOp, &b, 1e-10, 100, None).expect("direct lsmr");
-    let dispatch = mlsmr(
-        &OverdeterminedOp,
-        &b,
-        None::<&DiagPrecond>,
-        1e-10,
-        100,
-        None,
-    )
-    .expect("dispatch lsmr");
-    assert_eq!(direct.iterations, dispatch.iterations);
-    assert_eq!(direct.stop_reason, dispatch.stop_reason);
-    for (a, b) in direct.x.iter().zip(&dispatch.x) {
-        assert!((a - b).abs() < 1e-15);
-    }
-
-    let direct_pre = preconditioned_lsmr(&OverdeterminedOp, &b, &DiagPrecond, 1e-10, 100, None)
-        .expect("direct preconditioned lsmr");
-    let dispatch_pre = mlsmr(&OverdeterminedOp, &b, Some(&DiagPrecond), 1e-10, 100, None)
-        .expect("dispatch preconditioned lsmr");
-    assert_eq!(direct_pre.iterations, dispatch_pre.iterations);
-    assert_eq!(direct_pre.stop_reason, dispatch_pre.stop_reason);
-    for (a, b) in direct_pre.x.iter().zip(&dispatch_pre.x) {
-        assert!((a - b).abs() < 1e-15);
-    }
-}
-
-/// `None` (GolubKahan path) and `Some(&IdentityOperator)`
-/// (ModifiedGolubKahan with M = I) are mathematically the same algorithm.
+/// `lsmr` (GolubKahan path) and `mlsmr` with `M = I`
+/// (ModifiedGolubKahan with the identity) are mathematically the same
+/// algorithm.
 /// They should produce numerically equivalent solutions and iteration
 /// counts; this guards against future drift between the two
 /// bidiagonalization implementations.
 #[test]
 fn test_mlsmr_none_matches_identity_precond() {
     let b = vec![1.0, 2.0, 3.0, 3.0];
-    let id = IdentityOperator::new(3);
+    let id = IdentityOp { n: 3 };
 
     let none_result = lsmr(&OverdeterminedOp, &b, 1e-12, 100, None).expect("lsmr solve");
-    let id_result = preconditioned_lsmr(&OverdeterminedOp, &b, &id, 1e-12, 100, None)
-        .expect("preconditioned Identity solve");
+    let id_result =
+        mlsmr(&OverdeterminedOp, &b, &id, 1e-12, 100, None).expect("preconditioned Identity solve");
 
     assert!(none_result.converged && id_result.converged);
     assert!(
@@ -323,15 +314,15 @@ fn test_mlsmr_none_matches_identity_precond_windowed() {
             (1.0 + x).ln()
         })
         .collect();
-    let id = IdentityOperator::new(op.cols);
+    let id = IdentityOp { n: op.cols };
     let local = Some(10);
 
     // Tight tolerance with headroom in maxiter: drives both paths to the
     // same minimum so the comparison isn't governed by rounding noise in
     // the convergence test.
     let none_result = lsmr(&op, &b, 1e-12, 50, local).expect("lsmr windowed solve");
-    let id_result = preconditioned_lsmr(&op, &b, &id, 1e-12, 50, local)
-        .expect("preconditioned Identity windowed solve");
+    let id_result =
+        mlsmr(&op, &b, &id, 1e-12, 50, local).expect("preconditioned Identity windowed solve");
 
     assert!(none_result.converged && id_result.converged);
     // The two paths do the same algebra differently (par_dot on `v` vs on
@@ -524,8 +515,7 @@ fn test_mlsmr_local_reorth_preconditioned() {
     let tol = 1e-9;
     let maxiter = 30;
 
-    let r10 = preconditioned_lsmr(&op, &b, &m, tol, maxiter, Some(10))
-        .expect("windowed preconditioned solve");
+    let r10 = mlsmr(&op, &b, &m, tol, maxiter, Some(10)).expect("windowed preconditioned solve");
     assert!(
         r10.converged,
         "windowed preconditioned LSMR failed to converge (iters = {})",
@@ -715,6 +705,6 @@ fn test_mlsmr_rejects_bad_preconditioner_shape() {
     }
 
     let b = vec![1.0, 2.0, 3.0, 3.0];
-    let result = preconditioned_lsmr(&OverdeterminedOp, &b, &BadPrecond, 1e-10, 100, None);
+    let result = mlsmr(&OverdeterminedOp, &b, &BadPrecond, 1e-10, 100, None);
     assert!(matches!(result, Err(SolveError::InvalidInput { .. })));
 }

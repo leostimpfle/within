@@ -1,9 +1,9 @@
 """High-performance fixed-effects solver for econometric panel data.
 
 ``within`` solves the normal equations arising from multi-way fixed-effect
-models (D^T W D x = D^T W y) using preconditioned Krylov methods with
-domain-decomposition (Schwarz) preconditioners. The heavy lifting is done
-in Rust; this package provides the Python API.
+models (D^T W D x = D^T W y) using modified LSMR with a domain-decomposition
+(Schwarz) preconditioner. The heavy lifting is done in Rust; this package
+provides the Python API.
 
 Quick start::
 
@@ -35,21 +35,17 @@ Key exports:
 
 - :func:`solve` / :func:`solve_batch` -- one-shot solve functions
 - :class:`Solver` -- persistent solver with reusable preconditioner
-- :class:`CG` / :class:`GMRES` / :class:`LSMR` -- Krylov solver configuration
+- :class:`LSMR` -- LSMR solver configuration
 - :class:`Preconditioner` -- quick preconditioner selection enum
-- :class:`AdditiveSchwarz` / :class:`MultiplicativeSchwarz` -- fine-grained
-  preconditioner configuration
+- :class:`AdditiveSchwarz` -- fine-grained preconditioner configuration
 
 For Rust-level internals, build the API docs with ``cargo doc --open``.
 """
 
 from within._within import (
-    OperatorRepr,
     Preconditioner,
     SolveResult,
     BatchSolveResult,
-    CG,
-    GMRES,
     LSMR,
     FePreconditioner,
     Solver,
@@ -57,17 +53,13 @@ from within._within import (
     solve_batch,
     AdditiveSchwarz,
     AdditiveSchwarzDiagnostics,
-    MultiplicativeSchwarz,
     ReductionStrategy,
 )
 
 __all__ = [
-    "OperatorRepr",
     "Preconditioner",
     "SolveResult",
     "BatchSolveResult",
-    "CG",
-    "GMRES",
     "LSMR",
     "FePreconditioner",
     "Solver",
@@ -75,6 +67,5 @@ __all__ = [
     "solve_batch",
     "AdditiveSchwarz",
     "AdditiveSchwarzDiagnostics",
-    "MultiplicativeSchwarz",
     "ReductionStrategy",
 ]

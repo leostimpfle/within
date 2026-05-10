@@ -1,4 +1,12 @@
-# Part 2: Preconditioned Krylov Solvers and Schwarz Decomposition
+# Part 2: Preconditioned LSMR and Schwarz Decomposition
+
+> **Note**: This document was originally written to cover both CG/GMRES on
+> the Gramian and a multiplicative-Schwarz variant. The current
+> implementation uses **modified LSMR on the rectangular operator
+> `sqrt(W) D`** with an additive-Schwarz Gramian-shaped preconditioner.
+> References below to "CG" and "Krylov outer iteration" remain valid in
+> spirit (LSMR is a Krylov-subspace method); the *multiplicative Schwarz*
+> variant has been removed from the implementation.
 
 This is Part 2 of the algorithm documentation for the `within` solver. It describes the three-layer solver architecture, the graph structure that drives the decomposition, the Krylov outer iteration, and the Schwarz preconditioner framework.
 
@@ -105,7 +113,6 @@ The Schwarz preconditioner decomposes the global system into overlapping subdoma
 
 Two variants exist - additive and multiplicative - differing in how the local corrections are combined:
 
-![Additive vs multiplicative Schwarz](images/additive_vs_multiplicative.svg)
 
 ### 4.2 Partition of unity
 

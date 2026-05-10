@@ -1,26 +1,31 @@
-//! Schwarz preconditioners: additive and multiplicative variants.
+//! Additive Schwarz preconditioner: `M⁻¹ = Σ Rᵢᵀ D̃ᵢ Aᵢ⁻¹ D̃ᵢ Rᵢ`.
 //!
-//! Both variants implement the [`Operator`](crate::Operator) trait, so they
-//! can be passed directly to CG or GMRES as a preconditioner.
+//! Implements the [`Operator`](crate::Operator) trait, so it can be passed
+//! directly to an iterative solver as a preconditioner.
 //!
-//! - [`additive`] — `M⁻¹ = Σ Rᵢᵀ D̃ᵢ Aᵢ⁻¹ D̃ᵢ Rᵢ`: independent local solves
-//!   combined via atomic scatter or parallel reduction. Symmetric, so valid
-//!   for both CG and GMRES.
-//! - [`multiplicative`] — applies subdomains sequentially, each seeing
-//!   the updated residual from all preceding solves. For a forward sweep
-//!   over N subdomains the operator is the product:
+//! All subdomain local solves run in parallel (via Rayon). The per-subdomain
+//! corrections are combined into the global output vector by one of two
+//! reduction strategies (chosen automatically or configured explicitly):
 //!
-//!   ```text
-//!   M⁻¹ = (I - Tₙ)(I - Tₙ₋₁)···(I - T₁)    where Tᵢ = Rᵢᵀ D̃ᵢ Aᵢ⁻¹ D̃ᵢ Rᵢ A
-//!   ```
+//! - **Atomic scatter** — each task atomically adds its weighted correction
+//!   into a shared `AtomicU64` accumulator. Low memory (`O(n_dofs)` shared),
+//!   best when overlap is low.
+//! - **Parallel reduction** — each Rayon worker accumulates into a private
+//!   `Vec<f64>`, then a final parallel reduction sums them. Higher memory
+//!   (`O(P × n_dofs)` where P = active workers) but avoids atomic contention
+//!   when overlap is high.
 //!
-//!   This is the block Gauss-Seidel analogue: it converges faster per
-//!   iteration than additive but is non-symmetric, requiring GMRES.
+//! Internal structure:
+//! - `planning` — [`ReductionStrategy`] enum, `Auto` heuristic, build-time
+//!   diagnostics
+//! - `executor` — owns the subdomain entries, dispatches `try_apply`, and
+//!   manages the pooled scratch and accumulator buffers used to keep
+//!   steady-state apply allocation-free
+//! - `preconditioner` — the public [`SchwarzPreconditioner`] type
 
-mod additive;
-mod multiplicative;
+mod executor;
+mod planning;
+mod preconditioner;
 
-pub use additive::{AdditiveSchwarzDiagnostics, ReductionStrategy, SchwarzPreconditioner};
-pub use multiplicative::{
-    MultiplicativeSchwarzPreconditioner, OperatorResidualUpdater, ResidualUpdater,
-};
+pub use planning::{AdditiveSchwarzDiagnostics, ReductionStrategy};
+pub use preconditioner::SchwarzPreconditioner;

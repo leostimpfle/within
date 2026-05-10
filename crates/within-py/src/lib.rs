@@ -18,7 +18,7 @@
 //! | `NDArray[np.uint32]` (2-D)  | `ndarray::ArrayView2<u32>` |
 //! | `NDArray[np.float64]` (1-D) | `&[f64]`                   |
 //! | `NDArray[np.float64]` (2-D) | `Vec<Vec<f64>>` (columns)  |
-//! | `CG` / `GMRES`             | [`SolverParams`]           |
+//! | `LSMR`                      | [`SolverParams`]           |
 //! | `Preconditioner` enum       | [`Option<Preconditioner>`] |
 //! | `SolveResult`               | [`within::SolveResult`]    |
 //!
@@ -40,16 +40,11 @@ use numpy::{IntoPyArray, PyReadonlyArray1, PyReadonlyArray2};
 use pyo3::prelude::*;
 
 use within::config::{
-    ApproxCholConfig, ApproxSchurConfig, KrylovMethod, LocalSolverConfig, OperatorRepr,
-    Preconditioner, ReductionStrategy, SolverParams, DEFAULT_DENSE_SCHUR_THRESHOLD,
+    ApproxCholConfig, ApproxSchurConfig, LocalSolverConfig, Preconditioner, ReductionStrategy,
+    SolverParams, DEFAULT_DENSE_SCHUR_THRESHOLD,
 };
 use within::domain::WeightedDesign;
 use within::observation::{FactorMajorStore, ObservationWeights};
-use within::operator::preconditioner::{
-    additive_reduction_strategy as get_additive_reduction_strategy,
-    additive_schwarz_diagnostics as get_additive_schwarz_diagnostics,
-    resolved_additive_reduction_strategy as get_resolved_additive_reduction_strategy,
-};
 use within::{
     solve as solve_native, solve_batch as solve_batch_native, FePreconditioner, Operator,
     SolveResult, Solver,
@@ -129,42 +124,19 @@ impl PyApproxSchurConfig {
 }
 
 // ---------------------------------------------------------------------------
-// OperatorRepr enum
-// ---------------------------------------------------------------------------
-
-#[pyclass(frozen, eq, eq_int)]
-#[pyo3(name = "OperatorRepr")]
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub enum PyOperatorRepr {
-    Implicit = 0,
-    Explicit = 1,
-}
-
-impl PyOperatorRepr {
-    fn to_native(self) -> OperatorRepr {
-        match self {
-            PyOperatorRepr::Implicit => OperatorRepr::Implicit,
-            PyOperatorRepr::Explicit => OperatorRepr::Explicit,
-        }
-    }
-}
-
-// ---------------------------------------------------------------------------
 // Preconditioner enum (public API)
 // ---------------------------------------------------------------------------
 
-/// Preconditioner selection for CG / GMRES solvers.
+/// Preconditioner selection for the LSMR solver.
 ///
-/// - ``Preconditioner.Additive`` — additive Schwarz (default, symmetric)
-/// - ``Preconditioner.Multiplicative`` — multiplicative Schwarz (GMRES only)
+/// - ``Preconditioner.Additive`` — additive Schwarz (default)
 /// - ``Preconditioner.Off`` — no preconditioner
 #[pyclass(frozen, eq, eq_int)]
 #[pyo3(name = "Preconditioner")]
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum PyPreconditioner {
     Additive = 0,
-    Multiplicative = 1,
-    Off = 2,
+    Off = 1,
 }
 
 #[pyclass(frozen, eq, eq_int)]
@@ -215,13 +187,13 @@ pub struct PyAdditiveSchwarzDiagnostics {
 
 impl PyAdditiveSchwarzDiagnostics {
     fn from_native(preconditioner: &FePreconditioner) -> Option<Self> {
-        let diagnostics = get_additive_schwarz_diagnostics(preconditioner)?;
+        let diagnostics = preconditioner.additive_schwarz_diagnostics()?;
         Some(Self {
-            reduction_strategy: PyReductionStrategy::from_native(get_additive_reduction_strategy(
-                preconditioner,
-            )?),
+            reduction_strategy: PyReductionStrategy::from_native(
+                preconditioner.additive_reduction_strategy()?,
+            ),
             resolved_reduction_strategy: PyReductionStrategy::from_native(
-                get_resolved_additive_reduction_strategy(preconditioner)?,
+                preconditioner.resolved_additive_reduction_strategy()?,
             ),
             total_inner_parallel_work: diagnostics.total_inner_parallel_work(),
             max_inner_parallel_work: diagnostics.max_inner_parallel_work(),
@@ -314,88 +286,9 @@ impl PyAdditiveSchwarz {
     }
 }
 
-#[pyclass(frozen)]
-#[pyo3(name = "MultiplicativeSchwarz")]
-pub struct PyMultiplicativeSchwarz {
-    #[pyo3(get)]
-    pub local_solver: Option<PyObject>,
-}
-
-#[pymethods]
-impl PyMultiplicativeSchwarz {
-    #[new]
-    #[pyo3(signature = (local_solver=None))]
-    fn new(local_solver: Option<PyObject>) -> Self {
-        Self { local_solver }
-    }
-}
-
 // ---------------------------------------------------------------------------
 // Solver config classes
 // ---------------------------------------------------------------------------
-
-#[pyclass(frozen)]
-#[pyo3(name = "CG")]
-pub struct PyCG {
-    #[pyo3(get)]
-    pub tol: f64,
-    #[pyo3(get)]
-    pub maxiter: usize,
-    #[pyo3(get)]
-    pub operator: PyOperatorRepr,
-    #[pyo3(get)]
-    pub max_refinements: usize,
-}
-
-#[pymethods]
-impl PyCG {
-    #[new]
-    #[pyo3(signature = (tol=1e-8, maxiter=1000, operator=PyOperatorRepr::Implicit, max_refinements=2))]
-    fn new(tol: f64, maxiter: usize, operator: PyOperatorRepr, max_refinements: usize) -> Self {
-        Self {
-            tol,
-            maxiter,
-            operator,
-            max_refinements,
-        }
-    }
-}
-
-#[pyclass(frozen)]
-#[pyo3(name = "GMRES")]
-pub struct PyGMRES {
-    #[pyo3(get)]
-    pub tol: f64,
-    #[pyo3(get)]
-    pub maxiter: usize,
-    #[pyo3(get)]
-    pub restart: usize,
-    #[pyo3(get)]
-    pub operator: PyOperatorRepr,
-    #[pyo3(get)]
-    pub max_refinements: usize,
-}
-
-#[pymethods]
-impl PyGMRES {
-    #[new]
-    #[pyo3(signature = (tol=1e-8, maxiter=1000, restart=30, operator=PyOperatorRepr::Implicit, max_refinements=2))]
-    fn new(
-        tol: f64,
-        maxiter: usize,
-        restart: usize,
-        operator: PyOperatorRepr,
-        max_refinements: usize,
-    ) -> Self {
-        Self {
-            tol,
-            maxiter,
-            restart,
-            operator,
-            max_refinements,
-        }
-    }
-}
 
 #[pyclass(frozen)]
 #[pyo3(name = "LSMR")]
@@ -537,18 +430,14 @@ fn extract_local_solver_or_default(
 /// - `None` → additive Schwarz with default local solver
 /// - `Preconditioner.Off` → unpreconditioned (returns `Ok(None)`)
 /// - `Preconditioner.Additive` → additive Schwarz with default local solver
-/// - `Preconditioner.Multiplicative` → multiplicative Schwarz with default local solver
-/// - `AdditiveSchwarz(...)` / `MultiplicativeSchwarz(...)` → advanced config
+/// - `AdditiveSchwarz(...)` → advanced config
 fn extract_preconditioner_config(
     py: Python<'_>,
     preconditioner: Option<&Bound<'_, PyAny>>,
 ) -> PyResult<Option<Preconditioner>> {
     let obj = match preconditioner {
         None => {
-            return Ok(Some(Preconditioner::Additive(
-                LocalSolverConfig::solver_default(),
-                ReductionStrategy::Auto,
-            )));
+            return Ok(Some(Preconditioner::default()));
         }
         Some(obj) => obj,
     };
@@ -557,102 +446,41 @@ fn extract_preconditioner_config(
     if let Ok(p) = obj.extract::<PyPreconditioner>() {
         return match p {
             PyPreconditioner::Off => Ok(None),
-            PyPreconditioner::Additive => Ok(Some(Preconditioner::Additive(
-                LocalSolverConfig::solver_default(),
-                ReductionStrategy::Auto,
-            ))),
-            PyPreconditioner::Multiplicative => Ok(Some(Preconditioner::Multiplicative(
-                LocalSolverConfig::solver_default(),
-            ))),
+            PyPreconditioner::Additive => Ok(Some(Preconditioner::default())),
         };
     }
 
-    // Advanced: AdditiveSchwarz / MultiplicativeSchwarz objects
+    // Advanced: AdditiveSchwarz object
     if let Ok(schwarz) = obj.downcast::<PyAdditiveSchwarz>() {
         let s = schwarz.get();
-        let cfg = extract_local_solver_or_default(
+        let local = extract_local_solver_or_default(
             py,
             &s.local_solver,
             LocalSolverConfig::solver_default(),
         )?;
-        let strategy = s.reduction.to_native();
-        return Ok(Some(Preconditioner::Additive(cfg, strategy)));
-    }
-    if let Ok(schwarz) = obj.downcast::<PyMultiplicativeSchwarz>() {
-        let cfg = extract_local_solver_or_default(
-            py,
-            &schwarz.get().local_solver,
-            LocalSolverConfig::solver_default(),
-        )?;
-        return Ok(Some(Preconditioner::Multiplicative(cfg)));
+        let reduction = s.reduction.to_native();
+        return Ok(Some(Preconditioner::Additive(local, reduction)));
     }
 
     Err(PyErr::new::<pyo3::exceptions::PyTypeError, _>(
-        "preconditioner must be Preconditioner.Additive, Preconditioner.Multiplicative, \
-         Preconditioner.Off, AdditiveSchwarz(...), MultiplicativeSchwarz(...), or None",
+        "preconditioner must be Preconditioner.Additive, Preconditioner.Off, \
+         AdditiveSchwarz(...), or None",
     ))
 }
-/// Extract solver parameters from a Python config object.
+
+/// Extract solver parameters from an LSMR config object.
 fn extract_solver_params(config: &Bound<'_, PyAny>) -> PyResult<SolverParams> {
-    if let Ok(cg) = config.downcast::<PyCG>() {
-        let cg = cg.get();
-        return Ok(SolverParams {
-            krylov: KrylovMethod::Cg,
-            operator: cg.operator.to_native(),
-            tol: cg.tol,
-            maxiter: cg.maxiter,
-            max_refinements: cg.max_refinements,
-        });
-    }
-
-    if let Ok(gmres) = config.downcast::<PyGMRES>() {
-        let gmres = gmres.get();
-        return Ok(SolverParams {
-            krylov: KrylovMethod::Gmres {
-                restart: gmres.restart,
-            },
-            operator: gmres.operator.to_native(),
-            tol: gmres.tol,
-            maxiter: gmres.maxiter,
-            max_refinements: gmres.max_refinements,
-        });
-    }
-
     if let Ok(lsmr) = config.downcast::<PyLSMR>() {
         let lsmr = lsmr.get();
         return Ok(SolverParams {
-            krylov: KrylovMethod::Lsmr {
-                local_size: lsmr.local_size,
-            },
-            operator: OperatorRepr::Implicit,
             tol: lsmr.tol,
             maxiter: lsmr.maxiter,
-            max_refinements: 0,
+            local_size: lsmr.local_size,
         });
     }
     Err(PyErr::new::<pyo3::exceptions::PyTypeError, _>(
-        "config must be CG, GMRES, or LSMR",
+        "config must be LSMR",
     ))
-}
-
-/// Reject symmetric-only Krylov methods (CG, LSMR) paired with a multiplicative preconditioner.
-fn validate_cg_preconditioner(
-    params: &SolverParams,
-    preconditioner: &Option<Preconditioner>,
-) -> PyResult<()> {
-    if matches!(params.krylov, KrylovMethod::Cg | KrylovMethod::Lsmr { .. })
-        && matches!(preconditioner, Some(Preconditioner::Multiplicative(_)))
-    {
-        let method = match params.krylov {
-            KrylovMethod::Cg => "CG",
-            KrylovMethod::Lsmr { .. } => "LSMR",
-            KrylovMethod::Gmres { .. } => unreachable!(),
-        };
-        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
-            "{method} requires a symmetric preconditioner; use 'additive' or switch to GMRES"
-        )));
-    }
-    Ok(())
 }
 
 /// Extract solver config and preconditioner, applying solver/preconditioner validation.
@@ -666,7 +494,6 @@ fn extract_and_validate_config(
         None => SolverParams::default(),
     };
     let precond = extract_preconditioner_config(py, preconditioner)?;
-    validate_cg_preconditioner(&params, &precond)?;
     Ok((params, precond))
 }
 
@@ -875,17 +702,13 @@ impl PyFePreconditioner {
         self.inner.subdomain_inner_parallel_work()
     }
 
-    /// Additive Schwarz diagnostics, if this is an additive preconditioner.
+    /// Additive Schwarz diagnostics.
     fn additive_schwarz_diagnostics(&self) -> Option<PyAdditiveSchwarzDiagnostics> {
         PyAdditiveSchwarzDiagnostics::from_native(&self.inner)
     }
 
     fn __repr__(&self) -> String {
-        let variant = match &self.inner {
-            FePreconditioner::Additive(_) => "Additive",
-            FePreconditioner::Multiplicative(_) => "Multiplicative",
-        };
-        format!("FePreconditioner({}, n={})", variant, self.inner.nrows())
+        format!("FePreconditioner(Additive, n={})", self.inner.nrows())
     }
 
     /// Pickle support: serialize to ``(bytes,)`` constructor arg.
@@ -971,7 +794,6 @@ impl PySolver {
                 .map_err(value_err)?
             } else {
                 let precond = extract_preconditioner_config(py, preconditioner)?;
-                validate_cg_preconditioner(&params, &precond)?;
                 py.allow_threads(|| Solver::from_design(design, &params, precond.as_ref()))
                     .map_err(value_err)?
             };
@@ -1054,14 +876,10 @@ impl PySolver {
 fn _within(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PySolveResult>()?;
     m.add_class::<PyBatchSolveResult>()?;
-    m.add_class::<PyCG>()?;
-    m.add_class::<PyGMRES>()?;
     m.add_class::<PyLSMR>()?;
     m.add_class::<PyAdditiveSchwarz>()?;
     m.add_class::<PyAdditiveSchwarzDiagnostics>()?;
-    m.add_class::<PyMultiplicativeSchwarz>()?;
     m.add_class::<PyReductionStrategy>()?;
-    m.add_class::<PyOperatorRepr>()?;
     m.add_class::<PyPreconditioner>()?;
     m.add_class::<PyApproxCholConfig>()?;
     m.add_class::<PyApproxSchurConfig>()?;
