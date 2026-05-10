@@ -1,8 +1,5 @@
 #![allow(dead_code)]
 
-use schwarz_precond::Operator;
-
-use within::operator::gramian::GramianOperator;
 use within::{FactorMajorStore, ObservationWeights, SolveResult, WeightedDesign};
 
 pub fn make_test_design() -> WeightedDesign<FactorMajorStore> {
@@ -28,15 +25,6 @@ pub fn make_y_from_unit_solution(design: &WeightedDesign<FactorMajorStore>) -> V
     let mut y = vec![0.0; design.n_rows];
     design.matvec_d(&x_true, &mut y);
     y
-}
-
-/// Compute rhs = G * 1 in normal-equation space (for low-level Schwarz tests).
-pub fn make_rhs_from_unit_solution(design: &WeightedDesign<FactorMajorStore>) -> Vec<f64> {
-    let gramian_op = GramianOperator::new(design);
-    let x_true = vec![1.0; design.n_dofs];
-    let mut rhs = vec![0.0; design.n_dofs];
-    gramian_op.apply(&x_true, &mut rhs);
-    rhs
 }
 
 pub fn assert_converged_with_small_residual(result: &SolveResult, tol: f64) {

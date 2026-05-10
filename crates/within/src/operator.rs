@@ -2,33 +2,24 @@
 //!
 //! This module is the hub between the [`domain`](crate::domain) layer (which
 //! builds subdomains from panel data) and the [`orchestrate`](crate::orchestrate)
-//! layer (the public solve API). It provides the matrices and preconditioners
-//! that power the iterative Krylov solves.
+//! layer (the public solve API). It provides the rectangular design operator
+//! that LSMR consumes and the Schwarz preconditioner construction.
 //!
-//! # Operator representations
+//! # Operators
 //!
-//! Fixed-effects estimation reduces to solving the normal equations `G x = b`
-//! where `G = D^T W D` is the Gramian of the weighted design matrix. This
-//! module offers three representations of the matrices involved:
+//! LSMR works directly on `sqrt(W) D` rather than the assembled Gramian
+//! `G = D^T W D`. The matvec primitives are:
 //!
-//! | Representation | Type | Description |
+//! | Operator | Type | Description |
 //! |---|---|---|
-//! | **D** (design matrix) | [`DesignOperator`] | Rectangular, implements `D x` and `D^T x` via gather/scatter on the observation store |
-//! | **G implicit** | [`gramian::GramianOperator`] | Matrix-free `D^T W D x` — computes each matvec in three steps without storing G |
-//! | **G explicit** | [`gramian::Gramian`] | Pre-assembled CSR sparse matrix — one-time build cost, then O(nnz) matvecs |
-//!
-//! Why multiple representations? **Memory vs speed tradeoff.** The implicit
-//! Gramian avoids allocating the (potentially large) `G` matrix but requires
-//! more FLOPs per matrix-vector product — it must touch every observation
-//! twice per matvec. The explicit Gramian builds `G` once and reuses it,
-//! giving cheaper matvecs at the cost of O(nnz(G)) memory. For problems
-//! where `G` is much smaller than the observation data, explicit wins; for
-//! very large or dense cross-tabulations, implicit may be preferable.
+//! | **D** (design) | [`DesignOperator`] | Rectangular, implements `D x` and `D^T x` via gather/scatter on the observation store |
+//! | **sqrt(W) D** | [`WeightedDesignOperator`] | Weighted variant used by LSMR — applies the factorized weights on each matvec |
 //!
 //! # Submodules
 //!
-//! - [`gramian`] — Explicit `G = D^T W D` construction (CSR), cross-tabulation,
-//!   and the implicit `GramianOperator`
+//! - [`gramian::cross_tab`](gramian) — Per-pair `CrossTab` blocks driving
+//!   factor-pair subdomain construction (the only Gramian-shaped artefact
+//!   the solver still needs)
 //! - [`schwarz`] — Schwarz preconditioner construction: bridges fixed-effects
 //!   types to the generic `schwarz-precond` API
 //! - `local_solver` — Local subdomain solvers: approximate Cholesky (SDDM)
@@ -37,11 +28,10 @@
 //!   for block-elimination local solves
 //! - [`preconditioner`] — [`FePreconditioner`](preconditioner::FePreconditioner)
 //!   wrapping the additive Schwarz variant
-//! - `csr_block` — Internal rectangular CSR block used in bipartite Gramian
-//!   structures
+//! - `csr_block` — Internal rectangular CSR block used in bipartite blocks
 
 pub(crate) mod csr_block;
-pub mod gramian;
+pub(crate) mod gramian;
 pub(crate) mod local_solver;
 pub mod preconditioner;
 pub(crate) mod schur_complement;

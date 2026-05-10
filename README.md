@@ -160,7 +160,7 @@ The crate exposes its internals for advanced use:
 |---|---|
 | `observation` | `FactorMajorStore`, `ArrayStore`, `ObservationStore` trait |
 | `domain` | `WeightedDesign`, `FixedEffectsDesign`, `Subdomain` |
-| `operator` | `Gramian` (CSR), `GramianOperator` (implicit), `DesignOperator`, `build_schwarz`, `FeSchwarz` |
+| `operator` | `DesignOperator`, `WeightedDesignOperator`, `build_schwarz`, `FeSchwarz` |
 | `solver` | `Solver<S: ObservationStore>` — generic persistent solver |
 
 ### Feature flags

@@ -58,10 +58,10 @@ The crate is organized in four layers:
    factor metadata; `build_local_domains` constructs factor-pair subdomains
    with partition-of-unity weights for the Schwarz preconditioner.
 
-3. **`operator`** — Linear algebra primitives. `Gramian` (explicit CSR) and
-   `GramianOperator` (implicit D^T W D) for matrix-free matvecs; Schwarz
-   preconditioner builders that wire approximate Cholesky local solvers into
-   the generic `schwarz-precond` framework.
+3. **`operator`** — Linear algebra primitives. `WeightedDesignOperator`
+   (rectangular `sqrt(W) D` for LSMR) and Schwarz preconditioner builders
+   that wire approximate Cholesky local solvers into the generic
+   `schwarz-precond` framework.
 
 4. **`orchestrate`** — End-to-end solve entry points (`solve`, `solve_batch`)
    with typed configuration (`SolverParams`, `Preconditioner`).

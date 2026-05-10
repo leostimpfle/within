@@ -97,9 +97,7 @@
 //! ├── domain              WeightedDesign<S> + factor-pair subdomains
 //! │   └── factor_pairs      Domain construction, partition-of-unity weights
 //! ├── operator            Linear algebra layer
-//! │   ├── gramian           G = D^T W D (explicit CSR / implicit matvec)
-//! │   │   ├── cross_tab       Bipartite block for a single factor pair
-//! │   │   └── explicit        Full Gramian CSR assembly
+//! │   ├── gramian           CrossTab (per-pair bipartite blocks)
 //! │   ├── schwarz           Schwarz preconditioner builders (FE → generic API)
 //! │   ├── preconditioner    FePreconditioner wrapper
 //! │   ├── local_solver      ApproxChol + BlockElim backends
@@ -126,11 +124,10 @@
 //!   points. For repeated solves with different right-hand sides, use
 //!   [`Solver`] to amortize the preconditioner setup.
 //!
-//! - **Understanding the math** — Begin with
-//!   [`operator::gramian`] to see how the Gramian is built and applied,
-//!   then [`operator::schwarz`] for how factor-pair subdomains become a
-//!   Schwarz preconditioner. The internal `operator::schur_complement`
-//!   module implements block-elimination local solves.
+//! - **Understanding the math** — Begin with [`operator::schwarz`] for how
+//!   factor-pair subdomains become a Schwarz preconditioner. The internal
+//!   `operator::schur_complement` module implements block-elimination local
+//!   solves on the per-pair `CrossTab` (`operator::gramian::cross_tab`).
 //!
 //! - **Extending with new backends** — The [`ObservationStore`] trait in
 //!   [`observation`] abstracts over how factor-level data is laid out in
@@ -150,8 +147,8 @@
 //!   and the [`ObservationStore`] trait.
 //! - **`domain`** — Domain decomposition: [`WeightedDesign`] wraps a store with factor
 //!   metadata; factor-pair subdomains are built with partition-of-unity weights.
-//! - **`operator`** — Linear algebra primitives: [`Gramian`] (explicit CSR), [`GramianOperator`]
-//!   (implicit D^T W D), [`DesignOperator`] (D and D^T), Schwarz preconditioner builders.
+//! - **`operator`** — Linear algebra primitives: [`DesignOperator`] (D and D^T),
+//!   per-pair `CrossTab` blocks, and Schwarz preconditioner builders.
 //! - **`orchestrate`** — End-to-end solve: [`solve`] with typed configuration.
 //!
 //! # References
@@ -201,7 +198,6 @@ pub use observation::{
 // Operators & builders
 // ---------------------------------------------------------------------------
 
-pub use operator::gramian::{Gramian, GramianOperator};
 pub use operator::schwarz::{build_schwarz, FeSchwarz};
 pub use operator::DesignOperator;
 pub use schwarz_precond::Operator;

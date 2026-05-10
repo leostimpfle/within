@@ -12,7 +12,7 @@ use within::config::{
 };
 use within::domain::WeightedDesign;
 use within::observation::{FactorMajorStore, ObservationWeights};
-use within::operator::gramian::GramianOperator;
+use within::operator::WeightedDesignOperator;
 use within::Solver;
 
 // ===========================================================================
@@ -275,14 +275,15 @@ fn matvec_cases() -> [Case; 4] {
 }
 
 fn bench_matvec(c: &mut Criterion) {
-    let mut group = configure_group(c, "matvec_implicit_gramian", 50, 200);
+    let mut group = configure_group(c, "matvec_weighted_design", 50, 200);
     for case in matvec_cases() {
         let label = case.label();
         let (design, _y) = generate_fixest_like_case(case, 42);
-        let n = design.n_dofs;
-        let op = GramianOperator::new(&design);
-        let x: Vec<f64> = (0..n).map(|i| (i as f64).sin()).collect();
-        let mut y = vec![0.0; n];
+        let n_dofs = design.n_dofs;
+        let n_obs = design.n_rows;
+        let op = WeightedDesignOperator::new(&design);
+        let x: Vec<f64> = (0..n_dofs).map(|i| (i as f64).sin()).collect();
+        let mut y = vec![0.0; n_obs];
         group.bench_function(BenchmarkId::new("apply", &label), |b| {
             b.iter(|| op.apply(&x, &mut y))
         });
