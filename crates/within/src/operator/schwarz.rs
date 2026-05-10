@@ -25,12 +25,10 @@
 //!    converted into a `SubdomainEntry<BlockElimSolver>` in parallel via
 //!    `build_entry`, which dispatches on the config
 //! 3. **Schwarz assembly** — entries are passed to the generic
-//!    `SchwarzPreconditioner` (additive) or
-//!    `MultiplicativeSchwarzPreconditioner` constructor from `schwarz-precond`
+//!    `SchwarzPreconditioner` constructor from `schwarz-precond`.
 //!
-//! The public entry point is [`build_schwarz`] for the additive variant.
+//! The public entry point is [`build_schwarz`].
 
-pub use schwarz_precond::MultiplicativeSchwarzPreconditioner;
 pub use schwarz_precond::SchwarzPreconditioner;
 
 use approx_chol::low_level::Builder;
@@ -41,7 +39,6 @@ use serde::{Deserialize, Serialize};
 
 use super::gramian::CrossTab;
 use super::local_solver::{BlockElimSolver, FeLocalSolveInvoker, ReducedFactor};
-use super::residual_update::SparseGramianUpdater;
 use super::schur_complement::{
     ApproxSchurComplement, EliminationInfo, ExactSchurComplement, SchurComplement, SchurResult,
 };
@@ -120,10 +117,6 @@ impl schwarz_precond::Operator for FeSchwarz {
     }
 }
 
-/// Concrete multiplicative Schwarz type: one-level with explicit Gramian CSR residual updates.
-pub type FeMultSchwarzSparse =
-    MultiplicativeSchwarzPreconditioner<BlockElimSolver, SparseGramianUpdater>;
-
 // ---------------------------------------------------------------------------
 // Public convenience builder
 // ---------------------------------------------------------------------------
@@ -171,22 +164,6 @@ pub(crate) fn build_additive_with_strategy(
             FeLocalSolveInvoker,
         )?,
     ))
-}
-
-/// Build multiplicative Schwarz with sparse Gramian updater.
-///
-/// Always non-symmetric (GMRES-only).
-pub(crate) fn build_multiplicative_sparse(
-    domains: Vec<(Subdomain, CrossTab)>,
-    gramian: &super::gramian::Gramian,
-    n_dofs: usize,
-    config: &LocalSolverConfig,
-) -> WithinResult<FeMultSchwarzSparse> {
-    let entries = build_entries_from_pairs(domains, config)?;
-    let updater = SparseGramianUpdater::new(gramian.matrix.clone());
-    Ok(MultiplicativeSchwarzPreconditioner::new(
-        entries, updater, n_dofs, false,
-    )?)
 }
 
 fn build_entries_from_pairs(

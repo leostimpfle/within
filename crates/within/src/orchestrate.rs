@@ -8,7 +8,7 @@
 //!   1. Validate  → observation layer builds an ArrayStore, checks dimensions
 //!   2. Design    → domain layer wraps the store in a WeightedDesign
 //!   3. Precond   → operator layer builds subdomains + local solvers (Schwarz)
-//!   4. Solve     → Krylov solver (CG/GMRES) with iterative refinement
+//!   4. Solve     → Modified LSMR with the Schwarz preconditioner
 //!   5. Extract   → return coefficients x and demeaned residuals y - Dx
 //! ```
 //!
@@ -41,15 +41,15 @@ pub struct SolveResult {
     pub demeaned: Vec<f64>,
     /// Whether the iterative solver converged within `maxiter` iterations.
     pub converged: bool,
-    /// Number of Krylov iterations used.
+    /// Number of LSMR iterations used.
     pub iterations: usize,
     /// Final relative residual norm `‖r‖ / ‖b‖`.
     pub final_residual: f64,
-    /// Wall-clock time for the entire solve (setup + Krylov), in seconds.
+    /// Wall-clock time for the entire solve (setup + LSMR), in seconds.
     pub time_total: f64,
     /// Wall-clock time for preconditioner construction, in seconds.
     pub time_setup: f64,
-    /// Wall-clock time for the Krylov solve phase, in seconds.
+    /// Wall-clock time for the LSMR solve phase, in seconds.
     pub time_solve: f64,
 }
 

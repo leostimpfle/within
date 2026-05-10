@@ -6,12 +6,9 @@ import numpy as np
 import pytest
 
 from within import (
-    CG,
-    GMRES,
+    LSMR,
     AdditiveSchwarz,
-    MultiplicativeSchwarz,
     FePreconditioner,
-    OperatorRepr,
     Preconditioner,
     Solver,
     BatchSolveResult,
@@ -45,47 +42,10 @@ class TestSolveDefaults:
         assert result.iterations > 0
         assert result.residual < 1e-6
 
-    def test_explicit_cg(self, problem):
+    def test_unpreconditioned(self, problem):
         cats, y = problem
         result = solve(
-            as_solver_categories(cats), y, CG(operator=OperatorRepr.Explicit)
-        )
-        assert result.converged
-
-    def test_gmres_multiplicative(self, problem):
-        cats, y = problem
-        result = solve(
-            as_solver_categories(cats),
-            y,
-            GMRES(),
-            preconditioner=Preconditioner.Multiplicative,
-        )
-        assert result.converged
-
-    def test_rejects_multiplicative_cg(self, problem):
-        cats, y = problem
-        with pytest.raises(
-            ValueError,
-            match="CG requires a symmetric preconditioner",
-        ):
-            solve(
-                as_solver_categories(cats),
-                y,
-                CG(),
-                preconditioner=Preconditioner.Multiplicative,
-            )
-
-    def test_unpreconditioned_cg(self, problem):
-        cats, y = problem
-        result = solve(
-            as_solver_categories(cats), y, CG(), preconditioner=Preconditioner.Off
-        )
-        assert result.converged
-
-    def test_unpreconditioned_gmres(self, problem):
-        cats, y = problem
-        result = solve(
-            as_solver_categories(cats), y, GMRES(), preconditioner=Preconditioner.Off
+            as_solver_categories(cats), y, LSMR(), preconditioner=Preconditioner.Off
         )
         assert result.converged
 
@@ -104,44 +64,19 @@ class TestPreconditioners:
         result = solve(
             as_solver_categories(cats),
             y,
-            CG(),
+            LSMR(),
             preconditioner=Preconditioner.Additive,
-        )
-        assert result.converged
-
-    def test_multiplicative_schwarz(self, problem):
-        cats, y = problem
-        result = solve(
-            as_solver_categories(cats),
-            y,
-            GMRES(),
-            preconditioner=Preconditioner.Multiplicative,
         )
         assert result.converged
 
     def test_advanced_additive_schwarz(self, problem):
         """Test advanced config via AdditiveSchwarz."""
-        from within._within import AdditiveSchwarz
-
         cats, y = problem
         result = solve(
             as_solver_categories(cats),
             y,
-            CG(),
+            LSMR(),
             preconditioner=AdditiveSchwarz(),
-        )
-        assert result.converged
-
-    def test_advanced_multiplicative_schwarz(self, problem):
-        """Test advanced config via MultiplicativeSchwarz."""
-        from within._within import MultiplicativeSchwarz
-
-        cats, y = problem
-        result = solve(
-            as_solver_categories(cats),
-            y,
-            GMRES(),
-            preconditioner=MultiplicativeSchwarz(),
         )
         assert result.converged
 
@@ -265,17 +200,6 @@ class TestSolver:
         result = solver.solve(y)
         assert result.converged
 
-    def test_solver_multiplicative(self, problem):
-        """Solver with multiplicative Schwarz."""
-        cats, y = problem
-        solver = Solver(
-            as_solver_categories(cats),
-            GMRES(),
-            preconditioner=Preconditioner.Multiplicative,
-        )
-        result = solver.solve(y)
-        assert result.converged
-
     def test_solver_properties(self, problem):
         cats, y = problem
         solver = Solver(as_solver_categories(cats))
@@ -368,16 +292,6 @@ class TestAliases:
     def test_additive_alias(self, problem):
         cats, y = problem
         result = solve(as_solver_categories(cats), y, preconditioner=AdditiveSchwarz())
-        assert result.converged
-
-    def test_multiplicative_alias(self, problem):
-        cats, y = problem
-        result = solve(
-            as_solver_categories(cats),
-            y,
-            GMRES(),
-            preconditioner=MultiplicativeSchwarz(),
-        )
         assert result.converged
 
 

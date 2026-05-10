@@ -12,22 +12,6 @@
 //! or iteratively reweighted least squares). [`Solver`] lets callers pay the
 //! preconditioner cost once and amortize it across all subsequent solves.
 //!
-//! # Iterative refinement
-//!
-//! The normal-equation condition number `kappa(G)` can be orders of magnitude
-//! larger than needed for observation-space accuracy. A Krylov solve that
-//! reduces the DOF-space residual `||G x - b||` to relative tolerance `tol`
-//! may still leave the observation-space residual `||D^T W (y - D x)||`
-//! significantly above `tol * ||D^T W y||`, because large eigenvalues of G
-//! amplify small DOF-space errors into visible observation-space errors.
-//!
-//! Iterative refinement closes this gap cheaply: after each Krylov solve,
-//! recompute the residual from observation space (`D^T W (y - D x)`) and
-//! solve for a correction. Each refinement step costs two inexpensive
-//! matrix-vector products (D and D^T W) plus one Krylov solve whose RHS is
-//! already small — so the correction converges in very few iterations.
-//! Typically 0-1 actual correction solves are needed.
-//!
 //! # Usage
 //!
 //! ```no_run
@@ -55,23 +39,20 @@ use std::time::Instant;
 
 use ndarray::ArrayView2;
 use rayon::prelude::*;
-use schwarz_precond::solve::cg::pcg;
-use schwarz_precond::solve::gmres::pgmres;
-use schwarz_precond::solve::lsmr::mlsmr;
-use schwarz_precond::solve::vec_norm;
-use schwarz_precond::Operator;
+use schwarz_precond::{lsmr, mlsmr};
 
 use crate::operator::WeightedDesignOperator;
 
-use crate::config::{KrylovMethod, OperatorRepr, Preconditioner, SolverParams};
+use crate::config::{Preconditioner, SolverParams};
 use crate::domain::WeightedDesign;
 use crate::observation::{ArrayStore, ObservationStore, ObservationWeights};
-use crate::operator::gramian::{Gramian, GramianOperator};
-use crate::operator::preconditioner::{
-    build_preconditioner, build_preconditioner_fused, FePreconditioner,
-};
+use crate::operator::preconditioner::{build_preconditioner, FePreconditioner};
 use crate::orchestrate::{BatchSolveResult, SolveResult};
 use crate::WithinResult;
+
+fn norm(v: &[f64]) -> f64 {
+    v.iter().map(|x| x * x).sum::<f64>().sqrt()
+}
 
 /// Persistent solver that owns its preconditioner for reuse across multiple solves.
 ///
@@ -81,53 +62,30 @@ use crate::WithinResult;
 /// construction time.
 pub struct Solver<S: ObservationStore> {
     design: WeightedDesign<S>,
-    gramian: Option<Gramian>,
     preconditioner: Option<FePreconditioner>,
-    krylov: KrylovMethod,
     tol: f64,
     maxiter: usize,
-    max_refinements: usize,
+    local_size: Option<usize>,
 }
 
 impl<S: ObservationStore> Solver<S> {
     /// Build from an existing [`WeightedDesign`].
-    ///
-    /// When both an explicit Gramian and a preconditioner are needed, uses
-    /// a fused single-scan path that builds domains and Gramian blocks
-    /// simultaneously, avoiding a redundant observation scan.
     pub fn from_design(
         design: WeightedDesign<S>,
         params: &SolverParams,
         preconditioner: Option<&Preconditioner>,
     ) -> WithinResult<Self> {
-        let needs_gramian = params.operator == OperatorRepr::Explicit
-            || matches!(preconditioner, Some(Preconditioner::Multiplicative(_)));
-
-        let (gramian, built_precond) = match (needs_gramian, preconditioner) {
-            // Fused path: single observation scan → domains + Gramian blocks.
-            (true, Some(config)) => {
-                let (gramian, precond) = build_preconditioner_fused(&design, config)?;
-                (Some(gramian), Some(precond))
-            }
-            // Gramian only, no preconditioner.
-            (true, None) => (Some(Gramian::build(&design)), None),
-            // Preconditioner only (implicit operator).
-            (false, Some(config)) => {
-                let precond = build_preconditioner(&design, None, config)?;
-                (None, Some(precond))
-            }
-            // Neither.
-            (false, None) => (None, None),
+        let built_precond = match preconditioner {
+            Some(config) => Some(build_preconditioner(&design, config)?),
+            None => None,
         };
 
         Ok(Self {
             design,
-            gramian,
             preconditioner: built_precond,
-            krylov: params.krylov,
             tol: params.tol,
             maxiter: params.maxiter,
-            max_refinements: params.max_refinements,
+            local_size: params.local_size,
         })
     }
 
@@ -137,20 +95,12 @@ impl<S: ObservationStore> Solver<S> {
         params: &SolverParams,
         preconditioner: FePreconditioner,
     ) -> WithinResult<Self> {
-        let gramian = if params.operator == OperatorRepr::Explicit {
-            Some(Gramian::build(&design))
-        } else {
-            None
-        };
-
         Ok(Self {
             design,
-            gramian,
             preconditioner: Some(preconditioner),
-            krylov: params.krylov,
             tol: params.tol,
             maxiter: params.maxiter,
-            max_refinements: params.max_refinements,
+            local_size: params.local_size,
         })
     }
 
@@ -159,78 +109,37 @@ impl<S: ObservationStore> Solver<S> {
         let t_start = Instant::now();
         let t_setup_start = Instant::now();
 
-        if let KrylovMethod::Lsmr { local_size } = self.krylov {
-            let rect_op = WeightedDesignOperator::new(&self.design);
-            let b = rect_op.weighted_rhs(y);
-
-            let t_solve_start = Instant::now();
-            let time_setup = t_solve_start.duration_since(t_setup_start).as_secs_f64();
-
-            let precond = self.preconditioner.as_ref();
-            let r = match precond {
-                Some(p) => mlsmr(&rect_op, &b, Some(p), self.tol, self.maxiter, local_size)?,
-                None => mlsmr::<_, FePreconditioner>(
-                    &rect_op,
-                    &b,
-                    None,
-                    self.tol,
-                    self.maxiter,
-                    local_size,
-                )?,
-            };
-
-            let time_solve = t_solve_start.elapsed().as_secs_f64();
-
-            let mut demeaned = vec![0.0; self.design.n_rows];
-            self.design.matvec_d(&r.x, &mut demeaned);
-            for (d, &yi) in demeaned.iter_mut().zip(y.iter()) {
-                *d = yi - *d;
-            }
-
-            let mut rhs = vec![0.0; self.design.n_dofs];
-            self.design.rmatvec_wdt(y, &mut rhs);
-            let rhs_norm = vec_norm(&rhs).max(1e-15);
-            let mut residual_dof = vec![0.0; self.design.n_dofs];
-            self.design.rmatvec_wdt(&demeaned, &mut residual_dof);
-            let final_residual = vec_norm(&residual_dof) / rhs_norm;
-
-            return Ok(SolveResult {
-                x: r.x,
-                demeaned,
-                converged: r.converged,
-                iterations: r.iterations,
-                final_residual,
-                time_total: t_start.elapsed().as_secs_f64(),
-                time_setup,
-                time_solve,
-            });
-        }
-
-        // CG/GMRES path: normal equations + iterative refinement
-        let mut rhs = vec![0.0; self.design.n_dofs];
-        self.design.rmatvec_wdt(y, &mut rhs);
-        let rhs_norm = vec_norm(&rhs).max(1e-15);
-        let abs_tol = self.tol * rhs_norm;
+        let rect_op = WeightedDesignOperator::new(&self.design);
+        let b = rect_op.weighted_rhs(y);
 
         let t_solve_start = Instant::now();
         let time_setup = t_solve_start.duration_since(t_setup_start).as_secs_f64();
 
-        let solve = self.krylov_solve(&rhs)?;
-        let refined = self.iterative_refinement(y, abs_tol, solve)?;
+        let r = match self.preconditioner.as_ref() {
+            Some(p) => mlsmr(&rect_op, &b, p, self.tol, self.maxiter, self.local_size)?,
+            None => lsmr(&rect_op, &b, self.tol, self.maxiter, self.local_size)?,
+        };
 
         let time_solve = t_solve_start.elapsed().as_secs_f64();
 
-        // Residual via observation space: ||D^T W (y - Dx)|| / ||rhs||.
+        let mut demeaned = vec![0.0; self.design.n_rows];
+        self.design.matvec_d(&r.x, &mut demeaned);
+        for (d, &yi) in demeaned.iter_mut().zip(y.iter()) {
+            *d = yi - *d;
+        }
+
+        let mut rhs = vec![0.0; self.design.n_dofs];
+        self.design.rmatvec_wdt(y, &mut rhs);
+        let rhs_norm = norm(&rhs).max(1e-15);
         let mut residual_dof = vec![0.0; self.design.n_dofs];
-        self.design
-            .rmatvec_wdt(&refined.demeaned, &mut residual_dof);
-        let final_residual = vec_norm(&residual_dof) / rhs_norm;
+        self.design.rmatvec_wdt(&demeaned, &mut residual_dof);
+        let final_residual = norm(&residual_dof) / rhs_norm;
 
         Ok(SolveResult {
-            x: refined.x,
-            demeaned: refined.demeaned,
-            converged: refined.converged,
-            iterations: refined.iterations,
+            x: r.x,
+            demeaned,
+            converged: r.converged,
+            iterations: r.iterations,
             final_residual,
             time_total: t_start.elapsed().as_secs_f64(),
             time_setup,
@@ -243,11 +152,9 @@ impl<S: ObservationStore> Solver<S> {
         let t_start = Instant::now();
         let n_rhs = ys.len();
 
-        // Solve each RHS in parallel
         let results: Vec<WithinResult<SolveResult>> =
             ys.par_iter().map(|y| self.solve(y)).collect();
 
-        // Collect into BatchSolveResult
         let mut x = Vec::with_capacity(self.design.n_dofs * n_rhs);
         let mut demeaned = Vec::with_capacity(self.design.n_rows * n_rhs);
         let mut converged = Vec::with_capacity(n_rhs);
@@ -290,125 +197,6 @@ impl<S: ObservationStore> Solver<S> {
     pub fn n_obs(&self) -> usize {
         self.design.n_rows
     }
-
-    // --- Internal ---
-
-    fn iterative_refinement(
-        &self,
-        y: &[f64],
-        abs_tol: f64,
-        initial: KrylovSolve,
-    ) -> WithinResult<RefinedSolve> {
-        let mut x = initial.x;
-        let mut iterations = initial.iterations;
-        let mut converged = initial.converged;
-
-        let mut demeaned = vec![0.0; self.design.n_rows];
-        let mut rhs_corr = vec![0.0; self.design.n_dofs];
-
-        for _ in 0..self.max_refinements {
-            // Observation-space residual: demeaned = y - D·x
-            self.design.matvec_d(&x, &mut demeaned);
-            for (d, &yi) in demeaned.iter_mut().zip(y.iter()) {
-                *d = yi - *d;
-            }
-
-            // Correction RHS in normal-equation space: D^T W (y - Dx)
-            self.design.rmatvec_wdt(&demeaned, &mut rhs_corr);
-
-            let corr_norm = vec_norm(&rhs_corr);
-            if corr_norm <= abs_tol {
-                break;
-            }
-
-            // Tolerance scaled to original problem: only reduce the correction
-            // enough to bring the total residual below abs_tol.
-            let corr_tol = (abs_tol / corr_norm).min(1.0);
-            let corr = self.krylov_solve_with_tol(&rhs_corr, corr_tol)?;
-            for (xi, &di) in x.iter_mut().zip(corr.x.iter()) {
-                *xi += di;
-            }
-            iterations += corr.iterations;
-            converged = corr.converged;
-        }
-
-        // Final demeaned: y - D*x
-        self.design.matvec_d(&x, &mut demeaned);
-        for (d, &yi) in demeaned.iter_mut().zip(y.iter()) {
-            *d = yi - *d;
-        }
-
-        Ok(RefinedSolve {
-            x,
-            demeaned,
-            converged,
-            iterations,
-        })
-    }
-
-    fn krylov_solve(&self, rhs: &[f64]) -> WithinResult<KrylovSolve> {
-        self.krylov_solve_with_tol(rhs, self.tol)
-    }
-
-    fn krylov_solve_with_tol(&self, rhs: &[f64], tol: f64) -> WithinResult<KrylovSolve> {
-        match (&self.gramian, &self.preconditioner) {
-            (Some(gramian), Some(precond)) => {
-                self.dispatch_krylov(gramian, Some(precond), rhs, tol)
-            }
-            (Some(gramian), None) => {
-                self.dispatch_krylov::<_, FePreconditioner>(gramian, None, rhs, tol)
-            }
-            (None, Some(precond)) => {
-                let op = GramianOperator::new(&self.design);
-                self.dispatch_krylov(&op, Some(precond), rhs, tol)
-            }
-            (None, None) => {
-                let op = GramianOperator::new(&self.design);
-                self.dispatch_krylov::<_, FePreconditioner>(&op, None, rhs, tol)
-            }
-        }
-    }
-
-    fn dispatch_krylov<A: Operator, M: Operator>(
-        &self,
-        op: &A,
-        preconditioner: Option<&M>,
-        rhs: &[f64],
-        tol: f64,
-    ) -> WithinResult<KrylovSolve> {
-        match self.krylov {
-            KrylovMethod::Cg => {
-                let r = pcg(op, rhs, preconditioner, tol, self.maxiter)?;
-                Ok(KrylovSolve {
-                    x: r.x,
-                    converged: r.converged,
-                    iterations: r.iterations,
-                })
-            }
-            KrylovMethod::Gmres { restart } => {
-                let r = pgmres(op, rhs, preconditioner, tol, self.maxiter, restart)?;
-                Ok(KrylovSolve {
-                    x: r.x,
-                    converged: r.converged,
-                    iterations: r.iterations,
-                })
-            }
-            KrylovMethod::Lsmr { .. } => unreachable!("LSMR is dispatched inline in solve()"),
-        }
-    }
-}
-
-struct KrylovSolve {
-    x: Vec<f64>,
-    converged: bool,
-    iterations: usize,
-}
-
-struct RefinedSolve {
-    x: Vec<f64>,
-    demeaned: Vec<f64>,
-    converged: bool,
-    iterations: usize,
 }
 
 // Convenience constructors for ArrayStore

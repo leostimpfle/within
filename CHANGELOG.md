@@ -7,13 +7,21 @@ and this project follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Removed (within crate)
+
+- **BREAKING: CG, GMRES, multiplicative Schwarz, and iterative refinement**.
+  Modified LSMR is now the sole iterative solver. The `KrylovMethod` and
+  `OperatorRepr` enums, the `Preconditioner::Multiplicative` variant, the
+  `FePreconditioner::Multiplicative` variant, the Python `CG`/`GMRES`/
+  `MultiplicativeSchwarz` classes, and the `max_refinements` field have all
+  been removed. `SolverParams` now has only `{ tol, maxiter, local_size }`.
+
 ### Added
 
 - **LSMR rectangular least-squares solver**: a preconditioned LSMR variant
-  operating directly on the weighted design operator (`sqrt(W) D`), exposed
-  via a new `KrylovMethod::Lsmr` and dispatched inline from `Solver::solve`.
-  Avoids explicit normal-equation formation for improved numerical
-  conditioning.
+  operating directly on the weighted design operator (`sqrt(W) D`),
+  dispatched inline from `Solver::solve`. Avoids explicit normal-equation
+  formation for improved numerical conditioning.
 
 ### Changed
 

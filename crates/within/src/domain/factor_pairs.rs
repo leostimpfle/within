@@ -36,15 +36,9 @@
 //! overlap), all weights are 1.0 and the compact [`PartitionWeights::Uniform`]
 //! representation avoids per-DOF storage.
 //!
-//! # Entry points
+//! # Entry point
 //!
-//! - [`build_local_domains`] — builds subdomains only (for preconditioner-only paths).
-//! - [`build_domains_and_gramian_blocks`] — builds subdomains *and* collects
-//!   [`PairBlockData`] for composing an explicit Gramian, in a single observation
-//!   scan per pair. This fused path avoids redundant work when both the
-//!   preconditioner and an explicit Gramian are needed.
-
-use std::sync::Arc;
+//! [`build_local_domains`] builds subdomains for preconditioner construction.
 
 use super::{PartitionWeights, Subdomain, WeightedDesign};
 use crate::observation::ObservationStore;
@@ -79,83 +73,6 @@ pub(crate) fn build_local_domains<S: ObservationStore>(
     domain_pairs
 }
 
-/// Per-pair block data sufficient to compose the full Gramian CSR.
-///
-/// Produced alongside subdomain construction so that the same observation scan
-/// serves both domain decomposition and Gramian assembly.
-/// The `cross_tab` field is wrapped in `Arc` to avoid cloning the full CrossTab
-/// when the same data is shared with subdomain entries.
-pub(crate) struct PairBlockData {
-    pub q: usize,
-    pub r: usize,
-    /// Shared reference to the full-pair CrossTab (diag_q, diag_r, C, C^T).
-    pub cross_tab: Arc<CrossTab>,
-    /// Global DOF indices of active q-levels (length = c.nrows).
-    pub q_global: Vec<u32>,
-    /// Global DOF indices of active r-levels (length = c.ncols).
-    pub r_global: Vec<u32>,
-}
-
-/// Build local subdomains AND collect per-pair block data for Gramian composition.
-///
-/// Combines the parallel observation scan (for domain construction) with block
-/// extraction (for Gramian assembly) in a single pass per pair. This avoids a
-/// double observation scan when both domains and an explicit Gramian are needed.
-pub(crate) fn build_domains_and_gramian_blocks<S: ObservationStore>(
-    design: &WeightedDesign<S>,
-) -> (Vec<(Subdomain, CrossTab)>, Vec<PairBlockData>) {
-    use rayon::prelude::*;
-
-    let n_factors = design.n_factors();
-    let pairs = build_pairs(n_factors);
-    let all_active = find_all_active_levels(design);
-
-    type PairResult = (Vec<(Subdomain, CrossTab)>, Option<PairBlockData>);
-    let results: Vec<PairResult> = pairs
-        .par_iter()
-        .map(|&(q, r)| domains_and_block_for_pair(design, q, r, &all_active))
-        .collect();
-
-    let mut domain_pairs = Vec::new();
-    let mut blocks = Vec::new();
-    for (domains, block) in results {
-        domain_pairs.extend(domains);
-        if let Some(b) = block {
-            blocks.push(b);
-        }
-    }
-
-    compute_partition_weights(&mut domain_pairs, design.n_dofs);
-    (domain_pairs, blocks)
-}
-
-fn domains_and_block_for_pair<S: ObservationStore>(
-    design: &WeightedDesign<S>,
-    q: usize,
-    r: usize,
-    all_active: &[Vec<bool>],
-) -> (Vec<(Subdomain, CrossTab)>, Option<PairBlockData>) {
-    let (full_ct, l2g) = match CrossTab::build_for_pair_with_active(design, q, r, all_active) {
-        Some(pair) => pair,
-        None => return (Vec::new(), None),
-    };
-
-    let n_q_full = full_ct.n_q();
-    let ct_arc = Arc::new(full_ct);
-
-    let block_data = PairBlockData {
-        q,
-        r,
-        cross_tab: Arc::clone(&ct_arc),
-        q_global: l2g[..n_q_full].to_vec(),
-        r_global: l2g[n_q_full..].to_vec(),
-    };
-
-    let domains = split_into_subdomains_arc(ct_arc, &l2g, n_q_full, (q, r));
-
-    (domains, Some(block_data))
-}
-
 fn domains_for_pair<S: ObservationStore>(
     design: &WeightedDesign<S>,
     q: usize,
@@ -185,39 +102,6 @@ fn split_into_subdomains(
 
     let cross_tabs: Vec<CrossTab> = if components.len() == 1 {
         vec![full_ct]
-    } else {
-        components
-            .iter()
-            .map(|comp| full_ct.extract_component(comp))
-            .collect()
-    };
-
-    components
-        .iter()
-        .zip(cross_tabs)
-        .map(|(comp, comp_ct)| {
-            let comp_l2g = component_global_indices(comp, l2g, n_q_full);
-            let core =
-                super::SubdomainCore::uniform(comp_l2g.into_iter().map(|g| g as u32).collect());
-            (Subdomain { factor_pair, core }, comp_ct)
-        })
-        .collect()
-}
-
-/// Like `split_into_subdomains` but accepts an `Arc<CrossTab>`.
-///
-/// When there is a single component, unwraps or clones the Arc to avoid
-/// full CrossTab cloning. Multiple components extract sub-CrossTabs as usual.
-fn split_into_subdomains_arc(
-    full_ct: Arc<CrossTab>,
-    l2g: &[u32],
-    n_q_full: usize,
-    factor_pair: (usize, usize),
-) -> Vec<(Subdomain, CrossTab)> {
-    let components = full_ct.bipartite_connected_components();
-
-    let cross_tabs: Vec<CrossTab> = if components.len() == 1 {
-        vec![Arc::try_unwrap(full_ct).unwrap_or_else(|arc| (*arc).clone())]
     } else {
         components
             .iter()
@@ -362,84 +246,5 @@ mod tests {
             }
         }
         assert!(covered.iter().all(|&c| c), "Not all DOFs covered");
-    }
-
-    // -----------------------------------------------------------------------
-    // build_domains_and_gramian_blocks + from_pair_blocks tests
-    // -----------------------------------------------------------------------
-
-    use crate::operator::gramian::Gramian;
-
-    fn assert_domain_sets_equal(
-        obs_domains: &[(Subdomain, crate::operator::gramian::CrossTab)],
-        gram_domains: &[(Subdomain, crate::operator::gramian::CrossTab)],
-    ) {
-        assert_eq!(
-            obs_domains.len(),
-            gram_domains.len(),
-            "domain count mismatch"
-        );
-
-        // Sort both by global_indices for deterministic comparison
-        let mut obs_sorted: Vec<_> = obs_domains
-            .iter()
-            .map(|(d, _)| d.core.global_indices().to_vec())
-            .collect();
-        obs_sorted.sort();
-        let mut gram_sorted: Vec<_> = gram_domains
-            .iter()
-            .map(|(d, _)| d.core.global_indices().to_vec())
-            .collect();
-        gram_sorted.sort();
-
-        for (o, g) in obs_sorted.iter().zip(&gram_sorted) {
-            assert_eq!(o, g, "global_indices mismatch");
-        }
-    }
-
-    #[test]
-    fn test_composed_gramian_matches_observation_gramian() {
-        use schwarz_precond::Operator;
-
-        for design in [make_test_design(), {
-            let store = FactorMajorStore::new(
-                vec![vec![0, 1, 2, 0, 1], vec![0, 1, 2, 3, 0]],
-                ObservationWeights::Unit,
-                5,
-            )
-            .unwrap();
-            WeightedDesign::from_store(store).unwrap()
-        }] {
-            let obs_gramian = Gramian::build(&design);
-            let (_domains, blocks) = build_domains_and_gramian_blocks(&design);
-            let composed =
-                Gramian::from_pair_blocks(&blocks, &design.factors, design.n_dofs).unwrap();
-
-            // Compare matvec output for several test vectors
-            let n = design.n_dofs;
-            for seed in 0..3 {
-                let x: Vec<f64> = (0..n).map(|i| (i * 7 + seed) as f64 * 0.1).collect();
-                let mut y_obs = vec![0.0; n];
-                let mut y_composed = vec![0.0; n];
-                obs_gramian.apply(&x, &mut y_obs);
-                composed.apply(&x, &mut y_composed);
-                for i in 0..n {
-                    assert!(
-                        (y_obs[i] - y_composed[i]).abs() < 1e-12,
-                        "matvec mismatch at DOF {i}: obs={}, composed={}",
-                        y_obs[i],
-                        y_composed[i],
-                    );
-                }
-            }
-        }
-    }
-
-    #[test]
-    fn test_composed_gramian_domains_match() {
-        let design = make_test_design();
-        let obs_domains = build_local_domains(&design);
-        let (composed_domains, _blocks) = build_domains_and_gramian_blocks(&design);
-        assert_domain_sets_equal(&obs_domains, &composed_domains);
     }
 }

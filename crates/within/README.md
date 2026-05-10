@@ -1,11 +1,10 @@
 # within
 
 Solves linear fixed-effects models **y = D x + e** where D is a sparse
-categorical design matrix. The normal equations **G x = D^T W y** (with
-G = D^T W D) are solved via preconditioned CG or right-preconditioned GMRES
-with additive or multiplicative Schwarz preconditioners backed by approximate
-Cholesky local solvers. Designed for econometric panel data with
-millions of observations and multiple high-dimensional fixed effects.
+categorical design matrix. Modified LSMR with a domain-decomposition
+(Schwarz) preconditioner backed by approximate Cholesky local solvers.
+Designed for econometric panel data with millions of observations and
+multiple high-dimensional fixed effects.
 
 ## Install
 
@@ -17,7 +16,7 @@ cargo add within
 
 ```rust
 use ndarray::Array2;
-use within::{solve, SolverParams, KrylovMethod, Preconditioner, LocalSolverConfig};
+use within::{solve, SolverParams, Preconditioner, LocalSolverConfig, ReductionStrategy};
 
 // Two factors: 100 levels each, 10 000 observations
 let n_obs = 10_000usize;
@@ -28,22 +27,18 @@ for i in 0..n_obs {
 }
 let y: Vec<f64> = (0..n_obs).map(|i| i as f64 * 0.01).collect();
 
-// Solve with the default solver: CG + additive Schwarz + implicit operator
+// Solve with the default solver: LSMR + additive Schwarz
 let result = solve(categories.view(), &y, None, &SolverParams::default(), None)
     .expect("solve should succeed");
 assert!(result.converged);
-println!("CG converged in {} iterations", result.iterations);
+println!("LSMR converged in {} iterations", result.iterations);
 
-// GMRES with multiplicative Schwarz
-let params = SolverParams {
-    krylov: KrylovMethod::Gmres { restart: 30 },
-    ..SolverParams::default()
-};
-let precond = Preconditioner::Multiplicative(LocalSolverConfig::default());
+// Tighter tolerance with explicit preconditioner config
+let params = SolverParams { tol: 1e-10, ..SolverParams::default() };
+let precond = Preconditioner::Additive(LocalSolverConfig::default(), ReductionStrategy::Auto);
 let result = solve(categories.view(), &y, None, &params, Some(&precond))
     .expect("solve should succeed");
 assert!(result.converged);
-println!("GMRES converged in {} iterations", result.iterations);
 ```
 
 ## Feature flags
@@ -64,13 +59,12 @@ The crate is organized in four layers:
    with partition-of-unity weights for the Schwarz preconditioner.
 
 3. **`operator`** — Linear algebra primitives. `Gramian` (explicit CSR) and
-   `GramianOperator` (implicit D^T W D) for the normal equations; Schwarz
+   `GramianOperator` (implicit D^T W D) for matrix-free matvecs; Schwarz
    preconditioner builders that wire approximate Cholesky local solvers into
    the generic `schwarz-precond` framework.
 
 4. **`orchestrate`** — End-to-end solve entry points (`solve`, `solve_batch`)
-   with typed configuration (`SolverParams`, `KrylovMethod`, `Preconditioner`,
-   `OperatorRepr`).
+   with typed configuration (`SolverParams`, `Preconditioner`).
 
 ## License
 

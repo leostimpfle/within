@@ -7,9 +7,8 @@ use rayon::prelude::*;
 use schwarz_precond::{Operator, SparseMatrix};
 
 use super::Gramian;
-use crate::domain::{PairBlockData, WeightedDesign};
-use crate::observation::{FactorMeta, ObservationStore};
-use crate::{WithinError, WithinResult};
+use crate::domain::WeightedDesign;
+use crate::observation::ObservationStore;
 
 // ===========================================================================
 // CSR assembly helper
@@ -219,22 +218,6 @@ impl Gramian {
         Self {
             matrix: Arc::new(build_pair_matrix(design, q, r)),
         }
-    }
-
-    /// Compose the full Gramian CSR from pre-built per-pair block data.
-    ///
-    /// Each `PairBlockData` carries the off-diagonal block C_qr (and C_qr^T),
-    /// diagonal entries for both factors, and the local-to-global index mapping.
-    /// Because factor offsets are monotonically increasing, column indices within
-    /// each row are emitted in sorted order — no per-row sorting is needed.
-    pub(crate) fn from_pair_blocks(
-        blocks: &[PairBlockData],
-        factors: &[FactorMeta],
-        n_dofs: usize,
-    ) -> WithinResult<Self> {
-        Ok(Self {
-            matrix: Arc::new(compose_gramian_from_blocks(blocks, factors, n_dofs)?),
-        })
     }
 
     /// `G @ x`.
@@ -452,152 +435,4 @@ fn build_pair_matrix<S: ObservationStore>(
             emit(gk, gj, cnt);
         });
     })
-}
-
-/// Compose a contiguous Gramian CSR from per-pair block data.
-///
-/// The Gramian has block structure:
-/// ```text
-/// G = | D_0    C_01   C_02   ... |
-///     | C_01^T D_1    C_12   ... |
-///     | C_02^T C_12^T D_2    ... |
-/// ```
-///
-/// Since factor offsets are monotonically increasing, entries within each row
-/// are emitted in sorted column order: pairs with earlier factors first,
-/// then the diagonal, then pairs with later factors. No per-row sorting needed.
-fn compose_gramian_from_blocks(
-    blocks: &[PairBlockData],
-    factors: &[FactorMeta],
-    n_dofs: usize,
-) -> WithinResult<SparseMatrix> {
-    let n_factors = factors.len();
-
-    // Collect canonical diagonal per factor (from any block involving that factor).
-    let mut factor_diag: Vec<Option<&[f64]>> = vec![None; n_factors];
-    let mut factor_global: Vec<Option<&[u32]>> = vec![None; n_factors];
-    for b in blocks {
-        if factor_diag[b.q].is_none() {
-            factor_diag[b.q] = Some(&b.cross_tab.diag_q);
-            factor_global[b.q] = Some(&b.q_global);
-        }
-        if factor_diag[b.r].is_none() {
-            factor_diag[b.r] = Some(&b.cross_tab.diag_r);
-            factor_global[b.r] = Some(&b.r_global);
-        }
-    }
-
-    // Group blocks by factor for fast lookup.
-    // first_pairs[f]: blocks where f is the q-factor (entries from C go into f's rows)
-    // second_pairs[f]: blocks where f is the r-factor (entries from C^T go into f's rows)
-    let mut first_pairs: Vec<Vec<usize>> = vec![Vec::new(); n_factors];
-    let mut second_pairs: Vec<Vec<usize>> = vec![Vec::new(); n_factors];
-    for (bi, b) in blocks.iter().enumerate() {
-        first_pairs[b.q].push(bi);
-        second_pairs[b.r].push(bi);
-    }
-
-    // --- Pass 1: count NNZ per row ---
-    let mut row_nnz = vec![0u64; n_dofs];
-
-    // Diagonals: one entry per active level per factor
-    for f_global in factor_global.iter().flatten() {
-        for &g in *f_global {
-            row_nnz[g as usize] += 1;
-        }
-    }
-
-    // Off-diagonals from C blocks (placed in q-factor rows)
-    for b in blocks {
-        for (cj, &g) in b.q_global.iter().enumerate() {
-            let nnz_in_row = (b.cross_tab.c.indptr[cj + 1] - b.cross_tab.c.indptr[cj]) as u64;
-            row_nnz[g as usize] += nnz_in_row;
-        }
-        // C^T entries placed in r-factor rows
-        for (ck, &g) in b.r_global.iter().enumerate() {
-            let nnz_in_row = (b.cross_tab.ct.indptr[ck + 1] - b.cross_tab.ct.indptr[ck]) as u64;
-            row_nnz[g as usize] += nnz_in_row;
-        }
-    }
-
-    // --- Build indptr ---
-    let mut indptr = vec![0u32; n_dofs + 1];
-    for i in 0..n_dofs {
-        let nnz_u64 = row_nnz[i];
-        indptr[i + 1] =
-            indptr[i]
-                .checked_add(u32::try_from(nnz_u64).map_err(|_| {
-                    WithinError::Overflow(format!("row nnz exceeds u32 at row {i}"))
-                })?)
-                .ok_or_else(|| {
-                    WithinError::Overflow(format!("cumulative indptr exceeds u32 at row {i}"))
-                })?;
-    }
-    let total_nnz = indptr[n_dofs] as usize;
-
-    // --- Pass 2: fill indices and data ---
-    let mut indices = vec![0u32; total_nnz];
-    let mut data = vec![0.0f64; total_nnz];
-    let mut cursor = indptr[..n_dofs].to_vec();
-
-    // Process factor by factor to maintain sorted column order.
-    // For each active level of factor f:
-    //   1. C^T entries from pairs (p, f) where p < f → columns in p's range (< f's offset)
-    //   2. Diagonal entry → column = own global index (in f's range)
-    //   3. C entries from pairs (f, r) where r > f → columns in r's range (> f's offset)
-    for f in 0..n_factors {
-        let f_global = match factor_global[f] {
-            Some(g) => g,
-            None => continue,
-        };
-        let f_diag = factor_diag[f].unwrap();
-        let n_active_f = f_global.len();
-
-        for compact_j in 0..n_active_f {
-            let g = f_global[compact_j] as usize;
-
-            // 1. Entries from pairs (p, f) where p < f — columns in p's range
-            for &bi in &second_pairs[f] {
-                let b = &blocks[bi];
-                // f is the r-factor in this block; row compact_j of C^T
-                let start = b.cross_tab.ct.indptr[compact_j] as usize;
-                let end = b.cross_tab.ct.indptr[compact_j + 1] as usize;
-                for idx in start..end {
-                    let compact_p = b.cross_tab.ct.indices[idx] as usize;
-                    debug_assert!(
-                        compact_p < b.q_global.len(),
-                        "compact_p {compact_p} out of range for q_global len {}",
-                        b.q_global.len()
-                    );
-                    let pos = cursor[g] as usize;
-                    indices[pos] = b.q_global[compact_p];
-                    data[pos] = b.cross_tab.ct.data[idx];
-                    cursor[g] += 1;
-                }
-            }
-
-            // 2. Diagonal
-            let pos = cursor[g] as usize;
-            indices[pos] = g as u32;
-            data[pos] = f_diag[compact_j];
-            cursor[g] += 1;
-
-            // 3. Entries from pairs (f, r) where r > f — columns in r's range
-            for &bi in &first_pairs[f] {
-                let b = &blocks[bi];
-                // f is the q-factor in this block; row compact_j of C
-                let start = b.cross_tab.c.indptr[compact_j] as usize;
-                let end = b.cross_tab.c.indptr[compact_j + 1] as usize;
-                for idx in start..end {
-                    let compact_r = b.cross_tab.c.indices[idx] as usize;
-                    let pos = cursor[g] as usize;
-                    indices[pos] = b.r_global[compact_r];
-                    data[pos] = b.cross_tab.c.data[idx];
-                    cursor[g] += 1;
-                }
-            }
-        }
-    }
-
-    Ok(SparseMatrix::new(indptr, indices, data, n_dofs))
 }

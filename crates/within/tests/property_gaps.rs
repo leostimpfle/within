@@ -270,10 +270,10 @@ proptest! {
         }
     }
 
-    /// Single-factor problems have a diagonal Gramian.  Unpreconditioned CG on
-    /// a diagonal system converges in at most n_levels iterations (one per
-    /// distinct eigenvalue); in practice far fewer are needed.  The key property
-    /// is that CG converges and produces a finite solution.
+    /// Single-factor problems have a diagonal Gramian.  Unpreconditioned LSMR
+    /// on a diagonal system converges in at most n_levels iterations (one per
+    /// distinct singular value); in practice far fewer are needed.  The key
+    /// property is that LSMR converges and produces a finite solution.
     #[test]
     fn prop_single_factor_converges((cats, _y) in single_factor_strategy()) {
         // Build a consistent RHS: y = D * 1 so the system is exactly solvable.
@@ -284,18 +284,17 @@ proptest! {
         let mut y_feasible = vec![0.0; design.n_rows];
         design.matvec_d(&x_true, &mut y_feasible);
 
-        // No preconditioner, no iterative refinement.
+        // No preconditioner.
         let params = SolverParams {
             tol: 1e-8,
-            maxiter: n_levels + 10, // generous: diagonal CG converges in ≤ n_levels steps
-            max_refinements: 0,
+            maxiter: n_levels + 10,
             ..SolverParams::default()
         };
         let result = solve(cats.view(), &y_feasible, None, &params, None).unwrap();
 
         prop_assert!(
             result.converged,
-            "single-factor CG did not converge in {} iterations (residual={:.2e}, n_levels={})",
+            "single-factor LSMR did not converge in {} iterations (residual={:.2e}, n_levels={})",
             result.iterations,
             result.final_residual,
             n_levels

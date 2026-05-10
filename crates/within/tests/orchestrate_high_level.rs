@@ -1,7 +1,6 @@
 use ndarray::array;
 use within::{
-    solve, solve_batch, KrylovMethod, LocalSolverConfig, OperatorRepr, Preconditioner,
-    ReductionStrategy, SolverParams,
+    solve, solve_batch, LocalSolverConfig, Preconditioner, ReductionStrategy, SolverParams,
 };
 
 #[path = "common/orchestrate_helpers.rs"]
@@ -47,8 +46,6 @@ fn test_high_level_solve_preconditioned() {
     let y = [1.0, 2.0, 3.0, 4.0, 5.0];
 
     let params = SolverParams {
-        krylov: KrylovMethod::Cg,
-        operator: OperatorRepr::Implicit,
         tol: 1e-8,
         maxiter: 1000,
         ..Default::default()

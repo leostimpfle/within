@@ -5,7 +5,7 @@ import pickle
 import numpy as np
 import pytest
 
-from within import CG, GMRES, FePreconditioner, Preconditioner, Solver, solve
+from within import LSMR, FePreconditioner, Solver, solve
 from within._within import (
     AdditiveSchwarz,
     ApproxCholConfig,
@@ -65,7 +65,7 @@ class TestAdvancedConfigs:
         result = solve(
             as_solver_categories(cats),
             y,
-            CG(),
+            LSMR(),
             preconditioner=AdditiveSchwarz(local_solver=SchurComplement()),
         )
         assert result.converged
@@ -88,16 +88,6 @@ class TestFePreconditioner:
     def test_preconditioner_repr_additive(self, solver_and_precond):
         solver, precond, categories, y = solver_and_precond
         assert "Additive" in repr(precond)
-
-    def test_preconditioner_repr_multiplicative(self, problem):
-        cats, y = problem
-        solver = Solver(
-            as_solver_categories(cats),
-            GMRES(),
-            preconditioner=Preconditioner.Multiplicative,
-        )
-        precond = solver.preconditioner()
-        assert "Multiplicative" in repr(precond)
 
     def test_preconditioner_nrows_ncols_match_solver(self, solver_and_precond):
         solver, precond, categories, y = solver_and_precond

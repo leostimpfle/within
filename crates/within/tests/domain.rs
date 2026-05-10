@@ -314,56 +314,6 @@ fn test_three_factor_design_solve_converges() {
     );
 }
 
-/// Test that the 3-factor design converges with additive Schwarz, which
-/// internally validates that the partition of unity is correct (overlapping
-/// subdomains with NonUniform weights). Multiplicative Schwarz is also tested
-/// to cover more of the preconditioner path.
-#[test]
-fn test_three_factor_design_multiplicative_schwarz_converges() {
-    use within::{solve, LocalSolverConfig, Preconditioner, SolverParams};
-
-    let n_obs = 60;
-    let n_lev = 5usize;
-    let mut cats = ndarray::Array2::<u32>::zeros((n_obs, 3));
-    for i in 0..n_obs {
-        cats[[i, 0]] = (i % n_lev) as u32;
-        cats[[i, 1]] = ((i / n_lev) % n_lev) as u32;
-        cats[[i, 2]] = ((i * 3) % n_lev) as u32;
-    }
-
-    // Build y = D·1 so the true solution is 1.
-    let store = FactorMajorStore::new(
-        vec![
-            (0..n_obs).map(|i| (i % n_lev) as u32).collect(),
-            (0..n_obs).map(|i| ((i / n_lev) % n_lev) as u32).collect(),
-            (0..n_obs).map(|i| ((i * 3) % n_lev) as u32).collect(),
-        ],
-        ObservationWeights::Unit,
-        n_obs,
-    )
-    .expect("valid 3-factor store");
-    let dm = WeightedDesign::from_store(store).expect("valid 3-factor design");
-    let x_true = vec![1.0f64; dm.n_dofs];
-    let mut y = vec![0.0f64; dm.n_rows];
-    dm.matvec_d(&x_true, &mut y);
-
-    let params = SolverParams {
-        tol: 1e-8,
-        maxiter: 500,
-        ..SolverParams::default()
-    };
-    let precond = Preconditioner::Multiplicative(LocalSolverConfig::solver_default());
-    let result =
-        solve(cats.view(), &y, None, &params, Some(&precond)).expect("solve should not error");
-
-    assert!(
-        result.converged,
-        "3-factor multiplicative Schwarz did not converge (residual: {:.2e})",
-        result.final_residual
-    );
-}
-
-// ---------------------------------------------------------------------------
 // 4. Disconnected bipartite graph → multiple subdomains per factor pair
 // ---------------------------------------------------------------------------
 // Factor 0: [0, 0, 1, 1]
@@ -518,7 +468,7 @@ fn test_single_factor_design_gramian_diagonal_is_level_counts() {
 
 /// A single-factor design has no factor pairs, so the additive Schwarz
 /// preconditioner has no subdomains to work with. The solver should still
-/// function (falling back to unpreconditioned CG) or be able to solve the
+/// function (falling back to unpreconditioned LSMR) or be able to solve the
 /// trivial normal equations directly.
 #[test]
 fn test_single_factor_design_solve_without_precond() {
@@ -540,7 +490,7 @@ fn test_single_factor_design_solve_without_precond() {
         ..SolverParams::default()
     };
     // No preconditioner: the normal equations for a single-factor design are
-    // diagonal and CG converges immediately.
+    // diagonal and LSMR converges immediately.
     let result = solve(cats.view(), &y, None, &params, None).expect("solve should not error");
 
     assert!(

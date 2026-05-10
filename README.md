@@ -4,7 +4,7 @@
 
 By the Frisch-Waugh-Lovell theorem, estimating a regression of the form *y = Xβ + Dα + ε* reduces to a sequence of least-squares projections, one for y and one for each column of X, followed by a cheap regression fit on the resulting residuals. The projection step of solving the normal equations *D'Dx = D'z* is the computational bottleneck, which is the problem `within` is designed to solve.
 
-`within`'s solvers are tailored to the structure of fixed effects problems, which can be represented as a graph (as first noted by Correia, 2016). Concretely, `within` uses iterative methods (preconditioned CG, right-preconditioned GMRES) with domain decomposition (Schwarz) preconditioners, backed by approximate Cholesky local solvers (Gao et al, 2025).
+`within`'s solvers are tailored to the structure of fixed effects problems, which can be represented as a graph (as first noted by Correia, 2016). Concretely, `within` uses modified LSMR with a domain decomposition (Schwarz) preconditioner, backed by approximate Cholesky local solvers (Gao et al, 2025).
 
 ## Installation
 
@@ -19,7 +19,7 @@ pip install within_py
 `within`'s main user-facing function is `solve`. Provide a 2-D `uint32` array of category codes (one column per fixed-effect factor) and a response vector `y`. The solver finds x in the normal equations **D'D x = D'y**, where D is the sparse categorical design matrix.
 
 ```python
-from within import solve, solve_batch, CG, GMRES, AdditiveSchwarz, MultiplicativeSchwarz
+from within import solve, solve_batch, LSMR, AdditiveSchwarz
 import numpy as np
 
 np.random.seed(1)
@@ -30,11 +30,11 @@ fe = np.asfortranarray(np.column_stack([
 ]))
 y = np.random.randn(n)
 
-# Default: additive Schwarz + CG (recommended for most problems)
+# Default: additive Schwarz + LSMR
 result = solve(fe, y)
 
-# Multiplicative Schwarz + GMRES (fewer iterations, less parallelism)
-result = solve(fe, y, config=GMRES(), preconditioner=MultiplicativeSchwarz())
+# Custom tolerance / iteration cap
+result = solve(fe, y, config=LSMR(tol=1e-10, maxiter=2000))
 
 # Weighted solve
 result = solve(fe, y, weights=np.ones(n))
@@ -91,15 +91,13 @@ solver2 = Solver(fe, preconditioner=precond)   # skip re-factorization
 
 | Class | Description |
 |---|---|
-| `CG(tol=1e-8, maxiter=1000, operator=Implicit)` | Conjugate gradient on the normal equations. Default solver. |
-| `GMRES(tol=1e-8, maxiter=1000, restart=30, operator=Implicit)` | Right-preconditioned GMRES. |
+| `LSMR(tol=1e-8, maxiter=1000, local_size=None)` | Modified LSMR. `local_size` enables windowed reorthogonalization. |
 
 ### Preconditioners
 
 | Class | Description |
 |---|---|
-| `AdditiveSchwarz(local_solver?)` | Additive one-level Schwarz. Works with CG and GMRES. |
-| `MultiplicativeSchwarz(local_solver?)` | Multiplicative one-level Schwarz. GMRES only. |
+| `AdditiveSchwarz(local_solver?)` | Additive one-level Schwarz. |
 | `Preconditioner.Off` | Disable preconditioning. |
 
 Pass `None` (the default) to use additive Schwarz with the default local solver.
@@ -123,21 +121,18 @@ Pass `None` (the default) to use additive Schwarz with the default local solver.
 
 ```rust
 use ndarray::Array2;
-use within::{solve, SolverParams, KrylovMethod, Preconditioner, LocalSolverConfig};
+use within::{solve, SolverParams, Preconditioner, LocalSolverConfig, ReductionStrategy};
 
 let categories = /* Array2<u32> of shape (n_obs, n_factors) */;
 let y: &[f64] = /* response vector */;
 
-// Default: CG + additive Schwarz
+// Default: LSMR + additive Schwarz
 let r = solve(categories.view(), &y, None, &SolverParams::default(), None)?;
 assert!(r.converged);
 
-// GMRES + multiplicative Schwarz
-let params = SolverParams {
-    krylov: KrylovMethod::Gmres { restart: 30 },
-    ..SolverParams::default()
-};
-let precond = Preconditioner::Multiplicative(LocalSolverConfig::default());
+// Tighter tolerance with explicit additive preconditioner
+let params = SolverParams { tol: 1e-10, ..SolverParams::default() };
+let precond = Preconditioner::Additive(LocalSolverConfig::default(), ReductionStrategy::Auto);
 let r = solve(categories.view(), &y, None, &params, Some(&precond))?;
 ```
 
@@ -153,11 +148,9 @@ let r2 = solver.solve(&another_y)?;  // reuses preconditioner
 
 | Type | Variants / Fields |
 |---|---|
-| `SolverParams` | `krylov: KrylovMethod`, `operator: OperatorRepr`, `tol: f64`, `maxiter: usize` |
-| `KrylovMethod` | `Cg` (default), `Gmres { restart }` |
-| `OperatorRepr` | `Implicit` (default, matrix-free D'WD), `Explicit` (CSR Gramian) |
-| `Preconditioner` | `Additive(LocalSolverConfig)`, `Multiplicative(LocalSolverConfig)` |
-| `LocalSolverConfig` | `SchurComplement { approx_chol, approx_schur, dense_threshold }`, `FullSddm { approx_chol }` |
+| `SolverParams` | `tol: f64`, `maxiter: usize`, `local_size: Option<usize>` |
+| `Preconditioner` | `Additive(LocalSolverConfig, ReductionStrategy)` |
+| `LocalSolverConfig` | `{ approx_chol, approx_schur, dense_threshold }` |
 
 ### Lower-level types
 

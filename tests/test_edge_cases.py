@@ -9,7 +9,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from within import CG, GMRES, Preconditioner, Solver, solve
+from within import LSMR, Preconditioner, Solver, solve
 
 
 def as_solver_categories(cats):
@@ -22,19 +22,19 @@ def as_solver_categories(cats):
 
 
 class TestNanInfPropagation:
-    def test_nan_in_y_propagates_to_x(self):
-        """NaN in y should propagate through the solve to x."""
+    def test_nan_in_y_rejected(self):
+        """NaN in y should be rejected at LSMR input validation."""
         cats = as_solver_categories([np.array([0, 1, 0]), np.array([0, 0, 1])])
         y = np.array([1.0, np.nan, 3.0])
-        result = solve(cats, y)
-        assert np.any(np.isnan(result.x))
+        with pytest.raises(ValueError, match="finite"):
+            solve(cats, y)
 
-    def test_inf_in_y_produces_non_finite_x(self):
-        """Inf in y should produce non-finite values in x."""
+    def test_inf_in_y_rejected(self):
+        """Inf in y should be rejected at LSMR input validation."""
         cats = as_solver_categories([np.array([0, 1, 0]), np.array([0, 0, 1])])
         y = np.array([1.0, np.inf, 3.0])
-        result = solve(cats, y)
-        assert np.any(~np.isfinite(result.x))
+        with pytest.raises(ValueError, match="finite"):
+            solve(cats, y)
 
     def test_nan_in_weights_propagates_or_raises(self):
         """NaN weight should either raise or produce NaN/non-converged result."""
@@ -165,7 +165,7 @@ class TestSolverConfigLimits:
             [rng.integers(0, 50, size=1000), rng.integers(0, 50, size=1000)]
         )
         y = rng.standard_normal(1000)
-        result = solve(cats, y, CG(maxiter=1, tol=1e-15))
+        result = solve(cats, y, LSMR(maxiter=1, tol=1e-15))
         assert not result.converged
         assert np.all(np.isfinite(result.x))
 
@@ -176,7 +176,7 @@ class TestSolverConfigLimits:
             [rng.integers(0, 50, size=1000), rng.integers(0, 50, size=1000)]
         )
         y = rng.standard_normal(1000)
-        result = solve(cats, y, CG(maxiter=2, tol=1e-15))
+        result = solve(cats, y, LSMR(maxiter=2, tol=1e-15))
         assert not result.converged
         assert np.all(np.isfinite(result.x))
 
@@ -186,7 +186,7 @@ class TestSolverConfigLimits:
             [np.array([0, 1, 0, 1, 2]), np.array([0, 0, 1, 1, 0])]
         )
         y = np.array([1.0, 2.0, 3.0, 4.0, 5.0])
-        result = solve(cats, y, CG(tol=1e-14))
+        result = solve(cats, y, LSMR(tol=1e-14))
         assert np.all(np.isfinite(result.x))
 
     def test_tol_1_converges_immediately(self):
@@ -196,20 +196,9 @@ class TestSolverConfigLimits:
             [rng.integers(0, 20, size=200), rng.integers(0, 20, size=200)]
         )
         y = rng.standard_normal(200)
-        result = solve(cats, y, CG(tol=1.0))
+        result = solve(cats, y, LSMR(tol=1.0))
         assert result.converged
         assert result.iterations <= 5
-
-    def test_gmres_maxiter_1_produces_finite_result(self):
-        """GMRES with maxiter=1 terminates after one iteration."""
-        rng = np.random.default_rng(7)
-        cats = as_solver_categories(
-            [rng.integers(0, 30, size=500), rng.integers(0, 30, size=500)]
-        )
-        y = rng.standard_normal(500)
-        result = solve(cats, y, GMRES(maxiter=1, tol=1e-15))
-        assert not result.converged
-        assert np.all(np.isfinite(result.x))
 
     def test_config_zero_tol_does_not_crash(self):
         """tol=0.0 effectively demands machine precision; no crash required."""
@@ -218,7 +207,7 @@ class TestSolverConfigLimits:
         )
         y = np.array([1.0, 2.0, 3.0, 4.0, 5.0])
         try:
-            result = solve(cats, y, CG(tol=0.0))
+            result = solve(cats, y, LSMR(tol=0.0))
             assert np.all(np.isfinite(result.x))
         except Exception:
             pass  # raising is also acceptable
@@ -228,7 +217,7 @@ class TestSolverConfigLimits:
         cats = as_solver_categories([np.array([0, 1, 0]), np.array([0, 0, 1])])
         y = np.array([1.0, 2.0, 3.0])
         try:
-            result = solve(cats, y, CG(tol=float("nan")))
+            result = solve(cats, y, LSMR(tol=float("nan")))
             # If it ran, result should be finite or non-converged
             assert isinstance(result.converged, bool)
         except Exception:
@@ -336,7 +325,7 @@ class TestNonContiguousInputs:
 
 class TestNoPreconditioner:
     def test_preconditioner_off_converges_on_easy_problem(self):
-        """Unpreconditioned CG should still converge on a simple problem."""
+        """Unpreconditioned LSMR should still converge on a simple problem."""
         rng = np.random.default_rng(99)
         cats = as_solver_categories(
             [rng.integers(0, 10, size=200), rng.integers(0, 10, size=200)]
@@ -362,19 +351,3 @@ class TestNoPreconditioner:
         )
         solver = Solver(cats, preconditioner=Preconditioner.Off)
         assert solver.preconditioner() is None
-
-
-# ---------------------------------------------------------------------------
-# CG + Multiplicative preconditioner (invalid combination)
-# ---------------------------------------------------------------------------
-
-
-class TestInvalidCombinations:
-    def test_cg_with_multiplicative_preconditioner_raises(self):
-        """CG with multiplicative preconditioner is asymmetric and should raise."""
-        cats = as_solver_categories(
-            [np.array([0, 1, 0, 1, 2]), np.array([0, 0, 1, 1, 0])]
-        )
-        y = np.array([1.0, 2.0, 3.0, 4.0, 5.0])
-        with pytest.raises((ValueError, Exception)):
-            solve(cats, y, CG(), preconditioner=Preconditioner.Multiplicative)

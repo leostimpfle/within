@@ -36,9 +36,7 @@
 //! - `schur_complement` — Exact and approximate Schur complement computation
 //!   for block-elimination local solves
 //! - [`preconditioner`] — [`FePreconditioner`](preconditioner::FePreconditioner)
-//!   enum dispatch over additive and multiplicative Schwarz
-//! - `residual_update` — Residual update strategies for multiplicative Schwarz
-//!   (observation-space vs sparse Gramian)
+//!   wrapping the additive Schwarz variant
 //! - `csr_block` — Internal rectangular CSR block used in bipartite Gramian
 //!   structures
 
@@ -46,7 +44,6 @@ pub(crate) mod csr_block;
 pub mod gramian;
 pub(crate) mod local_solver;
 pub mod preconditioner;
-pub(crate) mod residual_update;
 pub(crate) mod schur_complement;
 pub mod schwarz;
 

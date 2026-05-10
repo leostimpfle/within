@@ -37,7 +37,7 @@ fn main() {
         *yi += 0.01 * ((i * 7 + 3) % 13) as f64 - 0.06;
     }
 
-    // Solve with default parameters (CG + additive Schwarz, implicit operator).
+    // Solve with default parameters (modified LSMR + additive Schwarz).
     let params = SolverParams::default();
     let precond =
         Preconditioner::Additive(LocalSolverConfig::solver_default(), ReductionStrategy::Auto);
