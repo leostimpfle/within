@@ -7,42 +7,42 @@ and this project follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
-### Removed (within crate)
-
-- **BREAKING: CG, GMRES, multiplicative Schwarz, and iterative refinement**.
-  Modified LSMR is now the sole iterative solver. The `KrylovMethod` and
-  `OperatorRepr` enums, the `Preconditioner::Multiplicative` variant, the
-  `FePreconditioner::Multiplicative` variant, the Python `CG`/`GMRES`/
-  `MultiplicativeSchwarz` classes, and the `max_refinements` field have all
-  been removed. `SolverParams` now has only `{ tol, maxiter, local_size }`.
+Modified LSMR is now the sole iterative solver, replacing CG and GMRES.
 
 ### Added
 
-- **LSMR rectangular least-squares solver**: a preconditioned LSMR variant
-  operating directly on the weighted design operator (`sqrt(W) D`),
-  dispatched inline from `Solver::solve`. Avoids explicit normal-equation
-  formation for improved numerical conditioning.
+- Preconditioned modified LSMR on `sqrt(W) D`, avoiding explicit
+  normal-equation formation.
+- `SolverParams.local_size: Option<usize>` — optional windowed modified
+  Gram-Schmidt reorthogonalization for ill-conditioned problems.
+- `LsmrStopReason` and `stop_reason` on the LSMR result.
+- `lsmr`/`mlsmr` reject non-finite input with `SolveError::InvalidInput`
+  (Python: `ValueError`); previously silent NaN propagation.
 
 ### Changed
 
-- **`schwarz_precond::SolveError` is now `#[non_exhaustive]`** and gained an
-  `InvalidInput { context, message }` variant for pre-iteration validation
-  failures. Downstream Rust consumers matching on `SolveError` must add a
-  wildcard arm. Future variant additions will not be breaking.
-- `SolveResult.iterations` and `BatchSolveResult.iterations` now report the
-  total iterations across the initial solve and any iterative-refinement
-  correction solves (previously: outer solve only).
+- **BREAKING:** `Preconditioner`, `FePreconditioner`, and
+  `schwarz_precond::SolveError` are now `#[non_exhaustive]`. External
+  `match` sites need a wildcard arm. `SolveError` gains an
+  `InvalidInput { context, message }` variant.
+- LSMR vector kernels parallelized via Rayon.
 
 ### Removed
 
-- **BREAKING:** `schwarz_precond::solve::{cg, gmres}` removed. Migrate to
-  the unpreconditioned `lsmr` and preconditioned `mlsmr` re-exported from
-  the crate root.
-- **BREAKING:** `schwarz_precond::schwarz::multiplicative` removed, along
-  with `MultiplicativeSchwarzPreconditioner`, `ResidualUpdater`, and
-  `OperatorResidualUpdater`. Use `SchwarzPreconditioner` (additive) instead.
-- **BREAKING:** `schwarz_precond::IdentityOperator` removed. It was kept
-  public only as test infrastructure for the now-removed CG path.
+- **BREAKING:** CG, GMRES, multiplicative Schwarz, iterative refinement,
+  and their support types (`KrylovMethod`, `OperatorRepr`,
+  `Preconditioner::Multiplicative`, `FePreconditioner::Multiplicative`,
+  `SolverParams.max_refinements`, Python `CG`/`GMRES`/
+  `MultiplicativeSchwarz`, `MultiplicativeSchwarzPreconditioner`,
+  `ResidualUpdater`, `OperatorResidualUpdater`, `IdentityOperator`).
+- **BREAKING:** `Gramian`, `GramianOperator`, `DesignOperator`,
+  `build_schwarz`, `FeSchwarz`, and `WithinError::Overflow` removed from
+  the `within` public surface. LSMR uses `WeightedDesignOperator` directly.
+- **BREAKING:** `schwarz_precond::solve::{cg, gmres}` and the `solve`
+  module removed; use crate-root `lsmr`/`mlsmr`.
+  `schwarz_precond::schwarz::{additive, multiplicative}` flattened into
+  `schwarz_precond::schwarz`; crate-root `SchwarzPreconditioner` re-export
+  unchanged.
 
 ## [0.1.0] - 2026-03-12
 
