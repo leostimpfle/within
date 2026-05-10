@@ -1,10 +1,7 @@
 use ndarray::Array2;
 use proptest::prelude::*;
 use within::observation::{ArrayStore, ObservationWeights};
-use within::{
-    solve, LocalSolverConfig, Preconditioner, ReductionStrategy, Solver, SolverParams,
-    WeightedDesign,
-};
+use within::{solve, Preconditioner, Solver, SolverParams, WeightedDesign};
 
 #[path = "common/orchestrate_helpers.rs"]
 mod common;
@@ -87,7 +84,7 @@ fn single_factor_strategy() -> impl Strategy<Value = (Array2<u32>, Vec<f64>)> {
 }
 
 fn additive_precond() -> Preconditioner {
-    Preconditioner::Additive(LocalSolverConfig::solver_default(), ReductionStrategy::Auto)
+    Preconditioner::default()
 }
 
 // ---------------------------------------------------------------------------

@@ -7,7 +7,7 @@ use ndarray::{Array2, ShapeBuilder};
 use rand::rngs::SmallRng;
 use rand::{Rng, SeedableRng};
 
-use within::config::{LocalSolverConfig, Preconditioner, ReductionStrategy, SolverParams};
+use within::config::{Preconditioner, SolverParams};
 use within::domain::WeightedDesign;
 use within::observation::{ArrayStore, FactorMajorStore, ObservationWeights};
 use within::Solver;
@@ -52,10 +52,7 @@ fn generate_problem(n_obs: usize, n_lev: &[usize], seed: u64) -> Problem {
         maxiter: MAXITER,
         ..Default::default()
     };
-    let preconditioner = Some(Preconditioner::Additive(
-        LocalSolverConfig::solver_default(),
-        ReductionStrategy::Auto,
-    ));
+    let preconditioner = Some(Preconditioner::default());
 
     let label = format!(
         "{}FE {} n={}",

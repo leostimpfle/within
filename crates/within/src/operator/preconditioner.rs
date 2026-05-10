@@ -1,11 +1,10 @@
-//! Preconditioner enum dispatch and fused build paths.
+//! Pre-built fixed-effects preconditioner for LSMR.
 //!
 //! [`FePreconditioner`] is the top-level preconditioner type used by the
-//! [`orchestrate`](crate::orchestrate) layer. It currently wraps a single
-//! Schwarz variant:
-//!
-//! - **Additive** ([`FeSchwarz`]) — symmetric. Subdomains contribute
-//!   independently and their corrections are summed.
+//! [`orchestrate`](crate::orchestrate) layer. It currently has a single
+//! variant for one-level additive Schwarz; the enum + `#[non_exhaustive]`
+//! shape leaves room for future variants (e.g. two-level Schwarz with a
+//! coarse space) without breaking existing call sites.
 //!
 //! # Integration with `schwarz-precond`
 //!
@@ -18,18 +17,19 @@ use schwarz_precond::{AdditiveSchwarzDiagnostics, LocalSolver, Operator, Reducti
 use serde::{Deserialize, Serialize};
 
 use crate::config::Preconditioner;
-use crate::domain::{Subdomain, WeightedDesign};
+use crate::domain::WeightedDesign;
 use crate::observation::ObservationStore;
-use crate::operator::gramian::CrossTab;
 use crate::operator::schwarz::{build_additive_with_strategy, FeSchwarz};
 use crate::WithinResult;
 
 /// A pre-built preconditioner ready for use in LSMR solves.
 ///
-/// Implements [`Operator`] via enum dispatch to the inner variant.
+/// Marked `#[non_exhaustive]`: future variants (e.g. two-level Schwarz)
+/// may be added without requiring a major version bump.
 #[derive(Clone, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum FePreconditioner {
-    /// Additive Schwarz.
+    /// One-level additive Schwarz over factor-pair subdomains.
     Additive(FeSchwarz),
 }
 
@@ -51,30 +51,26 @@ impl FePreconditioner {
                 .collect(),
         }
     }
-}
 
-/// Configured additive reduction strategy.
-pub fn additive_reduction_strategy(preconditioner: &FePreconditioner) -> ReductionStrategy {
-    match preconditioner {
-        FePreconditioner::Additive(p) => p.reduction_strategy(),
+    /// Configured additive reduction strategy, if this is an additive variant.
+    pub fn additive_reduction_strategy(&self) -> Option<ReductionStrategy> {
+        match self {
+            Self::Additive(p) => Some(p.reduction_strategy()),
+        }
     }
-}
 
-/// Concrete additive backend selected for the current Rayon thread-pool width.
-pub fn resolved_additive_reduction_strategy(
-    preconditioner: &FePreconditioner,
-) -> ReductionStrategy {
-    match preconditioner {
-        FePreconditioner::Additive(p) => p.resolved_reduction_strategy(),
+    /// Concrete additive backend resolved for the current Rayon thread-pool width.
+    pub fn resolved_additive_reduction_strategy(&self) -> Option<ReductionStrategy> {
+        match self {
+            Self::Additive(p) => Some(p.resolved_reduction_strategy()),
+        }
     }
-}
 
-/// Build-time additive Schwarz scheduling diagnostics.
-pub fn additive_schwarz_diagnostics(
-    preconditioner: &FePreconditioner,
-) -> AdditiveSchwarzDiagnostics {
-    match preconditioner {
-        FePreconditioner::Additive(p) => p.diagnostics(),
+    /// Build-time additive Schwarz scheduling diagnostics, if applicable.
+    pub fn additive_schwarz_diagnostics(&self) -> Option<AdditiveSchwarzDiagnostics> {
+        match self {
+            Self::Additive(p) => Some(p.diagnostics()),
+        }
     }
 }
 
@@ -120,27 +116,18 @@ impl Operator for FePreconditioner {
     }
 }
 
-/// Build a [`FePreconditioner`] from pre-built domains and configuration.
-fn build_from_domains(
-    domains: Vec<(Subdomain, CrossTab)>,
-    n_dofs: usize,
-    config: &Preconditioner,
-) -> WithinResult<FePreconditioner> {
-    match config {
-        Preconditioner::Additive(solver_config, strategy) => {
-            let p = build_additive_with_strategy(domains, n_dofs, solver_config, *strategy)?;
-            Ok(FePreconditioner::Additive(p))
-        }
-    }
-}
-
 /// Build a [`FePreconditioner`] from a design and configuration.
 pub fn build_preconditioner<S: ObservationStore>(
     design: &WeightedDesign<S>,
-    preconditioner_config: &Preconditioner,
+    config: &Preconditioner,
 ) -> WithinResult<FePreconditioner> {
     use crate::domain::build_local_domains;
 
-    let domains = build_local_domains(design);
-    build_from_domains(domains, design.n_dofs, preconditioner_config)
+    match config {
+        Preconditioner::Additive(local, reduction) => {
+            let domains = build_local_domains(design);
+            let p = build_additive_with_strategy(domains, design.n_dofs, local, *reduction)?;
+            Ok(FePreconditioner::Additive(p))
+        }
+    }
 }

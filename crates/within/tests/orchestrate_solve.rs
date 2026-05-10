@@ -64,8 +64,7 @@ fn test_lsmr_least_squares_weighted_preconditioned() {
         maxiter: 1000,
         ..Default::default()
     };
-    let precond =
-        Preconditioner::Additive(LocalSolverConfig::solver_default(), ReductionStrategy::Auto);
+    let precond = Preconditioner::default();
     let solver = Solver::from_design(design, &params, Some(&precond)).expect("build solver");
     let result = solver.solve(&y).expect("solve");
     common::assert_converged_with_small_residual(&result, 1e-6);
@@ -86,8 +85,7 @@ fn test_lsmr_weighted() {
         maxiter: 1000,
         ..Default::default()
     };
-    let precond =
-        Preconditioner::Additive(LocalSolverConfig::solver_default(), ReductionStrategy::Auto);
+    let precond = Preconditioner::default();
     let solver = Solver::from_design(design, &params, Some(&precond)).expect("build solver");
     let result = solver.solve(&y).expect("solve");
     common::assert_converged_with_small_residual(&result, 1e-6);

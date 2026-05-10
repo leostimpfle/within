@@ -5,7 +5,7 @@
 mod design_tests {
     use crate::domain::WeightedDesign;
     use crate::observation::{FactorMajorStore, ObservationWeights};
-    use crate::operator::DesignOperator;
+    use crate::operator::WeightedDesignOperator;
     use schwarz_precond::Operator;
 
     fn make_test_design() -> WeightedDesign<FactorMajorStore> {
@@ -21,7 +21,7 @@ mod design_tests {
     #[test]
     fn test_design_operator_dimensions() {
         let schema = make_test_design();
-        let op = DesignOperator::new(&schema);
+        let op = WeightedDesignOperator::new(&schema);
         assert_eq!(op.nrows(), 5);
         assert_eq!(op.ncols(), 7);
     }
@@ -29,7 +29,7 @@ mod design_tests {
     #[test]
     fn test_design_operator_adjoint() {
         let schema = make_test_design();
-        let op = DesignOperator::new(&schema);
+        let op = WeightedDesignOperator::new(&schema);
 
         let x = vec![1.0, -0.5, 2.0, 0.3, -1.0, 0.7, 1.5];
         let r = vec![0.1, 0.2, -0.3, 0.4, -0.5];
@@ -48,7 +48,7 @@ mod design_tests {
     #[test]
     fn test_matvec_d() {
         let schema = make_test_design();
-        let op = DesignOperator::new(&schema);
+        let op = WeightedDesignOperator::new(&schema);
         let x = vec![1.0, 2.0, 3.0, 10.0, 20.0, 30.0, 40.0];
         let mut y = vec![0.0; 5];
         op.apply(&x, &mut y);
@@ -58,7 +58,7 @@ mod design_tests {
     #[test]
     fn test_rmatvec_dt() {
         let schema = make_test_design();
-        let op = DesignOperator::new(&schema);
+        let op = WeightedDesignOperator::new(&schema);
         let r = vec![1.0, 2.0, 3.0, 4.0, 5.0];
         let mut x = vec![0.0; 7];
         op.apply_adjoint(&r, &mut x);
@@ -434,8 +434,7 @@ mod schwarz_tests {
     use crate::operator::gramian::CrossTab;
     use crate::operator::local_solver::BlockElimSolver;
     use crate::operator::schwarz::{
-        build_additive, build_additive_with_strategy, build_entry, build_reduced_schur_factor,
-        build_schwarz, ReducedSchurConfig,
+        build_additive_with_strategy, build_entry, build_reduced_schur_factor, ReducedSchurConfig,
     };
     use schwarz_precond::{LocalSolver, Operator, ReductionStrategy};
 
@@ -746,10 +745,11 @@ mod schwarz_tests {
     }
 
     #[test]
-    fn test_build_schwarz() {
+    fn test_build_additive_with_strategy() {
         let (design, domain_pairs) = make_test_data();
         let config = LocalSolverConfig::default();
-        let schwarz = build_additive(domain_pairs, design.n_dofs, &config)
+        let strategy = schwarz_precond::ReductionStrategy::default();
+        let schwarz = build_additive_with_strategy(domain_pairs, design.n_dofs, &config, strategy)
             .expect("build schwarz with explicit domains");
         assert!(!schwarz.subdomains().is_empty());
 
@@ -757,14 +757,6 @@ mod schwarz_tests {
         let mut z = vec![0.0; design.n_dofs];
         schwarz.apply(&r, &mut z);
         assert!(z.iter().all(|&v| v.is_finite()));
-    }
-
-    #[test]
-    fn test_build_default() {
-        let (design, _) = make_test_data();
-        let config = LocalSolverConfig::default();
-        let schwarz = build_schwarz(&design, &config).expect("build default schwarz");
-        assert!(!schwarz.subdomains().is_empty());
     }
 
     #[test]

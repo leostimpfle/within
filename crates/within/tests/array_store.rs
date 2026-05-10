@@ -1,8 +1,6 @@
 use ndarray::{array, Array2, ShapeBuilder};
 use within::observation::{ArrayStore, FactorMajorStore, ObservationStore, ObservationWeights};
-use within::{
-    solve, LocalSolverConfig, Preconditioner, ReductionStrategy, SolverParams, WeightedDesign,
-};
+use within::{solve, Preconditioner, SolverParams, WeightedDesign};
 
 #[path = "common/orchestrate_helpers.rs"]
 mod common;
@@ -12,7 +10,7 @@ fn default_params() -> SolverParams {
 }
 
 fn additive_precond() -> Preconditioner {
-    Preconditioner::Additive(LocalSolverConfig::solver_default(), ReductionStrategy::Auto)
+    Preconditioner::default()
 }
 
 /// Build a larger problem for more meaningful convergence tests.

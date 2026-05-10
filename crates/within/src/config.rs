@@ -134,10 +134,21 @@ impl Default for ApproxSchurConfig {
 // ---------------------------------------------------------------------------
 
 /// Schwarz preconditioner variant with embedded local solver configuration.
+///
+/// Marked `#[non_exhaustive]`: future variants (e.g. two-level Schwarz with a
+/// coarse space) may be added without requiring a major version bump.
+/// External `match` sites must include a wildcard arm.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub enum Preconditioner {
-    /// Additive Schwarz.
+    /// One-level additive Schwarz over factor-pair subdomains.
     Additive(LocalSolverConfig, ReductionStrategy),
+}
+
+impl Default for Preconditioner {
+    fn default() -> Self {
+        Self::Additive(LocalSolverConfig::solver_default(), ReductionStrategy::Auto)
+    }
 }
 
 // ---------------------------------------------------------------------------

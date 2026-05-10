@@ -1,8 +1,5 @@
 use ndarray::array;
-use within::{
-    solve, FePreconditioner, LocalSolverConfig, Preconditioner, ReductionStrategy, Solver,
-    SolverParams,
-};
+use within::{solve, FePreconditioner, Preconditioner, Solver, SolverParams};
 
 #[path = "common/orchestrate_helpers.rs"]
 mod common;
@@ -12,7 +9,7 @@ fn default_params() -> SolverParams {
 }
 
 fn additive_precond() -> Preconditioner {
-    Preconditioner::Additive(LocalSolverConfig::solver_default(), ReductionStrategy::Auto)
+    Preconditioner::default()
 }
 
 fn categories_and_y() -> (ndarray::Array2<u32>, Vec<f64>) {

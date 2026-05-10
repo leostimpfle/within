@@ -3,10 +3,7 @@ use std::error::Error;
 use ndarray::Array2;
 use schwarz_precond::{ApplyError, PreconditionerBuildError, SolveError};
 use within::observation::{FactorMajorStore, ObservationWeights};
-use within::{
-    solve, LocalSolverConfig, Preconditioner, ReductionStrategy, SolverParams, WeightedDesign,
-    WithinError,
-};
+use within::{solve, Preconditioner, SolverParams, WeightedDesign, WithinError};
 
 #[test]
 fn test_empty_observations_error() {
@@ -52,8 +49,7 @@ fn test_empty_categories_via_solve() {
     let cats = Array2::<u32>::zeros((0, 2));
     let y: Vec<f64> = vec![];
     let params = SolverParams::default();
-    let precond =
-        Preconditioner::Additive(LocalSolverConfig::solver_default(), ReductionStrategy::Auto);
+    let precond = Preconditioner::default();
     let result = solve(cats.view(), &y, None, &params, Some(&precond));
     assert!(result.is_err());
 }
@@ -90,12 +86,6 @@ fn test_within_error_display_weight_count_mismatch() {
     let s = e.to_string();
     assert!(s.contains("5"));
     assert!(s.contains("10"));
-}
-
-#[test]
-fn test_within_error_display_overflow() {
-    let e = WithinError::Overflow("test overflow".to_string());
-    assert!(e.to_string().contains("test overflow"));
 }
 
 #[test]
@@ -153,7 +143,6 @@ fn test_within_error_source_none_variants() {
             expected: 1,
             got: 2,
         },
-        WithinError::Overflow("x".to_string()),
         WithinError::SingularDiagonal {
             block: "b",
             index: 0,

@@ -265,7 +265,7 @@ proptest! {
 
 #[test]
 fn test_three_factor_design_solve_converges() {
-    use within::{solve, LocalSolverConfig, Preconditioner, SolverParams};
+    use within::{solve, Preconditioner, SolverParams};
 
     let n_obs = 60;
     let n_lev = 5usize;
@@ -300,10 +300,7 @@ fn test_three_factor_design_solve_converges() {
         maxiter: 500,
         ..SolverParams::default()
     };
-    let precond = Preconditioner::Additive(
-        LocalSolverConfig::solver_default(),
-        within::ReductionStrategy::Auto,
-    );
+    let precond = Preconditioner::default();
     let result =
         solve(cats.view(), &y, None, &params, Some(&precond)).expect("solve should not error");
 
@@ -327,7 +324,7 @@ fn test_three_factor_design_solve_converges() {
 /// 2 subdomains — correctness is validated indirectly through convergence.
 #[test]
 fn test_disconnected_design_larger_converges() {
-    use within::{solve, LocalSolverConfig, Preconditioner, SolverParams};
+    use within::{solve, Preconditioner, SolverParams};
 
     // Extend the disconnected example to more observations so the solve is
     // non-trivial: component A has factor-0 levels {0,1}, factor-1 levels {0,1,2};
@@ -359,10 +356,7 @@ fn test_disconnected_design_larger_converges() {
         maxiter: 500,
         ..SolverParams::default()
     };
-    let precond = Preconditioner::Additive(
-        LocalSolverConfig::solver_default(),
-        within::ReductionStrategy::Auto,
-    );
+    let precond = Preconditioner::default();
     let result =
         solve(cats.view(), &y, None, &params, Some(&precond)).expect("solve should not error");
 
@@ -375,7 +369,7 @@ fn test_disconnected_design_larger_converges() {
 
 #[test]
 fn test_disconnected_design_solve_converges() {
-    use within::{solve, LocalSolverConfig, Preconditioner, SolverParams};
+    use within::{solve, Preconditioner, SolverParams};
 
     let n_obs = 4;
     let mut cats = ndarray::Array2::<u32>::zeros((n_obs, 2));
@@ -395,10 +389,7 @@ fn test_disconnected_design_solve_converges() {
         maxiter: 500,
         ..SolverParams::default()
     };
-    let precond = Preconditioner::Additive(
-        LocalSolverConfig::solver_default(),
-        within::ReductionStrategy::Auto,
-    );
+    let precond = Preconditioner::default();
     let result =
         solve(cats.view(), &y, None, &params, Some(&precond)).expect("solve should not error");
 

@@ -5,7 +5,7 @@
 //! | Category | Variants | When it happens |
 //! |---|---|---|
 //! | **Validation** | [`WithinError::EmptyObservations`], [`ObservationCountMismatch`](WithinError::ObservationCountMismatch), [`WeightCountMismatch`](WithinError::WeightCountMismatch) | Bad input detected before any computation begins. |
-//! | **Build** | [`WithinError::Overflow`], [`SingularDiagonal`](WithinError::SingularDiagonal), [`LocalSolverBuild`](WithinError::LocalSolverBuild), [`PreconditionerBuild`](WithinError::PreconditionerBuild) | Construction of operators or preconditioners fails due to degenerate data (e.g., a factor with zero observations at some level, or numeric overflow during Gramian assembly). |
+//! | **Build** | [`SingularDiagonal`](WithinError::SingularDiagonal), [`LocalSolverBuild`](WithinError::LocalSolverBuild), [`PreconditionerBuild`](WithinError::PreconditionerBuild) | Construction of operators or preconditioners fails due to degenerate data (e.g., a factor with zero observations at some level). |
 //! | **Runtime** | [`WithinError::IterativeSolve`] | The iterative solver diverges or exceeds the iteration limit. Wraps [`schwarz_precond::SolveError`]. |
 //!
 //! All public APIs in this crate return [`WithinResult<T>`], which is
@@ -41,8 +41,6 @@ pub enum WithinError {
         /// Actual weight vector length.
         got: usize,
     },
-    /// Numeric overflow during assembly.
-    Overflow(String),
     /// A zero diagonal was encountered during block elimination.
     SingularDiagonal {
         /// Which block contained the zero diagonal ("keep" or "elim").
@@ -73,7 +71,6 @@ impl Display for WithinError {
             Self::WeightCountMismatch { expected, got } => {
                 write!(f, "weights has length {got}, expected {expected}")
             }
-            Self::Overflow(msg) => write!(f, "numeric overflow: {msg}"),
             Self::SingularDiagonal { block, index } => {
                 write!(f, "zero diagonal in {block} block at index {index}")
             }

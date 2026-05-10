@@ -2,16 +2,13 @@ use ndarray::array;
 use rand::rngs::SmallRng;
 use rand::{Rng, SeedableRng};
 use within::observation::{FactorMajorStore, ObservationWeights};
-use within::{
-    solve, LocalSolverConfig, Preconditioner, ReductionStrategy, Solver, SolverParams,
-    WeightedDesign,
-};
+use within::{solve, Preconditioner, Solver, SolverParams, WeightedDesign};
 
 #[path = "common/orchestrate_helpers.rs"]
 mod common;
 
 fn additive_precond() -> Preconditioner {
-    Preconditioner::Additive(LocalSolverConfig::solver_default(), ReductionStrategy::Auto)
+    Preconditioner::default()
 }
 
 // ---------------------------------------------------------------------------

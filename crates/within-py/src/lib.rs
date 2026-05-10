@@ -45,11 +45,6 @@ use within::config::{
 };
 use within::domain::WeightedDesign;
 use within::observation::{FactorMajorStore, ObservationWeights};
-use within::operator::preconditioner::{
-    additive_reduction_strategy as get_additive_reduction_strategy,
-    additive_schwarz_diagnostics as get_additive_schwarz_diagnostics,
-    resolved_additive_reduction_strategy as get_resolved_additive_reduction_strategy,
-};
 use within::{
     solve as solve_native, solve_batch as solve_batch_native, FePreconditioner, Operator,
     SolveResult, Solver,
@@ -191,21 +186,21 @@ pub struct PyAdditiveSchwarzDiagnostics {
 }
 
 impl PyAdditiveSchwarzDiagnostics {
-    fn from_native(preconditioner: &FePreconditioner) -> Self {
-        let diagnostics = get_additive_schwarz_diagnostics(preconditioner);
-        Self {
-            reduction_strategy: PyReductionStrategy::from_native(get_additive_reduction_strategy(
-                preconditioner,
-            )),
+    fn from_native(preconditioner: &FePreconditioner) -> Option<Self> {
+        let diagnostics = preconditioner.additive_schwarz_diagnostics()?;
+        Some(Self {
+            reduction_strategy: PyReductionStrategy::from_native(
+                preconditioner.additive_reduction_strategy()?,
+            ),
             resolved_reduction_strategy: PyReductionStrategy::from_native(
-                get_resolved_additive_reduction_strategy(preconditioner),
+                preconditioner.resolved_additive_reduction_strategy()?,
             ),
             total_inner_parallel_work: diagnostics.total_inner_parallel_work(),
             max_inner_parallel_work: diagnostics.max_inner_parallel_work(),
             total_scatter_dofs: diagnostics.total_scatter_dofs(),
             outer_parallel_capacity: diagnostics.outer_parallel_capacity(),
             scatter_overlap: diagnostics.scatter_overlap(),
-        }
+        })
     }
 }
 
@@ -442,10 +437,7 @@ fn extract_preconditioner_config(
 ) -> PyResult<Option<Preconditioner>> {
     let obj = match preconditioner {
         None => {
-            return Ok(Some(Preconditioner::Additive(
-                LocalSolverConfig::solver_default(),
-                ReductionStrategy::Auto,
-            )));
+            return Ok(Some(Preconditioner::default()));
         }
         Some(obj) => obj,
     };
@@ -454,23 +446,20 @@ fn extract_preconditioner_config(
     if let Ok(p) = obj.extract::<PyPreconditioner>() {
         return match p {
             PyPreconditioner::Off => Ok(None),
-            PyPreconditioner::Additive => Ok(Some(Preconditioner::Additive(
-                LocalSolverConfig::solver_default(),
-                ReductionStrategy::Auto,
-            ))),
+            PyPreconditioner::Additive => Ok(Some(Preconditioner::default())),
         };
     }
 
     // Advanced: AdditiveSchwarz object
     if let Ok(schwarz) = obj.downcast::<PyAdditiveSchwarz>() {
         let s = schwarz.get();
-        let cfg = extract_local_solver_or_default(
+        let local = extract_local_solver_or_default(
             py,
             &s.local_solver,
             LocalSolverConfig::solver_default(),
         )?;
-        let strategy = s.reduction.to_native();
-        return Ok(Some(Preconditioner::Additive(cfg, strategy)));
+        let reduction = s.reduction.to_native();
+        return Ok(Some(Preconditioner::Additive(local, reduction)));
     }
 
     Err(PyErr::new::<pyo3::exceptions::PyTypeError, _>(
@@ -714,15 +703,12 @@ impl PyFePreconditioner {
     }
 
     /// Additive Schwarz diagnostics.
-    fn additive_schwarz_diagnostics(&self) -> PyAdditiveSchwarzDiagnostics {
+    fn additive_schwarz_diagnostics(&self) -> Option<PyAdditiveSchwarzDiagnostics> {
         PyAdditiveSchwarzDiagnostics::from_native(&self.inner)
     }
 
     fn __repr__(&self) -> String {
-        let variant = match &self.inner {
-            FePreconditioner::Additive(_) => "Additive",
-        };
-        format!("FePreconditioner({}, n={})", variant, self.inner.nrows())
+        format!("FePreconditioner(Additive, n={})", self.inner.nrows())
     }
 
     /// Pickle support: serialize to ``(bytes,)`` constructor arg.

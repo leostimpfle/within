@@ -16,7 +16,7 @@ cargo add within
 
 ```rust
 use ndarray::Array2;
-use within::{solve, SolverParams, Preconditioner, LocalSolverConfig, ReductionStrategy};
+use within::{solve, SolverParams, Preconditioner};
 
 // Two factors: 100 levels each, 10 000 observations
 let n_obs = 10_000usize;
@@ -35,7 +35,7 @@ println!("LSMR converged in {} iterations", result.iterations);
 
 // Tighter tolerance with explicit preconditioner config
 let params = SolverParams { tol: 1e-10, ..SolverParams::default() };
-let precond = Preconditioner::Additive(LocalSolverConfig::default(), ReductionStrategy::Auto);
+let precond = Preconditioner::default();
 let result = solve(categories.view(), &y, None, &params, Some(&precond))
     .expect("solve should succeed");
 assert!(result.converged);

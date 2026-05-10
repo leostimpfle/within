@@ -147,8 +147,9 @@
 //!   and the [`ObservationStore`] trait.
 //! - **`domain`** — Domain decomposition: [`WeightedDesign`] wraps a store with factor
 //!   metadata; factor-pair subdomains are built with partition-of-unity weights.
-//! - **`operator`** — Linear algebra primitives: [`DesignOperator`] (D and D^T),
-//!   per-pair `CrossTab` blocks, and Schwarz preconditioner builders.
+//! - **`operator`** — Linear algebra primitives: `WeightedDesignOperator`
+//!   (rectangular `sqrt(W) D` for LSMR), per-pair `CrossTab` blocks, and
+//!   Schwarz preconditioner builders.
 //! - **`orchestrate`** — End-to-end solve: [`solve`] with typed configuration.
 //!
 //! # References
@@ -198,6 +199,4 @@ pub use observation::{
 // Operators & builders
 // ---------------------------------------------------------------------------
 
-pub use operator::schwarz::{build_schwarz, FeSchwarz};
-pub use operator::DesignOperator;
 pub use schwarz_precond::Operator;

@@ -15,15 +15,12 @@
 //! # Usage
 //!
 //! ```no_run
-//! use within::{Solver, SolverParams, Preconditioner, LocalSolverConfig};
+//! use within::{Solver, SolverParams, Preconditioner};
 //! use ndarray::Array2;
 //!
 //! let categories = Array2::<u32>::zeros((1000, 2));
 //! let params = SolverParams::default();
-//! let precond = Preconditioner::Additive(
-//!     LocalSolverConfig::solver_default(),
-//!     Default::default(),
-//! );
+//! let precond = Preconditioner::default();
 //!
 //! // Build once — expensive
 //! let solver = Solver::new(categories.view(), None, &params, Some(&precond)).unwrap();

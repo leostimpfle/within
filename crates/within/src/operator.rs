@@ -8,12 +8,11 @@
 //! # Operators
 //!
 //! LSMR works directly on `sqrt(W) D` rather than the assembled Gramian
-//! `G = D^T W D`. The matvec primitives are:
+//! `G = D^T W D`. The matvec primitive is:
 //!
 //! | Operator | Type | Description |
 //! |---|---|---|
-//! | **D** (design) | [`DesignOperator`] | Rectangular, implements `D x` and `D^T x` via gather/scatter on the observation store |
-//! | **sqrt(W) D** | [`WeightedDesignOperator`] | Weighted variant used by LSMR — applies the factorized weights on each matvec |
+//! | **sqrt(W) D** | [`WeightedDesignOperator`] | Rectangular operator used by LSMR. Implements `sqrt(W) D x` and `D^T sqrt(W) x` via gather/scatter on the observation store |
 //!
 //! # Submodules
 //!
@@ -35,58 +34,21 @@ pub(crate) mod gramian;
 pub(crate) mod local_solver;
 pub mod preconditioner;
 pub(crate) mod schur_complement;
-pub mod schwarz;
+pub(crate) mod schwarz;
 
 #[cfg(test)]
 mod tests;
-
-// ---------------------------------------------------------------------------
-// DesignOperator — rectangular, D·x / D^T·x (no weights)
-// ---------------------------------------------------------------------------
-
-use schwarz_precond::Operator;
-
-use crate::domain::WeightedDesign;
-use crate::observation::ObservationStore;
-
-/// Operator wrapper around `&WeightedDesign<S>`.
-///
-/// `apply` = D·x (gather-add), `apply_adjoint` = D^T·x (scatter-add).
-/// This is the raw design matrix — no observation weights.
-pub struct DesignOperator<'a, S: ObservationStore> {
-    design: &'a WeightedDesign<S>,
-}
-
-impl<'a, S: ObservationStore> DesignOperator<'a, S> {
-    /// Wrap a weighted design matrix as a linear operator.
-    pub fn new(design: &'a WeightedDesign<S>) -> Self {
-        Self { design }
-    }
-}
-
-impl<S: ObservationStore> Operator for DesignOperator<'_, S> {
-    fn nrows(&self) -> usize {
-        self.design.n_rows
-    }
-
-    fn ncols(&self) -> usize {
-        self.design.n_dofs
-    }
-
-    fn apply(&self, x: &[f64], y: &mut [f64]) {
-        self.design.matvec_d(x, y);
-    }
-
-    fn apply_adjoint(&self, x: &[f64], y: &mut [f64]) {
-        self.design.rmatvec_dt(x, y);
-    }
-}
 
 // ---------------------------------------------------------------------------
 // WeightedDesignOperator — rectangular, W^{1/2}·D·x / D^T·W^{1/2}·x
 // ---------------------------------------------------------------------------
 
 use std::sync::Mutex;
+
+use schwarz_precond::Operator;
+
+use crate::domain::WeightedDesign;
+use crate::observation::ObservationStore;
 
 /// Weighted rectangular design operator: `A = W^{1/2} D`.
 ///

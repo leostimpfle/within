@@ -2,10 +2,7 @@ use ndarray::Array2;
 use proptest::prelude::*;
 use schwarz_precond::Operator;
 use within::observation::{ArrayStore, ObservationWeights};
-use within::{
-    solve, FePreconditioner, LocalSolverConfig, Preconditioner, ReductionStrategy, SolverParams,
-    WeightedDesign,
-};
+use within::{solve, FePreconditioner, Preconditioner, SolverParams, WeightedDesign};
 
 /// Generate a random fixed-effects problem as (categories Array2<u32>, y Vec<f64>).
 fn random_fe_problem_strategy() -> impl Strategy<Value = (Array2<u32>, Vec<f64>)> {
@@ -42,7 +39,7 @@ fn default_params() -> SolverParams {
 }
 
 fn additive_precond() -> Preconditioner {
-    Preconditioner::Additive(LocalSolverConfig::solver_default(), ReductionStrategy::Auto)
+    Preconditioner::default()
 }
 
 proptest! {
