@@ -8,8 +8,8 @@ use std::time::{Duration, Instant};
 use rayon::prelude::*;
 use schwarz_precond::domain::PartitionWeights;
 use schwarz_precond::{
-    lsmr, mlsmr, LocalSolveError, LocalSolveInvoker, LocalSolver, Operator, ReductionStrategy,
-    SchwarzPreconditioner, SubdomainCore, SubdomainEntry,
+    lsmr, mlsmr, LocalSolveError, LocalSolver, Operator, ReductionStrategy, SchwarzPreconditioner,
+    SubdomainCore, SubdomainEntry,
 };
 
 use common::{make_schwarz_entries, FailingLocalSolver, TridiagOperator, UniformDiagLocalSolver};
@@ -75,40 +75,29 @@ impl LocalSolver for NestedRayonIdentitySolver {
         self.n
     }
 
-    fn solve_local(&self, rhs: &mut [f64], sol: &mut [f64]) -> Result<(), LocalSolveError> {
-        sol[..self.n].copy_from_slice(&rhs[..self.n]);
-        Ok(())
-    }
-
-    fn inner_parallelism_work_estimate(&self) -> usize {
-        self.n.saturating_mul(32)
-    }
-}
-
-#[derive(Clone, Copy, Default)]
-struct NestedRayonSolveInvoker;
-
-impl LocalSolveInvoker<NestedRayonIdentitySolver> for NestedRayonSolveInvoker {
     fn solve_local(
         &self,
-        solver: &NestedRayonIdentitySolver,
         rhs: &mut [f64],
         sol: &mut [f64],
         allow_inner_parallelism: bool,
     ) -> Result<(), LocalSolveError> {
         if allow_inner_parallelism {
-            sol[..solver.n]
-                .par_chunks_mut(NestedRayonIdentitySolver::CHUNK_SIZE)
+            sol[..self.n]
+                .par_chunks_mut(Self::CHUNK_SIZE)
                 .enumerate()
                 .for_each(|(chunk_idx, chunk)| {
-                    let start = chunk_idx * NestedRayonIdentitySolver::CHUNK_SIZE;
+                    let start = chunk_idx * Self::CHUNK_SIZE;
                     let end = start + chunk.len();
                     chunk.copy_from_slice(&rhs[start..end]);
                 });
         } else {
-            sol[..solver.n].copy_from_slice(&rhs[..solver.n]);
+            sol[..self.n].copy_from_slice(&rhs[..self.n]);
         }
         Ok(())
+    }
+
+    fn inner_parallelism_work_estimate(&self) -> usize {
+        self.n.saturating_mul(32)
     }
 }
 
@@ -133,11 +122,10 @@ fn run_nested_parallel_reduction_regression_case() {
         .build()
         .expect("test rayon pool");
     pool.install(|| {
-        let schwarz = SchwarzPreconditioner::with_strategy_and_invoker(
+        let schwarz = SchwarzPreconditioner::with_strategy(
             make_nested_parallel_entries(n),
             n,
             ReductionStrategy::ParallelReduction,
-            NestedRayonSolveInvoker,
         )
         .expect("valid nested parallel additive preconditioner");
 

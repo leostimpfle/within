@@ -43,7 +43,7 @@
 //! ```text
 //! schwarz-precond
 //! ├── domain          SubdomainCore, PartitionWeights
-//! ├── local_solve     LocalSolver trait, LocalSolveInvoker, SubdomainEntry
+//! ├── local_solve     LocalSolver trait, SubdomainEntry
 //! ├── schwarz         Additive Schwarz preconditioner (parallel local solves)
 //! ├── lsmr            Modified LSMR for rectangular least-squares
 //! ├── sparse_matrix   SparseMatrix (internal CSR representation)
@@ -52,7 +52,7 @@
 //!
 //! # Trait relationships
 //!
-//! The crate is built around three core traits that compose to form the
+//! The crate is built around two core traits that compose to form the
 //! preconditioner:
 //!
 //! - **[`Operator`]** — A linear map `R^n -> R^n` with `apply` and
@@ -64,12 +64,10 @@
 //!   right-hand side, produce the local solution. Implementations range
 //!   from exact Cholesky to approximate incomplete factorizations.
 //!   The solver declares its DOF count and scratch buffer requirements,
-//!   which are validated at construction time.
-//!
-//! - **[`LocalSolveInvoker`]** — An execution-policy adapter that wraps
-//!   a `LocalSolver` call. The default ([`DefaultLocalSolveInvoker`])
-//!   delegates directly; specialized invokers can add instrumentation or
-//!   nested-parallelism control without polluting the solver trait itself.
+//!   which are validated at construction time. The `solve_local` method
+//!   receives an `allow_inner_parallelism` hint so implementations with
+//!   worthwhile nested-parallel regions can opt in without a separate
+//!   policy trait.
 //!
 //! These compose inside [`SubdomainEntry`], which bundles a
 //! [`SubdomainCore`] (restriction indices + partition-of-unity weights)
@@ -138,7 +136,7 @@ pub use error::{
     ApplyError, LocalSolveError, PreconditionerBuildError, SolveError, SubdomainCoreBuildError,
     SubdomainEntryBuildError,
 };
-pub use local_solve::{DefaultLocalSolveInvoker, LocalSolveInvoker, LocalSolver, SubdomainEntry};
+pub use local_solve::{LocalSolver, SubdomainEntry};
 pub use lsmr::{lsmr, mlsmr, LsmrResult, LsmrStopReason};
 pub use schwarz::{AdditiveSchwarzDiagnostics, ReductionStrategy, SchwarzPreconditioner};
 pub use sparse_matrix::SparseMatrix;

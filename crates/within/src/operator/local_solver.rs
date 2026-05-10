@@ -46,29 +46,10 @@ use std::sync::Arc;
 use approx_chol::Factor;
 use faer::{MatRef, Side};
 use rayon::prelude::*;
-use schwarz_precond::{LocalSolveError, LocalSolveInvoker, LocalSolver};
+use schwarz_precond::{LocalSolveError, LocalSolver};
 
 use crate::operator::csr_block::{CsrBlock, PAR_SPMV_THRESHOLD};
 use crate::operator::gramian::CrossTab;
-
-// ===========================================================================
-// FeLocalSolveInvoker — delegates to BlockElimSolver with parallelism control
-// ===========================================================================
-
-#[derive(Debug, Clone, Copy, Default)]
-pub(crate) struct FeLocalSolveInvoker;
-
-impl LocalSolveInvoker<BlockElimSolver> for FeLocalSolveInvoker {
-    fn solve_local(
-        &self,
-        solver: &BlockElimSolver,
-        rhs: &mut [f64],
-        sol: &mut [f64],
-        allow_inner_parallelism: bool,
-    ) -> Result<(), LocalSolveError> {
-        solver.solve_local_with_parallelism(rhs, sol, allow_inner_parallelism)
-    }
-}
 
 // ===========================================================================
 // Transform helpers — sign-flipping, mean subtraction, back-substitution
@@ -356,8 +337,20 @@ impl BlockElimSolver {
     }
 }
 
-impl BlockElimSolver {
-    fn solve_local_with_parallelism(
+impl LocalSolver for BlockElimSolver {
+    fn n_local(&self) -> usize {
+        self.n_local
+    }
+
+    fn scratch_size(&self) -> usize {
+        self.n_local + self.n_reduced
+    }
+
+    fn inner_parallelism_work_estimate(&self) -> usize {
+        self.estimated_inner_parallel_work()
+    }
+
+    fn solve_local(
         &self,
         rhs: &mut [f64],
         sol: &mut [f64],
@@ -446,24 +439,6 @@ impl BlockElimSolver {
         subtract_mean(sol, n);
         negate_block(&mut sol[..n], n_q);
         Ok(())
-    }
-}
-
-impl LocalSolver for BlockElimSolver {
-    fn n_local(&self) -> usize {
-        self.n_local
-    }
-
-    fn scratch_size(&self) -> usize {
-        self.n_local + self.n_reduced
-    }
-
-    fn solve_local(&self, rhs: &mut [f64], sol: &mut [f64]) -> Result<(), LocalSolveError> {
-        self.solve_local_with_parallelism(rhs, sol, true)
-    }
-
-    fn inner_parallelism_work_estimate(&self) -> usize {
-        self.estimated_inner_parallel_work()
     }
 }
 

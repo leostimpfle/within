@@ -25,6 +25,12 @@ Modified LSMR is now the sole iterative solver, replacing CG and GMRES.
   `schwarz_precond::SolveError` are now `#[non_exhaustive]`. External
   `match` sites need a wildcard arm. `SolveError` gains an
   `InvalidInput { context, message }` variant.
+- **BREAKING:** `LocalSolver::solve_local` now takes an
+  `allow_inner_parallelism: bool` policy hint. Implementations with no
+  nested-parallel region can ignore it (`_allow_inner_parallelism`).
+  `SchwarzPreconditioner` no longer carries the `I: LocalSolveInvoker`
+  type parameter; the `LocalSolveInvoker` trait, `DefaultLocalSolveInvoker`,
+  and `with_strategy_and_invoker` constructor are removed.
 - LSMR vector kernels parallelized via Rayon.
 
 ### Removed
