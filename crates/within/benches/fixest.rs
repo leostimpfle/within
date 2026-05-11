@@ -11,7 +11,7 @@ use within::config::{
     ApproxCholConfig, LocalSolverConfig, Preconditioner, ReductionStrategy, SolverParams,
 };
 use within::domain::WeightedDesign;
-use within::observation::{FactorMajorStore, ObservationWeights};
+use within::observation::FactorMajorStore;
 use within::operator::WeightedDesignOperator;
 use within::Solver;
 
@@ -76,8 +76,7 @@ fn generate_fixest_like_case(
         vec![indiv_id, year, firm_id]
     };
 
-    let store = FactorMajorStore::new(factor_levels, ObservationWeights::Unit, case.n_obs)
-        .expect("valid factor-major store");
+    let store = FactorMajorStore::new(factor_levels, case.n_obs).expect("valid factor-major store");
     let design = WeightedDesign::from_store(store).expect("valid design");
 
     let mut x_true = vec![0.0; design.n_dofs];
@@ -140,7 +139,7 @@ fn run_lsmr_one_level(design: &WeightedDesign<FactorMajorStore>, y: &[f64], ac2:
     let cfg = one_level_local_solver(ac2);
     let precond = Preconditioner::Additive(cfg, ReductionStrategy::Auto);
     let solver =
-        Solver::from_design(design.clone(), &params, Some(&precond)).expect("solver build");
+        Solver::from_design(design.clone(), None, &params, Some(&precond)).expect("solver build");
     let _ = solver.solve(y).expect("solve");
 }
 
@@ -281,7 +280,7 @@ fn bench_matvec(c: &mut Criterion) {
         let (design, _y) = generate_fixest_like_case(case, 42);
         let n_dofs = design.n_dofs;
         let n_obs = design.n_rows;
-        let op = WeightedDesignOperator::new(&design);
+        let op = WeightedDesignOperator::new(&design, None);
         let x: Vec<f64> = (0..n_dofs).map(|i| (i as f64).sin()).collect();
         let mut y = vec![0.0; n_obs];
         group.bench_function(BenchmarkId::new("apply", &label), |b| {

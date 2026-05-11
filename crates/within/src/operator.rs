@@ -66,17 +66,12 @@ pub struct WeightedDesignOperator<'a, S: ObservationStore> {
 }
 
 impl<'a, S: ObservationStore> WeightedDesignOperator<'a, S> {
-    /// Create from a weighted design matrix.
-    pub fn new(design: &'a WeightedDesign<S>) -> Self {
-        let sqrt_weights = if design.store.is_unweighted() {
-            None
-        } else {
-            Some(
-                (0..design.n_rows)
-                    .map(|i| design.uid_weight(i).sqrt())
-                    .collect(),
-            )
-        };
+    /// Create from a weighted design matrix and optional observation weights.
+    ///
+    /// `weights = None` selects the unweighted fast-path: `sqrt_weights` is
+    /// `None` and `apply` / `apply_adjoint` skip the per-row scaling entirely.
+    pub fn new(design: &'a WeightedDesign<S>, weights: Option<&[f64]>) -> Self {
+        let sqrt_weights = weights.map(|w| w.iter().map(|wi| wi.sqrt()).collect::<Vec<f64>>());
         Self {
             scratch: Mutex::new(vec![0.0; design.n_rows]),
             design,

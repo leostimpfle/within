@@ -4,9 +4,11 @@
 //! the linear-algebra operators ([`crate::operator`]).  It answers two questions:
 //!
 //! 1. **What does the design matrix look like?** — [`WeightedDesign`] wraps an
-//!    [`ObservationStore`] with per-factor metadata ([`FactorMeta`]) and optional
-//!    observation weights, then provides the core matrix-vector products
-//!    (`D·x`, `D^T·r`, `D^T·W·r`) needed by every solver path.
+//!    [`ObservationStore`] with per-factor metadata ([`FactorMeta`]) and
+//!    provides the core matrix-vector products (`D·x`, `D^T·r`, `D^T·W·r`)
+//!    needed by every solver path. Observation weights are passed in as
+//!    `Option<&[f64]>` rather than owned, keeping the design itself purely
+//!    structural.
 //!
 //! 2. **How is the problem decomposed into subdomains?** — The `factor_pairs`
 //!    submodule builds one [`Subdomain`] per connected component of each factor
@@ -75,11 +77,10 @@ impl std::fmt::Debug for Subdomain {
 // Weighted design matrix
 // ===========================================================================
 
-// Weighted design matrix: `WeightedDesign<S>` generic over `ObservationStore`.
-//
-// Stores per-factor metadata via `FactorMeta` and delegates observation
-// data access to the pluggable store backend `S`. Provides design matrix
-// operations (D·x, D^T·r, D^T·W·r, gramian diagonal) as methods.
+// `WeightedDesign<S>` is generic over `ObservationStore`. It stores per-factor
+// metadata via `FactorMeta` and delegates observation data access to the
+// pluggable store backend `S`. Observation weights are not owned here — they
+// are passed in as `Option<&[f64]>` to the weight-sensitive matvec methods.
 use std::sync::atomic::Ordering;
 
 use portable_atomic::AtomicF64;
@@ -90,10 +91,12 @@ use crate::{WithinError, WithinResult};
 
 /// Weighted fixed-effects design matrix, generic over observation storage.
 ///
-/// `store` holds per-observation data (levels, weights); `factors` holds
-/// per-factor metadata (n_levels, offset).
+/// `store` holds per-observation factor levels; `factors` holds per-factor
+/// metadata (n_levels, offset). Observation weights are **not** stored — they
+/// are passed in to methods that need them via `Option<&[f64]>` (where `None`
+/// denotes unit weights).
 pub struct WeightedDesign<S: ObservationStore> {
-    /// Observation storage backend (owns or borrows the raw data).
+    /// Observation storage backend (owns or borrows the raw factor levels).
     pub store: S,
     /// Per-factor metadata: level count and global DOF offset.
     pub factors: Vec<FactorMeta>,
@@ -152,13 +155,14 @@ impl<S: ObservationStore> WeightedDesign<S> {
         })
     }
 
-    /// Weight for an observation, respecting the store's weighting mode.
+    /// Weight for observation `uid` given an optional weight slice.
+    ///
+    /// `None` ⇒ 1.0 (unit weights); `Some(w)` ⇒ `w[uid]`.
     #[inline]
-    pub fn uid_weight(&self, uid: usize) -> f64 {
-        if self.store.is_unweighted() {
-            1.0
-        } else {
-            self.store.weight(uid)
+    pub fn uid_weight(weights: Option<&[f64]>, uid: usize) -> f64 {
+        match weights {
+            None => 1.0,
+            Some(w) => w[uid],
         }
     }
 
@@ -182,7 +186,7 @@ impl<S: ObservationStore> WeightedDesign<S> {
 }
 
 // ---------------------------------------------------------------------------
-// Design matrix operations (D·x, D^T·r, D^T·W·r, gramian diagonal)
+// Design matrix operations (D·x, D^T·r, D^T·W·r)
 // ---------------------------------------------------------------------------
 
 /// Minimum number of rows before scatter/gather loops are parallelized.
@@ -402,30 +406,18 @@ impl<S: ObservationStore> WeightedDesign<S> {
 
     /// x = D^T·W·r  (weighted scatter-add)
     ///
-    /// For unweighted stores, this is identical to `rmatvec_dt`.
-    /// The branch is outside the inner loop.
-    pub fn rmatvec_wdt(&self, r: &[f64], x: &mut [f64]) {
+    /// `weights = None` falls through to [`Self::rmatvec_dt`]. Otherwise the
+    /// per-row factor `w[i] * r[i]` is applied inside the scatter loop. The
+    /// branch lives outside the inner loop.
+    pub fn rmatvec_wdt(&self, weights: Option<&[f64]>, r: &[f64], x: &mut [f64]) {
         debug_assert_eq!(r.len(), self.n_rows);
         debug_assert_eq!(x.len(), self.n_dofs);
-        if self.store.is_unweighted() {
+        let Some(w) = weights else {
             return self.rmatvec_dt(r, x);
-        }
+        };
+        debug_assert_eq!(w.len(), self.n_rows);
         x.fill(0.0);
-        self.scatter_add(x, |i| self.store.weight(i) * r[i]);
-    }
-
-    /// Diagonal of D^T·W·D (weighted level counts).
-    ///
-    /// Entry `offset_q + j` = sum of weights for observations with level `j` in factor `q`.
-    pub fn gramian_diagonal(&self) -> Vec<f64> {
-        let mut diag = vec![0.0f64; self.n_dofs];
-        let n_obs = self.store.n_obs();
-        for (q, f) in self.factors.iter().enumerate() {
-            for uid in 0..n_obs {
-                diag[f.offset + self.store.level(uid, q) as usize] += self.uid_weight(uid);
-            }
-        }
-        diag
+        self.scatter_add(x, |i| w[i] * r[i]);
     }
 }
 
@@ -436,19 +428,18 @@ impl<S: ObservationStore> WeightedDesign<S> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::observation::{FactorMajorStore, ObservationWeights};
+    use crate::observation::FactorMajorStore;
 
     fn make_test_design() -> WeightedDesign<FactorMajorStore> {
         let categories = vec![vec![0, 1, 2, 0, 1], vec![0, 1, 2, 3, 0]];
-        let store = FactorMajorStore::new(categories, ObservationWeights::Unit, 5)
-            .expect("valid factor-major store");
+        let store = FactorMajorStore::new(categories, 5).expect("valid factor-major store");
         WeightedDesign::from_store(store).expect("valid test design")
     }
 
-    fn make_weighted_design(weights: Vec<f64>) -> WeightedDesign<FactorMajorStore> {
+    fn make_test_design_2x2() -> WeightedDesign<FactorMajorStore> {
         let categories = vec![vec![0, 1, 0, 1], vec![0, 0, 1, 1]];
-        let store = FactorMajorStore::new(categories, ObservationWeights::Dense(weights), 4)
-            .expect("valid weighted factor-major store");
+        let store =
+            FactorMajorStore::new(categories, 4).expect("valid weighted factor-major store");
         WeightedDesign::from_store(store).expect("valid weighted design")
     }
 
@@ -474,7 +465,6 @@ mod tests {
         let dm = make_test_design();
         assert_eq!(dm.factors[0].n_levels, 3);
         assert_eq!(dm.factors[1].n_levels, 4);
-        // Categories are in the store, not in FactorMeta
         assert_eq!(dm.store.level(0, 0), 0);
         assert_eq!(dm.store.level(1, 0), 1);
         assert_eq!(dm.store.level(2, 0), 2);
@@ -510,36 +500,19 @@ mod tests {
         let mut x_dt = vec![0.0; 7];
         let mut x_wdt = vec![0.0; 7];
         dm.rmatvec_dt(&r, &mut x_dt);
-        dm.rmatvec_wdt(&r, &mut x_wdt);
+        dm.rmatvec_wdt(None, &r, &mut x_wdt);
         assert_eq!(x_dt, x_wdt);
     }
 
     #[test]
     fn test_rmatvec_wdt_weighted() {
-        let dm = make_weighted_design(vec![1.0, 2.0, 3.0, 4.0]);
+        let dm = make_test_design_2x2();
+        let weights = [1.0, 2.0, 3.0, 4.0];
         let r = vec![1.0, 1.0, 1.0, 1.0];
         let mut x = vec![0.0; 4];
-        dm.rmatvec_wdt(&r, &mut x);
+        dm.rmatvec_wdt(Some(&weights), &r, &mut x);
         // factor 0: level 0 has obs 0(w=1)+2(w=3)=4, level 1 has obs 1(w=2)+3(w=4)=6
         // factor 1: level 0 has obs 0(w=1)+1(w=2)=3, level 1 has obs 2(w=3)+3(w=4)=7
         assert_eq!(x, vec![4.0, 6.0, 3.0, 7.0]);
-    }
-
-    #[test]
-    fn test_gramian_diagonal_unweighted() {
-        let dm = make_test_design();
-        let diag = dm.gramian_diagonal();
-        // factor 0: levels [0,1,2,0,1] -> counts [2,2,1]
-        // factor 1: levels [0,1,2,3,0] -> counts [2,1,1,1]
-        assert_eq!(diag, vec![2.0, 2.0, 1.0, 2.0, 1.0, 1.0, 1.0]);
-    }
-
-    #[test]
-    fn test_gramian_diagonal_weighted() {
-        let dm = make_weighted_design(vec![1.0, 2.0, 3.0, 4.0]);
-        let diag = dm.gramian_diagonal();
-        // factor 0: level 0 -> w=1+3=4, level 1 -> w=2+4=6
-        // factor 1: level 0 -> w=1+2=3, level 1 -> w=3+4=7
-        assert_eq!(diag, vec![4.0, 6.0, 3.0, 7.0]);
     }
 }

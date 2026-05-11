@@ -93,16 +93,18 @@ impl Operator for FePreconditioner {
     }
 }
 
-/// Build a [`FePreconditioner`] from a design and configuration.
+/// Build a [`FePreconditioner`] from a design, optional observation weights,
+/// and configuration.
 pub fn build_preconditioner<S: ObservationStore>(
     design: &WeightedDesign<S>,
+    weights: Option<&[f64]>,
     config: &Preconditioner,
 ) -> WithinResult<FePreconditioner> {
     use crate::domain::build_local_domains;
 
     match config {
         Preconditioner::Additive(local, reduction) => {
-            let domains = build_local_domains(design);
+            let domains = build_local_domains(design, weights);
             let p = build_additive_with_strategy(domains, design.n_dofs, local, *reduction)?;
             Ok(FePreconditioner::Additive(p))
         }

@@ -44,7 +44,7 @@ use within::config::{
     SolverParams, DEFAULT_DENSE_SCHUR_THRESHOLD,
 };
 use within::domain::WeightedDesign;
-use within::observation::{FactorMajorStore, ObservationWeights};
+use within::observation::FactorMajorStore;
 use within::{
     solve as solve_native, solve_batch as solve_batch_native, FePreconditioner, Operator,
     SolveResult, Solver,
@@ -700,27 +700,27 @@ impl PySolver {
         let factor_levels: Vec<Vec<u32>> = (0..n_factors)
             .map(|f| cats.column(f).iter().copied().collect())
             .collect();
-        let w = match &weights {
-            Some(w) => ObservationWeights::Dense(w.as_array().iter().copied().collect()),
-            None => ObservationWeights::Unit,
-        };
-        let store = FactorMajorStore::new(factor_levels, w, n_obs).map_err(value_err)?;
+        let store = FactorMajorStore::new(factor_levels, n_obs).map_err(value_err)?;
         let design = WeightedDesign::from_store(store).map_err(value_err)?;
+        let weights_vec: Option<Vec<f64>> = weights
+            .as_ref()
+            .map(|w| w.as_array().iter().copied().collect());
 
         // Handle pre-built FePreconditioner separately (uses a different constructor);
         // all other variants go through extract_preconditioner_config.
-        let solver =
-            if let Some(Ok(fe)) = preconditioner.map(|o| o.downcast::<PyFePreconditioner>()) {
-                let fe_precond = fe.get().inner.clone();
-                py.allow_threads(|| {
-                    Solver::from_design_with_preconditioner(design, &params, fe_precond)
-                })
+        let solver = if let Some(Ok(fe)) =
+            preconditioner.map(|o| o.downcast::<PyFePreconditioner>())
+        {
+            let fe_precond = fe.get().inner.clone();
+            py.allow_threads(|| {
+                Solver::from_design_with_preconditioner(design, weights_vec, &params, fe_precond)
+            })
+            .map_err(value_err)?
+        } else {
+            let precond = extract_preconditioner_config(py, preconditioner)?;
+            py.allow_threads(|| Solver::from_design(design, weights_vec, &params, precond.as_ref()))
                 .map_err(value_err)?
-            } else {
-                let precond = extract_preconditioner_config(py, preconditioner)?;
-                py.allow_threads(|| Solver::from_design(design, &params, precond.as_ref()))
-                    .map_err(value_err)?
-            };
+        };
 
         Ok(Self { solver })
     }

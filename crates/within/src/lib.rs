@@ -191,9 +191,7 @@ pub use orchestrate::SolveResult;
 // ---------------------------------------------------------------------------
 
 pub use domain::{Subdomain, WeightedDesign};
-pub use observation::{
-    ArrayStore, FactorMajorStore, FactorMeta, ObservationStore, ObservationWeights,
-};
+pub use observation::{ArrayStore, FactorMajorStore, FactorMeta, ObservationStore};
 
 // ---------------------------------------------------------------------------
 // Operators & builders

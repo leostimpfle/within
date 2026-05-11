@@ -149,7 +149,7 @@ fn test_solver_from_design() {
     let params = default_params();
     let precond = additive_precond();
 
-    let solver = Solver::from_design(design, &params, Some(&precond)).expect("from_design");
+    let solver = Solver::from_design(design, None, &params, Some(&precond)).expect("from_design");
     let result = solver.solve(&y).expect("solve");
     assert!(result.converged);
 }

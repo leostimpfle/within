@@ -7,7 +7,7 @@ use proptest::prelude::*;
 
 use super::CrossTab;
 use crate::domain::WeightedDesign;
-use crate::observation::{FactorMajorStore, ObservationWeights};
+use crate::observation::FactorMajorStore;
 use crate::operator::gramian::find_all_active_levels;
 
 #[test]
@@ -26,29 +26,21 @@ fn test_cross_tab_sparse_accumulation_path() {
     }
 
     // Sparse path (large level counts)
-    let store_sparse = FactorMajorStore::new(
-        vec![fa.clone(), fb.clone()],
-        ObservationWeights::Unit,
-        n_obs,
-    )
-    .expect("valid sparse store");
+    let store_sparse =
+        FactorMajorStore::new(vec![fa.clone(), fb.clone()], n_obs).expect("valid sparse store");
     let design_sparse = WeightedDesign::from_store(store_sparse).expect("valid sparse design");
-    let (ct_sparse, _) =
-        CrossTab::build_for_pair(&design_sparse, 0, 1).expect("sparse cross tab should build");
+    let (ct_sparse, _) = CrossTab::build_for_pair(&design_sparse, None, 0, 1)
+        .expect("sparse cross tab should build");
 
     // Dense path reference: collapse levels to a small range so n_q * n_r <= 5M.
     // Map each observation to level % 100 for both factors (100*100 = 10 000 <= 5M).
     let fa_small: Vec<u32> = fa.iter().map(|&x| x % 100).collect();
     let fb_small: Vec<u32> = fb.iter().map(|&x| x % 100).collect();
-    let store_dense = FactorMajorStore::new(
-        vec![fa_small.clone(), fb_small.clone()],
-        ObservationWeights::Unit,
-        n_obs,
-    )
-    .expect("valid dense store");
+    let store_dense = FactorMajorStore::new(vec![fa_small.clone(), fb_small.clone()], n_obs)
+        .expect("valid dense store");
     let design_dense = WeightedDesign::from_store(store_dense).expect("valid dense design");
     let (ct_dense, _) =
-        CrossTab::build_for_pair(&design_dense, 0, 1).expect("dense cross tab should build");
+        CrossTab::build_for_pair(&design_dense, None, 0, 1).expect("dense cross tab should build");
 
     // The sparse CrossTab for the large design should have identical diagonals
     // to what we'd compute by hand (each observation appears exactly once in the
@@ -124,10 +116,9 @@ fn test_extract_component_two_components() {
     let fa = vec![0u32, 0, 1, 1, 2, 2, 3, 3];
     let fb = vec![0u32, 1, 0, 1, 2, 3, 2, 3];
     let n_obs = 8;
-    let store =
-        FactorMajorStore::new(vec![fa, fb], ObservationWeights::Unit, n_obs).expect("valid store");
+    let store = FactorMajorStore::new(vec![fa, fb], n_obs).expect("valid store");
     let design = WeightedDesign::from_store(store).expect("valid design");
-    let (ct, _) = CrossTab::build_for_pair(&design, 0, 1).expect("cross tab should build");
+    let (ct, _) = CrossTab::build_for_pair(&design, None, 0, 1).expect("cross tab should build");
 
     let components = ct.bipartite_connected_components();
     assert_eq!(components.len(), 2, "should have 2 connected components");
@@ -235,13 +226,9 @@ proptest! {
             fb.push((s % n_r as u64) as u32);
         }
 
-        let store = FactorMajorStore::new(
-            vec![fa, fb],
-            ObservationWeights::Unit,
-            n_obs,
-        ).expect("valid store");
+        let store = FactorMajorStore::new(vec![fa, fb], n_obs).expect("valid store");
         let design = WeightedDesign::from_store(store).expect("valid design");
-        let (ct, _) = CrossTab::build_for_pair(&design, 0, 1)
+        let (ct, _) = CrossTab::build_for_pair(&design, None, 0, 1)
             .expect("cross tab should build");
 
         let components = ct.bipartite_connected_components();
@@ -295,8 +282,7 @@ fn test_find_all_active_levels_with_gaps() {
     let fa = vec![0u32, 2, 4, 0, 2, 4];
     let fb = vec![0u32, 1, 2, 0, 1, 2];
     let n_obs = 6;
-    let store =
-        FactorMajorStore::new(vec![fa, fb], ObservationWeights::Unit, n_obs).expect("valid store");
+    let store = FactorMajorStore::new(vec![fa, fb], n_obs).expect("valid store");
     let design = WeightedDesign::from_store(store).expect("valid design");
 
     let active = find_all_active_levels(&design);

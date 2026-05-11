@@ -1,8 +1,8 @@
 //! Observation storage layer: traits, backends, and metadata.
 //!
 //! This is the lowest layer of the `within` crate. It defines *how*
-//! per-observation data (factor levels, weights) is stored and accessed,
-//! without knowing anything about design matrices, operators, or solvers.
+//! per-observation factor-level data is stored and accessed, without knowing
+//! anything about design matrices, operators, weights, or solvers.
 //!
 //! # Why pluggable backends?
 //!
@@ -31,63 +31,20 @@
 //!
 //! # Key types
 //!
-//! - [`ObservationWeights`] — either unit weights (all 1.0, zero storage) or
-//!   dense per-observation weights. The `is_unit()` check is hoisted outside
-//!   inner loops so the hot path sees no per-element branch.
 //! - [`FactorMeta`] — per-factor metadata (level count and global DOF offset),
 //!   separated from observation data so it can live in the [`WeightedDesign`](crate::domain::WeightedDesign).
 //! - [`ObservationStore`] — the core trait. All implementors must be
 //!   `Send + Sync` to support Rayon parallelism in the layers above.
+//!
+//! # Weights
+//!
+//! Observation weights are intentionally **not** part of this layer. They flow
+//! alongside the store as `Option<&[f64]>` (borrowed) or `Option<Vec<f64>>`
+//! (owned at the solver layer), where `None` means "all weights = 1.0".
 
 use ndarray::ArrayView2;
 
 use crate::error::{WithinError, WithinResult};
-
-// ---------------------------------------------------------------------------
-// ObservationWeights — zero-cost unweighted path
-// ---------------------------------------------------------------------------
-
-/// Observation weights: Unit (all 1.0) or Dense (per-observation).
-///
-/// The `is_unit()` check happens *outside* inner loops, so the hot path
-/// sees either a constant `1.0` or a sequential array read — no per-element branch.
-#[derive(Debug, Clone)]
-pub enum ObservationWeights {
-    /// All weights = 1.0, no storage.
-    Unit,
-    /// Per-observation weights.
-    Dense(Vec<f64>),
-}
-
-impl ObservationWeights {
-    /// Return the weight for observation `obs`.
-    #[inline]
-    pub fn get(&self, obs: usize) -> f64 {
-        match self {
-            ObservationWeights::Unit => 1.0,
-            ObservationWeights::Dense(w) => w[obs],
-        }
-    }
-
-    /// Returns `true` if all weights are 1.0 (the `Unit` variant).
-    #[inline]
-    pub fn is_unit(&self) -> bool {
-        matches!(self, ObservationWeights::Unit)
-    }
-
-    /// Validate that this weight vector is compatible with `n_obs` observations.
-    pub fn validate_for(&self, n_obs: usize) -> WithinResult<()> {
-        if let ObservationWeights::Dense(w) = self {
-            if w.len() != n_obs {
-                return Err(WithinError::WeightCountMismatch {
-                    expected: n_obs,
-                    got: w.len(),
-                });
-            }
-        }
-        Ok(())
-    }
-}
 
 // ---------------------------------------------------------------------------
 // FactorMeta — per-factor metadata (no observation data)
@@ -122,12 +79,6 @@ pub trait ObservationStore: Send + Sync {
     /// Level index for observation `obs` in factor `factor`.
     fn level(&self, obs: usize, factor: usize) -> u32;
 
-    /// Weight for observation `obs`.
-    fn weight(&self, obs: usize) -> f64;
-
-    /// Whether all weights are 1.0 (enables optimized unweighted code paths).
-    fn is_unweighted(&self) -> bool;
-
     /// Optional fast-path access to a factor-major column of levels.
     ///
     /// Stores that naturally keep `level(obs, factor)` as contiguous
@@ -151,17 +102,12 @@ pub trait ObservationStore: Send + Sync {
 #[derive(Debug, Clone)]
 pub struct FactorMajorStore {
     factor_levels: Vec<Vec<u32>>,
-    weights: ObservationWeights,
     n_obs: usize,
 }
 
 impl FactorMajorStore {
     /// Create a new factor-major store, validating that all columns have length `n_obs`.
-    pub fn new(
-        factor_levels: Vec<Vec<u32>>,
-        weights: ObservationWeights,
-        n_obs: usize,
-    ) -> WithinResult<Self> {
+    pub fn new(factor_levels: Vec<Vec<u32>>, n_obs: usize) -> WithinResult<Self> {
         for (factor, col) in factor_levels.iter().enumerate() {
             if col.len() != n_obs {
                 return Err(WithinError::ObservationCountMismatch {
@@ -171,10 +117,8 @@ impl FactorMajorStore {
                 });
             }
         }
-        weights.validate_for(n_obs)?;
         Ok(Self {
             factor_levels,
-            weights,
             n_obs,
         })
     }
@@ -203,16 +147,6 @@ impl ObservationStore for FactorMajorStore {
     }
 
     #[inline]
-    fn weight(&self, obs: usize) -> f64 {
-        self.weights.get(obs)
-    }
-
-    #[inline]
-    fn is_unweighted(&self) -> bool {
-        self.weights.is_unit()
-    }
-
-    #[inline]
     fn factor_column(&self, factor: usize) -> Option<&[u32]> {
         Some(self.factor_column(factor))
     }
@@ -235,17 +169,12 @@ impl ObservationStore for FactorMajorStore {
 #[derive(Debug)]
 pub struct ArrayStore<'a> {
     categories: ArrayView2<'a, u32>,
-    weights: ObservationWeights,
 }
 
 impl<'a> ArrayStore<'a> {
-    /// Create a zero-copy store from a borrowed 2-D category array and optional weights.
-    pub fn new(categories: ArrayView2<'a, u32>, weights: ObservationWeights) -> WithinResult<Self> {
-        weights.validate_for(categories.nrows())?;
-        Ok(Self {
-            categories,
-            weights,
-        })
+    /// Create a zero-copy store from a borrowed 2-D category array.
+    pub fn new(categories: ArrayView2<'a, u32>) -> WithinResult<Self> {
+        Ok(Self { categories })
     }
 }
 
@@ -265,16 +194,6 @@ impl ObservationStore for ArrayStore<'_> {
         self.categories[[obs, factor]]
     }
 
-    #[inline]
-    fn weight(&self, obs: usize) -> f64 {
-        self.weights.get(obs)
-    }
-
-    #[inline]
-    fn is_unweighted(&self) -> bool {
-        self.weights.is_unit()
-    }
-
     fn factor_column(&self, factor: usize) -> Option<&[u32]> {
         let strides = self.categories.strides();
         // Columns are contiguous only when the row stride is 1 (F-order).
@@ -288,6 +207,26 @@ impl ObservationStore for ArrayStore<'_> {
         // starting at ptr + factor * col_stride.
         Some(unsafe { std::slice::from_raw_parts(ptr.add(factor * col_stride), n_obs) })
     }
+}
+
+// ---------------------------------------------------------------------------
+// Weight validation helpers
+// ---------------------------------------------------------------------------
+
+/// Validate that an optional weight slice matches `n_obs` observations.
+///
+/// `None` is always valid (interpreted as unit weights). `Some(w)` requires
+/// `w.len() == n_obs`.
+pub(crate) fn validate_weights(weights: Option<&[f64]>, n_obs: usize) -> WithinResult<()> {
+    if let Some(w) = weights {
+        if w.len() != n_obs {
+            return Err(WithinError::WeightCountMismatch {
+                expected: n_obs,
+                got: w.len(),
+            });
+        }
+    }
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -306,39 +245,27 @@ mod tests {
 
     #[test]
     fn test_factor_major_store_basic() {
-        let store = FactorMajorStore::new(sample_factor_levels(), ObservationWeights::Unit, 4)
-            .expect("valid factor-major store");
+        let store =
+            FactorMajorStore::new(sample_factor_levels(), 4).expect("valid factor-major store");
         assert_eq!(store.n_obs(), 4);
         assert_eq!(store.n_factors(), 2);
         assert_eq!(store.level(0, 0), 0);
         assert_eq!(store.level(1, 0), 1);
         assert_eq!(store.level(2, 1), 0);
-        assert_eq!(store.weight(0), 1.0);
-        assert!(store.is_unweighted());
-    }
-
-    #[test]
-    fn test_factor_major_store_weighted() {
-        let store = FactorMajorStore::new(
-            vec![vec![0u32, 1, 2]],
-            ObservationWeights::Dense(vec![0.5, 1.0, 2.0]),
-            3,
-        )
-        .expect("valid weighted factor-major store");
-        assert!(!store.is_unweighted());
-        assert_eq!(store.weight(0), 0.5);
-        assert_eq!(store.weight(2), 2.0);
     }
 
     #[test]
     fn test_factor_column() {
-        let store = FactorMajorStore::new(
-            vec![vec![0u32, 1, 2, 0], vec![3, 2, 1, 0]],
-            ObservationWeights::Unit,
-            4,
-        )
-        .expect("valid factor-major store");
+        let store = FactorMajorStore::new(vec![vec![0u32, 1, 2, 0], vec![3, 2, 1, 0]], 4)
+            .expect("valid factor-major store");
         assert_eq!(store.factor_column(0), &[0u32, 1, 2, 0]);
         assert_eq!(store.factor_column(1), &[3u32, 2, 1, 0]);
+    }
+
+    #[test]
+    fn test_validate_weights() {
+        assert!(validate_weights(None, 5).is_ok());
+        assert!(validate_weights(Some(&[1.0, 2.0, 3.0, 4.0, 5.0]), 5).is_ok());
+        assert!(validate_weights(Some(&[1.0, 2.0]), 5).is_err());
     }
 }

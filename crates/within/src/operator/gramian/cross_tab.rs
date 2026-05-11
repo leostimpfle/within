@@ -225,12 +225,14 @@ impl CrossTab {
     #[cfg(test)]
     pub fn build_for_pair<S: ObservationStore>(
         design: &WeightedDesign<S>,
+        weights: Option<&[f64]>,
         q: usize,
         r: usize,
     ) -> Option<(Self, Vec<u32>)> {
         let active = find_active_levels(design, q, r)?;
 
-        let (c, diag_q, diag_r) = accumulate_cross_block(design, q, r, &active.as_compact_pair());
+        let (c, diag_q, diag_r) =
+            accumulate_cross_block(design, weights, q, r, &active.as_compact_pair());
         let ct = c.transpose();
         let cross_tab = CrossTab {
             c,
@@ -247,6 +249,7 @@ impl CrossTab {
     /// active levels have already been determined via `find_all_active_levels`.
     pub fn build_for_pair_with_active<S: ObservationStore>(
         design: &WeightedDesign<S>,
+        weights: Option<&[f64]>,
         q: usize,
         r: usize,
         all_active: &[Vec<bool>],
@@ -255,7 +258,8 @@ impl CrossTab {
         let fr = &design.factors[r];
         let active = build_compact_mapping(&all_active[q], &all_active[r], fq, fr)?;
 
-        let (c, diag_q, diag_r) = accumulate_cross_block(design, q, r, &active.as_compact_pair());
+        let (c, diag_q, diag_r) =
+            accumulate_cross_block(design, weights, q, r, &active.as_compact_pair());
         let ct = c.transpose();
         let cross_tab = CrossTab {
             c,
@@ -406,21 +410,23 @@ impl CrossTab {
 /// Dispatches to a dense or sparse path based on the table size.
 fn accumulate_cross_block<S: ObservationStore>(
     design: &WeightedDesign<S>,
+    weights: Option<&[f64]>,
     q: usize,
     r: usize,
     compact: &CompactPair<'_>,
 ) -> (CsrBlock, Vec<f64>, Vec<f64>) {
     let table_size = compact.n_q * compact.n_r;
     if table_size <= DENSE_TABLE_MAX_ENTRIES {
-        accumulate_dense_cross_block(design, q, r, compact)
+        accumulate_dense_cross_block(design, weights, q, r, compact)
     } else {
-        accumulate_sparse_cross_block(design, q, r, compact)
+        accumulate_sparse_cross_block(design, weights, q, r, compact)
     }
 }
 
 /// Dense path: flat table with O(1) accumulation per observation (n_q * n_r <= 5M).
 fn accumulate_dense_cross_block<S: ObservationStore>(
     design: &WeightedDesign<S>,
+    weights: Option<&[f64]>,
     q: usize,
     r: usize,
     compact: &CompactPair<'_>,
@@ -442,7 +448,7 @@ fn accumulate_dense_cross_block<S: ObservationStore>(
         if cj == u32::MAX || ck == u32::MAX {
             continue;
         }
-        let w = design.uid_weight(uid);
+        let w = WeightedDesign::<S>::uid_weight(weights, uid);
         debug_assert!((cj as usize) < n_q && (ck as usize) < n_r);
         diag_q[cj as usize] += w;
         diag_r[ck as usize] += w;
@@ -460,6 +466,7 @@ fn accumulate_dense_cross_block<S: ObservationStore>(
 /// row. The workspace sort is on unique columns only (n_r_active << len).
 fn accumulate_sparse_cross_block<S: ObservationStore>(
     design: &WeightedDesign<S>,
+    weights: Option<&[f64]>,
     q: usize,
     r: usize,
     compact: &CompactPair<'_>,
@@ -482,7 +489,7 @@ fn accumulate_sparse_cross_block<S: ObservationStore>(
         if cj == u32::MAX || ck == u32::MAX {
             continue;
         }
-        let w = design.uid_weight(uid);
+        let w = WeightedDesign::<S>::uid_weight(weights, uid);
         diag_q[cj as usize] += w;
         diag_r[ck as usize] += w;
         row_counts[cj as usize] += 1;
@@ -507,7 +514,7 @@ fn accumulate_sparse_cross_block<S: ObservationStore>(
         if cj == u32::MAX || ck == u32::MAX {
             continue;
         }
-        let w = design.uid_weight(uid);
+        let w = WeightedDesign::<S>::uid_weight(weights, uid);
         let pos = cursor[cj as usize] as usize;
         bucket_cols[pos] = ck;
         bucket_vals[pos] = w;

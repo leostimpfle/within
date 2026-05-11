@@ -1,21 +1,16 @@
 #![allow(dead_code)]
 
-use within::{FactorMajorStore, ObservationWeights, SolveResult, WeightedDesign};
+use within::{FactorMajorStore, SolveResult, WeightedDesign};
 
 pub fn make_test_design() -> WeightedDesign<FactorMajorStore> {
-    make_weighted_design(
-        vec![vec![0, 1, 0, 1, 2], vec![0, 0, 1, 1, 0]],
-        ObservationWeights::Unit,
-    )
-    .expect("valid test design")
+    make_design(vec![vec![0, 1, 0, 1, 2], vec![0, 0, 1, 1, 0]]).expect("valid test design")
 }
 
-pub fn make_weighted_design(
+pub fn make_design(
     categories: Vec<Vec<u32>>,
-    weights: ObservationWeights,
 ) -> within::WithinResult<WeightedDesign<FactorMajorStore>> {
     let n_rows = categories.first().map_or(0, Vec::len);
-    let store = FactorMajorStore::new(categories, weights, n_rows)?;
+    let store = FactorMajorStore::new(categories, n_rows)?;
     WeightedDesign::from_store(store)
 }
 

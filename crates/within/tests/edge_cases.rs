@@ -1,7 +1,7 @@
 use ndarray::array;
 use rand::rngs::SmallRng;
 use rand::{Rng, SeedableRng};
-use within::observation::{FactorMajorStore, ObservationWeights};
+use within::observation::FactorMajorStore;
 use within::{solve, Preconditioner, Solver, SolverParams, WeightedDesign};
 
 #[path = "common/orchestrate_helpers.rs"]
@@ -137,7 +137,7 @@ fn test_maxiter_1_partial_result() {
         (0..n_obs).map(|_| rng.random_range(0..20u32)).collect(),
         (0..n_obs).map(|_| rng.random_range(0..20u32)).collect(),
     ];
-    let store = FactorMajorStore::new(cats, ObservationWeights::Unit, n_obs).expect("valid store");
+    let store = FactorMajorStore::new(cats, n_obs).expect("valid store");
     let design = WeightedDesign::from_store(store).expect("valid design");
 
     let y: Vec<f64> = (0..n_obs).map(|i| (i as f64 * 0.17).sin()).collect();
@@ -147,7 +147,7 @@ fn test_maxiter_1_partial_result() {
         maxiter: 1,
         ..SolverParams::default()
     };
-    let solver = Solver::from_design(design, &params, None).expect("solver build");
+    let solver = Solver::from_design(design, None, &params, None).expect("solver build");
     let result = solver.solve(&y).expect("solve with maxiter=1");
 
     // Convergence is not expected (tolerance is unreachable in 1 iteration),
@@ -184,8 +184,7 @@ fn test_large_design_convergence() {
         (0..n_obs).map(|_| rng.random_range(0..100u32)).collect(),
     ];
 
-    let store =
-        FactorMajorStore::new(cats, ObservationWeights::Unit, n_obs).expect("valid large store");
+    let store = FactorMajorStore::new(cats, n_obs).expect("valid large store");
     let design = WeightedDesign::from_store(store).expect("valid large design");
     let y = common::make_y_from_unit_solution(&design);
 
@@ -194,7 +193,7 @@ fn test_large_design_convergence() {
         ..SolverParams::default()
     };
     let precond = additive_precond();
-    let solver = Solver::from_design(design, &params, Some(&precond)).expect("solver build");
+    let solver = Solver::from_design(design, None, &params, Some(&precond)).expect("solver build");
     let result = solver.solve(&y).expect("large design solve");
 
     assert!(
@@ -217,7 +216,7 @@ fn test_zero_rhs_zero_solution() {
     let y = vec![0.0f64; design.n_rows];
 
     let params = SolverParams::default();
-    let solver = Solver::from_design(design, &params, None).expect("solver build");
+    let solver = Solver::from_design(design, None, &params, None).expect("solver build");
     let result = solver.solve(&y).expect("zero RHS solve");
 
     assert!(result.converged, "zero RHS should trivially converge");
@@ -278,7 +277,7 @@ fn test_repeated_solve_is_deterministic() {
 
     let params = SolverParams::default();
     let precond = additive_precond();
-    let solver = Solver::from_design(design, &params, Some(&precond)).expect("solver build");
+    let solver = Solver::from_design(design, None, &params, Some(&precond)).expect("solver build");
 
     let r1 = solver.solve(&y).expect("first solve");
     let r2 = solver.solve(&y).expect("second solve");

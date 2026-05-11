@@ -1,7 +1,7 @@
 use ndarray::Array2;
 use proptest::prelude::*;
 use schwarz_precond::Operator;
-use within::observation::{ArrayStore, ObservationWeights};
+use within::observation::ArrayStore;
 use within::{solve, FePreconditioner, Preconditioner, SolverParams, WeightedDesign};
 
 /// Generate a random fixed-effects problem as (categories Array2<u32>, y Vec<f64>).
@@ -72,7 +72,7 @@ proptest! {
     #[test]
     fn prop_solver_convergence((cats, _y) in random_fe_problem_strategy()) {
         // Create y = D * x_true so we know the answer
-        let store = ArrayStore::new(cats.view(), ObservationWeights::Unit).unwrap();
+        let store = ArrayStore::new(cats.view()).unwrap();
         let design = WeightedDesign::from_store(store).unwrap();
         let n_dofs = design.n_dofs;
         let n_obs = design.n_rows;

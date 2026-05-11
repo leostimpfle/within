@@ -42,7 +42,7 @@ use crate::operator::WeightedDesignOperator;
 
 use crate::config::{Preconditioner, SolverParams};
 use crate::domain::WeightedDesign;
-use crate::observation::{ArrayStore, ObservationStore, ObservationWeights};
+use crate::observation::{validate_weights, ArrayStore, ObservationStore};
 use crate::operator::preconditioner::{build_preconditioner, FePreconditioner};
 use crate::orchestrate::{BatchSolveResult, SolveResult};
 use crate::WithinResult;
@@ -59,6 +59,7 @@ fn norm(v: &[f64]) -> f64 {
 /// construction time.
 pub struct Solver<S: ObservationStore> {
     design: WeightedDesign<S>,
+    weights: Option<Vec<f64>>,
     preconditioner: Option<FePreconditioner>,
     tol: f64,
     maxiter: usize,
@@ -66,19 +67,25 @@ pub struct Solver<S: ObservationStore> {
 }
 
 impl<S: ObservationStore> Solver<S> {
-    /// Build from an existing [`WeightedDesign`].
+    /// Build from an existing [`WeightedDesign`] and optional observation weights.
+    ///
+    /// `weights = None` denotes unit weights (length must match `design.n_rows`
+    /// when `Some`).
     pub fn from_design(
         design: WeightedDesign<S>,
+        weights: Option<Vec<f64>>,
         params: &SolverParams,
         preconditioner: Option<&Preconditioner>,
     ) -> WithinResult<Self> {
+        validate_weights(weights.as_deref(), design.n_rows)?;
         let built_precond = match preconditioner {
-            Some(config) => Some(build_preconditioner(&design, config)?),
+            Some(config) => Some(build_preconditioner(&design, weights.as_deref(), config)?),
             None => None,
         };
 
         Ok(Self {
             design,
+            weights,
             preconditioner: built_precond,
             tol: params.tol,
             maxiter: params.maxiter,
@@ -89,11 +96,14 @@ impl<S: ObservationStore> Solver<S> {
     /// Build from a design with a pre-built preconditioner (e.g. deserialized).
     pub fn from_design_with_preconditioner(
         design: WeightedDesign<S>,
+        weights: Option<Vec<f64>>,
         params: &SolverParams,
         preconditioner: FePreconditioner,
     ) -> WithinResult<Self> {
+        validate_weights(weights.as_deref(), design.n_rows)?;
         Ok(Self {
             design,
+            weights,
             preconditioner: Some(preconditioner),
             tol: params.tol,
             maxiter: params.maxiter,
@@ -106,7 +116,7 @@ impl<S: ObservationStore> Solver<S> {
         let t_start = Instant::now();
         let t_setup_start = Instant::now();
 
-        let rect_op = WeightedDesignOperator::new(&self.design);
+        let rect_op = WeightedDesignOperator::new(&self.design, self.weights.as_deref());
         let b = rect_op.weighted_rhs(y);
 
         let t_solve_start = Instant::now();
@@ -125,11 +135,12 @@ impl<S: ObservationStore> Solver<S> {
             *d = yi - *d;
         }
 
+        let w_ref = self.weights.as_deref();
         let mut rhs = vec![0.0; self.design.n_dofs];
-        self.design.rmatvec_wdt(y, &mut rhs);
+        self.design.rmatvec_wdt(w_ref, y, &mut rhs);
         let rhs_norm = norm(&rhs).max(1e-15);
         let mut residual_dof = vec![0.0; self.design.n_dofs];
-        self.design.rmatvec_wdt(&demeaned, &mut residual_dof);
+        self.design.rmatvec_wdt(w_ref, &demeaned, &mut residual_dof);
         let final_residual = norm(&residual_dof) / rhs_norm;
 
         Ok(SolveResult {
@@ -205,13 +216,10 @@ impl<'a> Solver<ArrayStore<'a>> {
         params: &SolverParams,
         preconditioner: Option<&Preconditioner>,
     ) -> WithinResult<Self> {
-        let weights = match weights {
-            Some(w) => ObservationWeights::Dense(w.to_vec()),
-            None => ObservationWeights::Unit,
-        };
-        let store = ArrayStore::new(categories, weights)?;
+        let store = ArrayStore::new(categories)?;
         let design = WeightedDesign::from_store(store)?;
-        Self::from_design(design, params, preconditioner)
+        let weights = weights.map(|w| w.to_vec());
+        Self::from_design(design, weights, params, preconditioner)
     }
 
     /// Build a solver with a pre-built preconditioner (e.g. deserialized).
@@ -221,12 +229,9 @@ impl<'a> Solver<ArrayStore<'a>> {
         params: &SolverParams,
         preconditioner: FePreconditioner,
     ) -> WithinResult<Self> {
-        let weights = match weights {
-            Some(w) => ObservationWeights::Dense(w.to_vec()),
-            None => ObservationWeights::Unit,
-        };
-        let store = ArrayStore::new(categories, weights)?;
+        let store = ArrayStore::new(categories)?;
         let design = WeightedDesign::from_store(store)?;
-        Self::from_design_with_preconditioner(design, params, preconditioner)
+        let weights = weights.map(|w| w.to_vec());
+        Self::from_design_with_preconditioner(design, weights, params, preconditioner)
     }
 }
