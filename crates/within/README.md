@@ -51,14 +51,15 @@ assert!(result.converged);
 
 The crate is organized in four layers:
 
-1. **`observation`** — Per-observation factor levels and weights via
-   `FactorMajorStore` and the `ObservationStore` trait.
+1. **`observation`** — Per-observation factor levels via `FactorMajorStore`
+   and the `Store` trait. Observation weights are not owned here — they
+   flow as `Option<&[f64]>` to the operator layer.
 
-2. **`domain`** — Domain decomposition. `WeightedDesign` wraps a store with
+2. **`domain`** — Domain decomposition. `Design` wraps a store with
    factor metadata; `build_local_domains` constructs factor-pair subdomains
    with partition-of-unity weights for the Schwarz preconditioner.
 
-3. **`operator`** — Linear algebra primitives. `WeightedDesignOperator`
+3. **`operator`** — Linear algebra primitives. `DesignOperator`
    (rectangular `sqrt(W) D` for LSMR) and Schwarz preconditioner builders
    that wire approximate Cholesky local solvers into the generic
    `schwarz-precond` framework.

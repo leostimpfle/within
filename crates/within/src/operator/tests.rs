@@ -3,25 +3,21 @@
 // ===========================================================================
 
 mod design_tests {
-    use crate::domain::WeightedDesign;
-    use crate::observation::{FactorMajorStore, ObservationWeights};
-    use crate::operator::WeightedDesignOperator;
+    use crate::domain::Design;
+    use crate::observation::FactorMajorStore;
+    use crate::operator::DesignOperator;
     use schwarz_precond::Operator;
 
-    fn make_test_design() -> WeightedDesign<FactorMajorStore> {
-        let store = FactorMajorStore::new(
-            vec![vec![0, 1, 2, 0, 1], vec![0, 1, 2, 3, 0]],
-            ObservationWeights::Unit,
-            5,
-        )
-        .expect("valid factor-major store");
-        WeightedDesign::from_store(store).expect("valid test design")
+    fn make_test_design() -> Design<FactorMajorStore> {
+        let store = FactorMajorStore::new(vec![vec![0, 1, 2, 0, 1], vec![0, 1, 2, 3, 0]], 5)
+            .expect("valid factor-major store");
+        Design::from_store(store).expect("valid test design")
     }
 
     #[test]
     fn test_design_operator_dimensions() {
         let schema = make_test_design();
-        let op = WeightedDesignOperator::new(&schema);
+        let op = DesignOperator::new(&schema, None);
         assert_eq!(op.nrows(), 5);
         assert_eq!(op.ncols(), 7);
     }
@@ -29,7 +25,7 @@ mod design_tests {
     #[test]
     fn test_design_operator_adjoint() {
         let schema = make_test_design();
-        let op = WeightedDesignOperator::new(&schema);
+        let op = DesignOperator::new(&schema, None);
 
         let x = vec![1.0, -0.5, 2.0, 0.3, -1.0, 0.7, 1.5];
         let r = vec![0.1, 0.2, -0.3, 0.4, -0.5];
@@ -46,9 +42,9 @@ mod design_tests {
     }
 
     #[test]
-    fn test_matvec_d() {
+    fn test_apply_unweighted_values() {
         let schema = make_test_design();
-        let op = WeightedDesignOperator::new(&schema);
+        let op = DesignOperator::new(&schema, None);
         let x = vec![1.0, 2.0, 3.0, 10.0, 20.0, 30.0, 40.0];
         let mut y = vec![0.0; 5];
         op.apply(&x, &mut y).expect("apply succeeds");
@@ -56,9 +52,9 @@ mod design_tests {
     }
 
     #[test]
-    fn test_rmatvec_dt() {
+    fn test_apply_adjoint_unweighted_values() {
         let schema = make_test_design();
-        let op = WeightedDesignOperator::new(&schema);
+        let op = DesignOperator::new(&schema, None);
         let r = vec![1.0, 2.0, 3.0, 4.0, 5.0];
         let mut x = vec![0.0; 7];
         op.apply_adjoint(&r, &mut x)
@@ -429,8 +425,8 @@ mod schwarz_tests {
     use crate::config::{
         ApproxCholConfig, ApproxSchurConfig, LocalSolverConfig, DEFAULT_DENSE_SCHUR_THRESHOLD,
     };
-    use crate::domain::{build_local_domains, Subdomain, SubdomainCore, WeightedDesign};
-    use crate::observation::{FactorMajorStore, ObservationWeights};
+    use crate::domain::{build_local_domains, Design, Subdomain, SubdomainCore};
+    use crate::observation::FactorMajorStore;
     use crate::operator::csr_block::CsrBlock;
     use crate::operator::gramian::CrossTab;
     use crate::operator::local_solver::BlockElimSolver;
@@ -441,15 +437,11 @@ mod schwarz_tests {
 
     const BLOCK_ELIM_NESTED_RAYON_CHILD_ENV: &str = "WITHIN_TEST_BLOCK_ELIM_NESTED_RAYON_CHILD";
 
-    fn make_test_data() -> (WeightedDesign<FactorMajorStore>, Vec<(Subdomain, CrossTab)>) {
-        let store = FactorMajorStore::new(
-            vec![vec![0, 1, 0, 1, 2], vec![0, 0, 1, 1, 0]],
-            ObservationWeights::Unit,
-            5,
-        )
-        .expect("valid factor-major store");
-        let design = WeightedDesign::from_store(store).expect("valid fixed-effects design");
-        let domain_pairs = build_local_domains(&design);
+    fn make_test_data() -> (Design<FactorMajorStore>, Vec<(Subdomain, CrossTab)>) {
+        let store = FactorMajorStore::new(vec![vec![0, 1, 0, 1, 2], vec![0, 0, 1, 1, 0]], 5)
+            .expect("valid factor-major store");
+        let design = Design::from_store(store).expect("valid fixed-effects design");
+        let domain_pairs = build_local_domains(&design, None);
         (design, domain_pairs)
     }
 

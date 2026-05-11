@@ -40,8 +40,8 @@
 //!
 //! [`build_local_domains`] builds subdomains for preconditioner construction.
 
-use super::{PartitionWeights, Subdomain, WeightedDesign};
-use crate::observation::ObservationStore;
+use super::{Design, PartitionWeights, Subdomain};
+use crate::observation::Store;
 use crate::operator::gramian::{find_all_active_levels, BipartiteComponent, CrossTab};
 
 /// Build local subdomains (with pre-built CrossTabs) for pairs of factors.
@@ -54,8 +54,9 @@ use crate::operator::gramian::{find_all_active_levels, BipartiteComponent, Cross
 /// Factor pairs are processed in parallel via Rayon. The
 /// `compute_partition_weights` step remains sequential after the parallel
 /// collect.
-pub(crate) fn build_local_domains<S: ObservationStore>(
-    design: &WeightedDesign<S>,
+pub(crate) fn build_local_domains<S: Store>(
+    design: &Design<S>,
+    weights: Option<&[f64]>,
 ) -> Vec<(Subdomain, CrossTab)> {
     use rayon::prelude::*;
 
@@ -65,7 +66,7 @@ pub(crate) fn build_local_domains<S: ObservationStore>(
 
     let mut domain_pairs: Vec<(Subdomain, CrossTab)> = pairs
         .par_iter()
-        .flat_map(|&(q, r)| domains_for_pair(design, q, r, &all_active))
+        .flat_map(|&(q, r)| domains_for_pair(design, weights, q, r, &all_active))
         .collect();
 
     compute_partition_weights(&mut domain_pairs, design.n_dofs);
@@ -73,16 +74,18 @@ pub(crate) fn build_local_domains<S: ObservationStore>(
     domain_pairs
 }
 
-fn domains_for_pair<S: ObservationStore>(
-    design: &WeightedDesign<S>,
+fn domains_for_pair<S: Store>(
+    design: &Design<S>,
+    weights: Option<&[f64]>,
     q: usize,
     r: usize,
     all_active: &[Vec<bool>],
 ) -> Vec<(Subdomain, CrossTab)> {
-    let (full_ct, l2g) = match CrossTab::build_for_pair_with_active(design, q, r, all_active) {
-        Some(pair) => pair,
-        None => return Vec::new(),
-    };
+    let (full_ct, l2g) =
+        match CrossTab::build_for_pair_with_active(design, weights, q, r, all_active) {
+            Some(pair) => pair,
+            None => return Vec::new(),
+        };
 
     let n_q_full = full_ct.n_q();
     split_into_subdomains(full_ct, &l2g, n_q_full, (q, r))
@@ -190,27 +193,26 @@ fn compute_partition_weights(domain_pairs: &mut [(Subdomain, CrossTab)], n_dofs:
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::WeightedDesign;
-    use crate::observation::{FactorMajorStore, ObservationWeights};
+    use crate::domain::Design;
+    use crate::observation::FactorMajorStore;
 
-    fn make_test_design() -> WeightedDesign<FactorMajorStore> {
+    fn make_test_design() -> Design<FactorMajorStore> {
         let store = FactorMajorStore::new(
             vec![
                 vec![0, 1, 2, 0, 1, 2],
                 vec![0, 1, 0, 1, 0, 1],
                 vec![0, 0, 1, 1, 0, 1],
             ],
-            ObservationWeights::Unit,
             6,
         )
         .expect("valid factor-major store");
-        WeightedDesign::from_store(store).expect("valid test design")
+        Design::from_store(store).expect("valid test design")
     }
 
     #[test]
     fn test_full_cover_domain_count() {
         let dm = make_test_design();
-        let domain_pairs = build_local_domains(&dm);
+        let domain_pairs = build_local_domains(&dm, None);
         // 3 factor pairs; each pair may produce multiple components
         assert!(domain_pairs.len() >= 3);
     }
@@ -218,7 +220,7 @@ mod tests {
     #[test]
     fn test_partition_of_unity() {
         let dm = make_test_design();
-        let domain_pairs = build_local_domains(&dm);
+        let domain_pairs = build_local_domains(&dm, None);
         let n_dofs = dm.n_dofs;
         // Two-sided PoU: squared weights must sum to 1 at every DOF.
         let mut weight_sq_sum = vec![0.0; n_dofs];
@@ -238,7 +240,7 @@ mod tests {
     #[test]
     fn test_domains_cover_all_dofs() {
         let dm = make_test_design();
-        let domain_pairs = build_local_domains(&dm);
+        let domain_pairs = build_local_domains(&dm, None);
         let mut covered = vec![false; dm.n_dofs];
         for (d, _) in &domain_pairs {
             for &idx in d.core.global_indices() {

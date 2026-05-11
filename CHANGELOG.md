@@ -32,6 +32,26 @@ Modified LSMR is now the sole iterative solver, replacing CG and GMRES.
   type parameter; the `LocalSolveInvoker` trait, `DefaultLocalSolveInvoker`,
   and `with_strategy_and_invoker` constructor are removed.
 - LSMR vector kernels parallelized via Rayon.
+- **BREAKING:** `ObservationStore` trait renamed to `Store`;
+  `WeightedDesign` to `Design`; `WeightedDesignOperator` to
+  `DesignOperator` (closes #28).
+- **BREAKING:** Observation weights externalized from the store layer.
+  `FactorMajorStore::new` and `ArrayStore::new` drop their weights
+  argument. `Solver::from_design` / `from_design_with_preconditioner` and
+  `build_preconditioner` gain `Option<Vec<f64>>` / `Option<&[f64]>`
+  weights parameters. Python `solve` / `Solver` signatures unchanged.
+- **BREAKING:** `Design` is now pure data + layout. The `matvec_d`,
+  `rmatvec_dt`, `rmatvec_wdt`, `gramian_diagonal`, and `uid_weight`
+  methods are removed — use `DesignOperator::new(&design, weights).apply`
+  / `apply_adjoint` instead.
+- `DesignOperator::new` validates that `weights.len() == design.n_rows`
+  and panics on mismatch; the scratch `Mutex<Vec<f64>>` field is gone and
+  weighted `apply` / `apply_adjoint` no longer allocate. The weighted
+  `apply` fuses the `W^{1/2}` multiply into the last gather pass, so
+  there is no trailing scale loop.
+- `build_preconditioner` now returns `WithinError::WeightCountMismatch`
+  for wrong-length weights instead of panicking on out-of-bounds access
+  inside `CrossTab` assembly.
 
 ### Removed
 
@@ -41,9 +61,11 @@ Modified LSMR is now the sole iterative solver, replacing CG and GMRES.
   `SolverParams.max_refinements`, Python `CG`/`GMRES`/
   `MultiplicativeSchwarz`, `MultiplicativeSchwarzPreconditioner`,
   `ResidualUpdater`, `OperatorResidualUpdater`, `IdentityOperator`).
-- **BREAKING:** `Gramian`, `GramianOperator`, `DesignOperator`,
-  `build_schwarz`, `FeSchwarz`, and `WithinError::Overflow` removed from
-  the `within` public surface. LSMR uses `WeightedDesignOperator` directly.
+- **BREAKING:** `Gramian`, `GramianOperator`, the previous bare
+  `DesignOperator`, `build_schwarz`, `FeSchwarz`, and
+  `WithinError::Overflow` removed from the `within` public surface. LSMR
+  uses the rectangular weighted design operator directly (see also #28,
+  which later renamed it to `DesignOperator`).
 - **BREAKING:** `schwarz_precond::solve::{cg, gmres}` and the `solve`
   module removed; use crate-root `lsmr`/`mlsmr`.
   `schwarz_precond::schwarz::{additive, multiplicative}` flattened into
@@ -60,6 +82,8 @@ Modified LSMR is now the sole iterative solver, replacing CG and GMRES.
   variants moved onto `SolveError`. `PyFePreconditioner.apply` raises
   `RuntimeError` on local-solver failure instead of returning NaNs
   (closes #29).
+- **BREAKING:** `ObservationWeights` enum removed; `Store::weight` and
+  `Store::is_unweighted` removed from the trait (closes #28).
 
 ## [0.1.0] - 2026-03-12
 

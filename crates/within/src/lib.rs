@@ -94,7 +94,7 @@
 //! ```text
 //! within
 //! ├── observation         Storage backends (FactorMajorStore, ArrayStore)
-//! ├── domain              WeightedDesign<S> + factor-pair subdomains
+//! ├── domain              Design<S> + factor-pair subdomains
 //! │   └── factor_pairs      Domain construction, partition-of-unity weights
 //! ├── operator            Linear algebra layer
 //! │   ├── gramian           CrossTab (per-pair bipartite blocks)
@@ -129,7 +129,7 @@
 //!   `operator::schur_complement` module implements block-elimination local
 //!   solves on the per-pair `CrossTab` (`operator::gramian::cross_tab`).
 //!
-//! - **Extending with new backends** — The [`ObservationStore`] trait in
+//! - **Extending with new backends** — The [`Store`] trait in
 //!   [`observation`] abstracts over how factor-level data is laid out in
 //!   memory. The [`schwarz_precond::LocalSolver`] trait (from the
 //!   `schwarz-precond` crate) governs subdomain solvers.
@@ -144,10 +144,10 @@
 //! The crate is organized in four layers:
 //!
 //! - **`observation`** — Per-observation data storage via [`FactorMajorStore`]
-//!   and the [`ObservationStore`] trait.
-//! - **`domain`** — Domain decomposition: [`WeightedDesign`] wraps a store with factor
+//!   and the [`Store`] trait.
+//! - **`domain`** — Domain decomposition: [`Design`] wraps a store with factor
 //!   metadata; factor-pair subdomains are built with partition-of-unity weights.
-//! - **`operator`** — Linear algebra primitives: `WeightedDesignOperator`
+//! - **`operator`** — Linear algebra primitives: `DesignOperator`
 //!   (rectangular `sqrt(W) D` for LSMR), per-pair `CrossTab` blocks, and
 //!   Schwarz preconditioner builders.
 //! - **`orchestrate`** — End-to-end solve: [`solve`] with typed configuration.
@@ -190,10 +190,8 @@ pub use orchestrate::SolveResult;
 // Core types
 // ---------------------------------------------------------------------------
 
-pub use domain::{Subdomain, WeightedDesign};
-pub use observation::{
-    ArrayStore, FactorMajorStore, FactorMeta, ObservationStore, ObservationWeights,
-};
+pub use domain::{Design, Subdomain};
+pub use observation::{ArrayStore, FactorMajorStore, FactorMeta, Store};
 
 // ---------------------------------------------------------------------------
 // Operators & builders

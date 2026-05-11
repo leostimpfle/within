@@ -13,7 +13,7 @@ fn test_lsmr_unpreconditioned() {
         maxiter: 1000,
         ..Default::default()
     };
-    let solver = Solver::from_design(design, &params, None).expect("build solver");
+    let solver = Solver::from_design(design, None, &params, None).expect("build solver");
     let result = solver.solve(&y).expect("solve");
     common::assert_converged_with_small_residual(&result, 1e-6);
 }
@@ -29,7 +29,7 @@ fn test_lsmr_preconditioned() {
         ..Default::default()
     };
     let precond = Preconditioner::Additive(LocalSolverConfig::default(), ReductionStrategy::Auto);
-    let solver = Solver::from_design(design, &params, Some(&precond)).expect("build solver");
+    let solver = Solver::from_design(design, None, &params, Some(&precond)).expect("build solver");
     let result = solver.solve(&y).expect("solve");
     common::assert_converged_with_small_residual(&result, 1e-6);
 }
@@ -44,7 +44,7 @@ fn test_lsmr_least_squares() {
         maxiter: 1000,
         ..Default::default()
     };
-    let solver = Solver::from_design(design, &params, None).expect("build solver");
+    let solver = Solver::from_design(design, None, &params, None).expect("build solver");
     let result = solver.solve(&y).expect("solve");
     assert!(result.converged, "LSMR LS did not converge");
     common::assert_solution_finite(&result);
@@ -52,11 +52,9 @@ fn test_lsmr_least_squares() {
 
 #[test]
 fn test_lsmr_least_squares_weighted_preconditioned() {
-    let design = common::make_weighted_design(
-        vec![vec![0, 1, 0, 1, 2], vec![0, 0, 1, 1, 0]],
-        within::ObservationWeights::Dense(vec![1.0, 2.0, 1.5, 0.5, 3.0]),
-    )
-    .expect("valid weighted design");
+    let design =
+        common::make_design(vec![vec![0, 1, 0, 1, 2], vec![0, 0, 1, 1, 0]]).expect("valid design");
+    let weights = vec![1.0, 2.0, 1.5, 0.5, 3.0];
     let y = vec![1.0, 2.0, 3.0, 4.0, 5.0];
 
     let params = SolverParams {
@@ -65,7 +63,8 @@ fn test_lsmr_least_squares_weighted_preconditioned() {
         ..Default::default()
     };
     let precond = Preconditioner::default();
-    let solver = Solver::from_design(design, &params, Some(&precond)).expect("build solver");
+    let solver =
+        Solver::from_design(design, Some(weights), &params, Some(&precond)).expect("build solver");
     let result = solver.solve(&y).expect("solve");
     common::assert_converged_with_small_residual(&result, 1e-6);
     common::assert_solution_finite(&result);
@@ -73,11 +72,9 @@ fn test_lsmr_least_squares_weighted_preconditioned() {
 
 #[test]
 fn test_lsmr_weighted() {
-    let design = common::make_weighted_design(
-        vec![vec![0, 1, 0, 1, 2], vec![0, 0, 1, 1, 0]],
-        within::ObservationWeights::Dense(vec![1.0, 2.0, 1.5, 0.5, 3.0]),
-    )
-    .expect("valid weighted design");
+    let design =
+        common::make_design(vec![vec![0, 1, 0, 1, 2], vec![0, 0, 1, 1, 0]]).expect("valid design");
+    let weights = vec![1.0, 2.0, 1.5, 0.5, 3.0];
     let y = vec![1.0, 2.0, 3.0, 4.0, 5.0];
 
     let params = SolverParams {
@@ -86,7 +83,8 @@ fn test_lsmr_weighted() {
         ..Default::default()
     };
     let precond = Preconditioner::default();
-    let solver = Solver::from_design(design, &params, Some(&precond)).expect("build solver");
+    let solver =
+        Solver::from_design(design, Some(weights), &params, Some(&precond)).expect("build solver");
     let result = solver.solve(&y).expect("solve");
     common::assert_converged_with_small_residual(&result, 1e-6);
     common::assert_solution_finite(&result);

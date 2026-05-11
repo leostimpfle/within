@@ -1,6 +1,6 @@
 //! Schwarz preconditioner: FE-specific construction helpers.
 //!
-//! This module bridges the fixed-effects domain types ([`WeightedDesign`],
+//! This module bridges the fixed-effects domain types ([`Design`],
 //! [`Subdomain`], `CrossTab`) to the generic `schwarz-precond` crate API.
 //! The generic crate knows nothing about panel data — it operates on abstract
 //! [`SubdomainEntry`] values containing a local solver and a set of global DOF

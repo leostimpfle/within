@@ -1,7 +1,9 @@
 use ndarray::Array2;
 use proptest::prelude::*;
-use within::observation::{ArrayStore, ObservationWeights};
-use within::{solve, Preconditioner, Solver, SolverParams, WeightedDesign};
+use schwarz_precond::Operator as _;
+use within::observation::ArrayStore;
+use within::operator::DesignOperator;
+use within::{solve, Design, Preconditioner, Solver, SolverParams};
 
 #[path = "common/orchestrate_helpers.rs"]
 mod common;
@@ -104,12 +106,14 @@ proptest! {
         };
         let precond = additive_precond();
         // Build the design with a unit-solution RHS so the problem is feasible
-        let store = ArrayStore::new(cats.view(), ObservationWeights::Unit).unwrap();
-        let design = WeightedDesign::from_store(store).unwrap();
+        let store = ArrayStore::new(cats.view()).unwrap();
+        let design = Design::from_store(store).unwrap();
         let y_feasible: Vec<f64> = {
             let x_true = vec![1.0; design.n_dofs];
             let mut y_out = vec![0.0; design.n_rows];
-            design.matvec_d(&x_true, &mut y_out);
+            DesignOperator::new(&design, None)
+                .apply(&x_true, &mut y_out)
+                .expect("apply succeeds");
             y_out
         };
         // Use y_feasible so convergence is guaranteed on a consistent system
@@ -177,7 +181,7 @@ proptest! {
         let n_obs = y.len();
         let n_factors = cats.ncols();
 
-        // Compute factor offsets (same ordering as WeightedDesign)
+        // Compute factor offsets (same ordering as Design)
         let mut offsets = vec![0usize; n_factors];
         for f in 1..n_factors {
             let n_levels_prev = *cats.column(f - 1).iter().max().unwrap() as usize + 1;
@@ -207,12 +211,14 @@ proptest! {
     #[test]
     fn prop_single_factor_converges((cats, _y) in single_factor_strategy()) {
         // Build a consistent RHS: y = D * 1 so the system is exactly solvable.
-        let store = ArrayStore::new(cats.view(), ObservationWeights::Unit).unwrap();
-        let design = WeightedDesign::from_store(store).unwrap();
+        let store = ArrayStore::new(cats.view()).unwrap();
+        let design = Design::from_store(store).unwrap();
         let n_levels = design.n_dofs;
         let x_true = vec![1.0; n_levels];
         let mut y_feasible = vec![0.0; design.n_rows];
-        design.matvec_d(&x_true, &mut y_feasible);
+        DesignOperator::new(&design, None)
+            .apply(&x_true, &mut y_feasible)
+            .expect("apply succeeds");
 
         // No preconditioner.
         let params = SolverParams {
