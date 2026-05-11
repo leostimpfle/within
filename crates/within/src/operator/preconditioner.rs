@@ -18,7 +18,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::config::Preconditioner;
 use crate::domain::Design;
-use crate::observation::Store;
+use crate::observation::{validate_weights, Store};
 use crate::operator::schwarz::{build_additive_with_strategy, FeSchwarz};
 use crate::WithinResult;
 
@@ -102,6 +102,7 @@ pub fn build_preconditioner<S: Store>(
 ) -> WithinResult<FePreconditioner> {
     use crate::domain::build_local_domains;
 
+    validate_weights(weights, design.n_rows)?;
     match config {
         Preconditioner::Additive(local, reduction) => {
             let domains = build_local_domains(design, weights);

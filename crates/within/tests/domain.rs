@@ -99,7 +99,7 @@ fn test_large_design_matvec_correctness() {
         let expected = if i % 50 == 0 { 1.0 } else { 0.0 };
         assert_eq!(
             yi, expected,
-            "matvec_d(e_0)[{i}]: expected {expected}, got {yi}"
+            "D·e_0 at row {i}: expected {expected}, got {yi}"
         );
     }
 }
@@ -133,7 +133,8 @@ proptest! {
     #![proptest_config(ProptestConfig::with_cases(10))]
 
     /// The adjoint property must hold for random designs:
-    /// <D·x, W·r> == <x, D^T·W·r>  (i.e., <D·x, W·r> == <x, rmatvec_wdt(weights, r)>)
+    /// <D·x, W·r> == <x, D^T·W·r>, with D^T·W·r computed via
+    /// DesignOperator::apply_adjoint(W^{1/2} r) = D^T W^{1/2} (W^{1/2} r) = D^T W r.
     #[test]
     fn prop_weighted_adjoint_property(
         n_obs in 20usize..=200,
@@ -405,7 +406,7 @@ fn test_single_factor_design_solve_without_precond() {
 }
 
 #[test]
-fn test_single_factor_matvec_d_values() {
+fn test_single_factor_apply_values() {
     // D·[a, b, c] with levels [0,1,2,0,1] should give [a, b, c, a, b]
     let categories = vec![vec![0u32, 1, 2, 0, 1]];
     let store = FactorMajorStore::new(categories, 5).expect("valid store");
@@ -418,7 +419,7 @@ fn test_single_factor_matvec_d_values() {
 }
 
 #[test]
-fn test_single_factor_rmatvec_dt_values() {
+fn test_single_factor_apply_adjoint_values() {
     // D^T·[1,2,3,4,5] with levels [0,1,2,0,1] should give [1+4, 2+5, 3] = [5, 7, 3]
     let categories = vec![vec![0u32, 1, 2, 0, 1]];
     let store = FactorMajorStore::new(categories, 5).expect("valid store");
