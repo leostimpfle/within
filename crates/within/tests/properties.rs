@@ -2,6 +2,7 @@ use ndarray::Array2;
 use proptest::prelude::*;
 use schwarz_precond::Operator;
 use within::observation::ArrayStore;
+use within::operator::DesignOperator;
 use within::{solve, Design, FePreconditioner, Preconditioner, SolverParams};
 
 /// Generate a random fixed-effects problem as (categories Array2<u32>, y Vec<f64>).
@@ -79,7 +80,9 @@ proptest! {
 
         let x_true: Vec<f64> = (0..n_dofs).map(|i| (i as f64 * 0.4).sin()).collect();
         let mut y = vec![0.0; n_obs];
-        design.matvec_d(&x_true, &mut y);
+        DesignOperator::new(&design, None)
+            .apply(&x_true, &mut y)
+            .expect("apply succeeds");
 
         // Use slightly relaxed tolerance — randomly generated problems can be
         // borderline at 1e-8 (e.g. residual 1.02e-8 after 13 iters).

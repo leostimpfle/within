@@ -3,8 +3,29 @@
 //! exercise partition-of-unity weights and disconnected bipartite structure.
 
 use proptest::prelude::*;
+use schwarz_precond::Operator as _;
 use within::observation::FactorMajorStore;
+use within::operator::DesignOperator;
 use within::Design;
+
+fn apply_d(dm: &Design<FactorMajorStore>, x: &[f64], y: &mut [f64]) {
+    DesignOperator::new(dm, None)
+        .apply(x, y)
+        .expect("apply succeeds");
+}
+
+fn apply_dt(dm: &Design<FactorMajorStore>, x: &[f64], y: &mut [f64]) {
+    DesignOperator::new(dm, None)
+        .apply_adjoint(x, y)
+        .expect("apply_adjoint succeeds");
+}
+
+fn apply_wdt(dm: &Design<FactorMajorStore>, weights: Option<&[f64]>, x: &[f64], y: &mut [f64]) {
+    // D^T W x = apply_adjoint(W^{1/2} x) for op = W^{1/2} D.
+    let op = DesignOperator::new(dm, weights);
+    let wx = op.weighted_rhs(x);
+    op.apply_adjoint(&wx, y).expect("apply_adjoint succeeds");
+}
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -46,10 +67,10 @@ fn test_large_design_adjoint_property_matvec_d_rmatvec_dt() {
     let r: Vec<f64> = (0..n_rows).map(|i| (i as f64 * 0.23 + 2.0).cos()).collect();
 
     let mut dx = vec![0.0f64; n_rows];
-    dm.matvec_d(&x, &mut dx);
+    apply_d(&dm, &x, &mut dx);
 
     let mut dtr = vec![0.0f64; n_dofs];
-    dm.rmatvec_dt(&r, &mut dtr);
+    apply_dt(&dm, &r, &mut dtr);
 
     let lhs = dot(&dx, &r);
     let rhs = dot(&x, &dtr);
@@ -72,7 +93,7 @@ fn test_large_design_matvec_correctness() {
     let mut ej = vec![0.0f64; n_dofs];
     ej[0] = 1.0;
     let mut y = vec![0.0f64; n_rows];
-    dm.matvec_d(&ej, &mut y);
+    apply_d(&dm, &ej, &mut y);
 
     for (i, &yi) in y.iter().enumerate() {
         let expected = if i % 50 == 0 { 1.0 } else { 0.0 };
@@ -92,7 +113,7 @@ fn test_large_design_rmatvec_dt_correctness() {
 
     let ones = vec![1.0f64; n_rows];
     let mut x = vec![0.0f64; n_dofs];
-    dm.rmatvec_dt(&ones, &mut x);
+    apply_dt(&dm, &ones, &mut x);
 
     // Each factor has 50 levels, 15,000 obs cycling → each level appears 300 times.
     let expected_count = (n_rows / 50) as f64;
@@ -146,7 +167,7 @@ proptest! {
 
         // <D·x, W·r>
         let mut dx = vec![0.0f64; n_rows];
-        dm.matvec_d(&x, &mut dx);
+        apply_d(&dm, &x, &mut dx);
         let lhs: f64 = dx
             .iter()
             .zip(r.iter())
@@ -156,7 +177,7 @@ proptest! {
 
         // <x, D^T·W·r>
         let mut wdtr = vec![0.0f64; n_dofs];
-        dm.rmatvec_wdt(Some(&weights), &r, &mut wdtr);
+        apply_wdt(&dm, Some(&weights), &r, &mut wdtr);
         let rhs: f64 = x.iter().zip(wdtr.iter()).map(|(xi, wi)| xi * wi).sum();
 
         prop_assert!(
@@ -195,7 +216,7 @@ fn test_three_factor_design_solve_converges() {
     // Build y = D·1 so the true normal-equation solution is 1.
     let x_true = vec![1.0f64; dm.n_dofs];
     let mut y = vec![0.0f64; dm.n_rows];
-    dm.matvec_d(&x_true, &mut y);
+    apply_d(&dm, &x_true, &mut y);
 
     // Use ndarray array2 as required by the solve() API.
     let n_factors = 3;
@@ -256,7 +277,7 @@ fn test_disconnected_design_larger_converges() {
 
     let x_true = vec![1.0f64; dm.n_dofs];
     let mut y = vec![0.0f64; dm.n_rows];
-    dm.matvec_d(&x_true, &mut y);
+    apply_d(&dm, &x_true, &mut y);
 
     let params = SolverParams {
         tol: 1e-8,
@@ -335,10 +356,10 @@ fn test_single_factor_design_adjoint_property() {
     let r: Vec<f64> = vec![0.5, 1.5, -0.5, 2.0, -1.0];
 
     let mut dx = vec![0.0f64; n_rows];
-    dm.matvec_d(&x, &mut dx);
+    apply_d(&dm, &x, &mut dx);
 
     let mut dtr = vec![0.0f64; n_dofs];
-    dm.rmatvec_dt(&r, &mut dtr);
+    apply_dt(&dm, &r, &mut dtr);
 
     let lhs = dot(&dx, &r);
     let rhs = dot(&x, &dtr);
@@ -392,7 +413,7 @@ fn test_single_factor_matvec_d_values() {
 
     let x = vec![10.0, 20.0, 30.0];
     let mut y = vec![0.0f64; 5];
-    dm.matvec_d(&x, &mut y);
+    apply_d(&dm, &x, &mut y);
     assert_eq!(y, vec![10.0, 20.0, 30.0, 10.0, 20.0]);
 }
 
@@ -405,6 +426,6 @@ fn test_single_factor_rmatvec_dt_values() {
 
     let r = vec![1.0, 2.0, 3.0, 4.0, 5.0];
     let mut x = vec![0.0f64; 3];
-    dm.rmatvec_dt(&r, &mut x);
+    apply_dt(&dm, &r, &mut x);
     assert_eq!(x, vec![5.0, 7.0, 3.0]);
 }

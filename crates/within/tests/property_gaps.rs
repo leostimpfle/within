@@ -1,6 +1,8 @@
 use ndarray::Array2;
 use proptest::prelude::*;
+use schwarz_precond::Operator as _;
 use within::observation::ArrayStore;
+use within::operator::DesignOperator;
 use within::{solve, Design, Preconditioner, Solver, SolverParams};
 
 #[path = "common/orchestrate_helpers.rs"]
@@ -109,7 +111,9 @@ proptest! {
         let y_feasible: Vec<f64> = {
             let x_true = vec![1.0; design.n_dofs];
             let mut y_out = vec![0.0; design.n_rows];
-            design.matvec_d(&x_true, &mut y_out);
+            DesignOperator::new(&design, None)
+                .apply(&x_true, &mut y_out)
+                .expect("apply succeeds");
             y_out
         };
         // Use y_feasible so convergence is guaranteed on a consistent system
@@ -212,7 +216,9 @@ proptest! {
         let n_levels = design.n_dofs;
         let x_true = vec![1.0; n_levels];
         let mut y_feasible = vec![0.0; design.n_rows];
-        design.matvec_d(&x_true, &mut y_feasible);
+        DesignOperator::new(&design, None)
+            .apply(&x_true, &mut y_feasible)
+            .expect("apply succeeds");
 
         // No preconditioner.
         let params = SolverParams {

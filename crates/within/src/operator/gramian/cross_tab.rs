@@ -444,7 +444,7 @@ fn accumulate_dense_cross_block<S: Store>(
         if cj == u32::MAX || ck == u32::MAX {
             continue;
         }
-        let w = Design::<S>::uid_weight(weights, uid);
+        let w = weights.map_or(1.0, |w| w[uid]);
         debug_assert!((cj as usize) < n_q && (ck as usize) < n_r);
         diag_q[cj as usize] += w;
         diag_r[ck as usize] += w;
@@ -485,7 +485,7 @@ fn accumulate_sparse_cross_block<S: Store>(
         if cj == u32::MAX || ck == u32::MAX {
             continue;
         }
-        let w = Design::<S>::uid_weight(weights, uid);
+        let w = weights.map_or(1.0, |w| w[uid]);
         diag_q[cj as usize] += w;
         diag_r[ck as usize] += w;
         row_counts[cj as usize] += 1;
@@ -510,7 +510,7 @@ fn accumulate_sparse_cross_block<S: Store>(
         if cj == u32::MAX || ck == u32::MAX {
             continue;
         }
-        let w = Design::<S>::uid_weight(weights, uid);
+        let w = weights.map_or(1.0, |w| w[uid]);
         let pos = cursor[cj as usize] as usize;
         bucket_cols[pos] = ck;
         bucket_vals[pos] = w;

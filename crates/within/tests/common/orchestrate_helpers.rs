@@ -1,5 +1,7 @@
 #![allow(dead_code)]
 
+use schwarz_precond::Operator as _;
+use within::operator::DesignOperator;
 use within::{Design, FactorMajorStore, SolveResult};
 
 pub fn make_test_design() -> Design<FactorMajorStore> {
@@ -16,7 +18,9 @@ pub fn make_design(categories: Vec<Vec<u32>>) -> within::WithinResult<Design<Fac
 pub fn make_y_from_unit_solution(design: &Design<FactorMajorStore>) -> Vec<f64> {
     let x_true = vec![1.0; design.n_dofs];
     let mut y = vec![0.0; design.n_rows];
-    design.matvec_d(&x_true, &mut y);
+    DesignOperator::new(design, None)
+        .apply(&x_true, &mut y)
+        .expect("apply succeeds");
     y
 }
 

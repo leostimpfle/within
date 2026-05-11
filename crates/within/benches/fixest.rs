@@ -82,7 +82,9 @@ fn generate_fixest_like_case(case: Case, seed: u64) -> (Design<FactorMajorStore>
     }
 
     let mut y = vec![0.0; case.n_obs];
-    design.matvec_d(&x_true, &mut y);
+    DesignOperator::new(&design, None)
+        .apply(&x_true, &mut y)
+        .expect("apply succeeds");
     for yi in &mut y {
         *yi += 0.1 * rng.random_range(-1.0..1.0);
     }

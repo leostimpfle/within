@@ -36,7 +36,7 @@ use std::time::Instant;
 
 use ndarray::ArrayView2;
 use rayon::prelude::*;
-use schwarz_precond::{lsmr, mlsmr};
+use schwarz_precond::{lsmr, mlsmr, Operator as _};
 
 use crate::operator::DesignOperator;
 
@@ -129,18 +129,24 @@ impl<S: Store> Solver<S> {
 
         let time_solve = t_solve_start.elapsed().as_secs_f64();
 
+        // demeaned = y - D x. The bare unweighted `D x` matvec uses an
+        // unweighted DesignOperator over the same design.
+        let bare_op = DesignOperator::new(&self.design, None);
         let mut demeaned = vec![0.0; self.design.n_rows];
-        self.design.matvec_d(&r.x, &mut demeaned);
+        bare_op.apply(&r.x, &mut demeaned)?;
         for (d, &yi) in demeaned.iter_mut().zip(y.iter()) {
             *d = yi - *d;
         }
 
-        let w_ref = self.weights.as_deref();
+        // Relative normal-equation residual: ||D^T W (y - Dx)|| / ||D^T W y||.
+        // Compute D^T W v as rect_op.apply_adjoint(W^{1/2} v): apply_adjoint
+        // delivers D^T W^{1/2} (·), so feeding W^{1/2} v gives D^T W v.
         let mut rhs = vec![0.0; self.design.n_dofs];
-        self.design.rmatvec_wdt(w_ref, y, &mut rhs);
+        rect_op.apply_adjoint(&b, &mut rhs)?;
         let rhs_norm = norm(&rhs).max(1e-15);
+        let weighted_demeaned = rect_op.weighted_rhs(&demeaned);
         let mut residual_dof = vec![0.0; self.design.n_dofs];
-        self.design.rmatvec_wdt(w_ref, &demeaned, &mut residual_dof);
+        rect_op.apply_adjoint(&weighted_demeaned, &mut residual_dof)?;
         let final_residual = norm(&residual_dof) / rhs_norm;
 
         Ok(SolveResult {
