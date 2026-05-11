@@ -138,5 +138,5 @@ pub use error::{
 };
 pub use local_solve::{LocalSolver, SubdomainEntry};
 pub use lsmr::{lsmr, mlsmr, LsmrResult, LsmrStopReason};
-pub use schwarz::{AdditiveSchwarzDiagnostics, ReductionStrategy, SchwarzPreconditioner};
+pub use schwarz::{ReductionStrategy, SchwarzPreconditioner};
 pub use sparse_matrix::SparseMatrix;

@@ -601,9 +601,15 @@ mod schwarz_tests {
                 reduction.resolved_reduction_strategy(),
                 ReductionStrategy::ParallelReduction
             );
-            assert_eq!(reduction.diagnostics().n_subdomains(), 2);
+            assert_eq!(reduction.subdomains().len(), 2);
+            let max_inner_work = reduction
+                .subdomains()
+                .iter()
+                .map(|entry| entry.solver().inner_parallelism_work_estimate())
+                .max()
+                .unwrap_or(0);
             assert!(
-                reduction.diagnostics().max_inner_parallel_work() > 200_000,
+                max_inner_work > 200_000,
                 "test setup must force nested local-solver parallelism"
             );
 
