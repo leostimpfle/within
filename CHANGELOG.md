@@ -54,6 +54,12 @@ Modified LSMR is now the sole iterative solver, replacing CG and GMRES.
   `FePreconditioner::additive_schwarz_diagnostics`, and the Python
   `AdditiveSchwarzDiagnostics` class. Scheduling metrics are now private
   to the `Auto` heuristic (closes #34).
+- **BREAKING:** `Operator::apply` / `apply_adjoint` now return
+  `Result<(), SolveError>`; the infallible pair and the `try_apply` /
+  `try_apply_adjoint` defaults are gone. `ApplyError` is removed; its
+  variants moved onto `SolveError`. `PyFePreconditioner.apply` raises
+  `RuntimeError` on local-solver failure instead of returning NaNs
+  (closes #29).
 
 ## [0.1.0] - 2026-03-12
 

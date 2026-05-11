@@ -61,8 +61,8 @@ proptest! {
 
         let mut y1 = vec![0.0; n];
         let mut y2 = vec![0.0; n];
-        fe_precond.apply(&x, &mut y1);
-        deserialized.apply(&x, &mut y2);
+        fe_precond.apply(&x, &mut y1).expect("apply succeeds");
+        deserialized.apply(&x, &mut y2).expect("deserialized apply succeeds");
 
         for (a, b) in y1.iter().zip(y2.iter()) {
             prop_assert!((a - b).abs() < 1e-12, "serde roundtrip mismatch: {} vs {}", a, b);

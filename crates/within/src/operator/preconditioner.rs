@@ -9,9 +9,9 @@
 //! # Integration with `schwarz-precond`
 //!
 //! The enum implements the [`Operator`] trait from the `schwarz-precond`
-//! crate, so it can be passed directly to LSMR as a preconditioner. Error
-//! handling flows through `try_apply` for graceful reporting of local-solver
-//! failures.
+//! crate, so it can be passed directly to LSMR as a preconditioner. The
+//! `apply` method is fallible — local-solver failures propagate to the
+//! caller as `SolveError`.
 
 use schwarz_precond::{LocalSolver, Operator, ReductionStrategy};
 use serde::{Deserialize, Serialize};
@@ -80,31 +80,15 @@ impl Operator for FePreconditioner {
         }
     }
 
-    fn apply(&self, x: &[f64], y: &mut [f64]) {
+    fn apply(&self, x: &[f64], y: &mut [f64]) -> Result<(), schwarz_precond::SolveError> {
         match self {
             Self::Additive(p) => p.apply(x, y),
         }
     }
 
-    fn apply_adjoint(&self, x: &[f64], y: &mut [f64]) {
+    fn apply_adjoint(&self, x: &[f64], y: &mut [f64]) -> Result<(), schwarz_precond::SolveError> {
         match self {
             Self::Additive(p) => p.apply_adjoint(x, y),
-        }
-    }
-
-    fn try_apply(&self, x: &[f64], y: &mut [f64]) -> Result<(), schwarz_precond::ApplyError> {
-        match self {
-            Self::Additive(p) => p.try_apply(x, y),
-        }
-    }
-
-    fn try_apply_adjoint(
-        &self,
-        x: &[f64],
-        y: &mut [f64],
-    ) -> Result<(), schwarz_precond::ApplyError> {
-        match self {
-            Self::Additive(p) => p.try_apply_adjoint(x, y),
         }
     }
 }

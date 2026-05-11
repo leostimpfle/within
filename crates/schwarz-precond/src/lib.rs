@@ -92,31 +92,22 @@
 ///
 /// Preconditioners are operators too (M^{-1} is a linear map).
 /// All implementors must be Send + Sync to enable Rayon parallelism.
+///
+/// Both apply methods are fallible: implementors that cannot fail in practice
+/// (matrices, identity operators) still return `Result<(), SolveError>` so
+/// callers can use a uniform `?` propagation path. Symmetric operators
+/// should delegate `apply_adjoint` to `apply`.
 pub trait Operator: Send + Sync {
     /// Number of rows in the operator.
     fn nrows(&self) -> usize;
     /// Number of columns in the operator.
     fn ncols(&self) -> usize;
-    /// y = A*x
-    fn apply(&self, x: &[f64], y: &mut [f64]);
+    /// Computes y = A * x. Returns an error if the apply fails at runtime
+    /// (e.g. a local subdomain solver diverges).
+    fn apply(&self, x: &[f64], y: &mut [f64]) -> Result<(), error::SolveError>;
     /// Computes y = A^T * x. For symmetric operators, this should delegate to `apply`.
-    fn apply_adjoint(&self, x: &[f64], y: &mut [f64]);
-
-    /// Fallible version of [`Operator::apply`].
-    ///
-    /// Implementors with runtime failure modes should override this.
-    fn try_apply(&self, x: &[f64], y: &mut [f64]) -> Result<(), error::ApplyError> {
-        self.apply(x, y);
-        Ok(())
-    }
-
-    /// Fallible version of [`Operator::apply_adjoint`].
-    ///
-    /// Implementors with runtime failure modes should override this.
-    fn try_apply_adjoint(&self, x: &[f64], y: &mut [f64]) -> Result<(), error::ApplyError> {
-        self.apply_adjoint(x, y);
-        Ok(())
-    }
+    /// Returns an error under the same conditions as `apply`.
+    fn apply_adjoint(&self, x: &[f64], y: &mut [f64]) -> Result<(), error::SolveError>;
 }
 
 // ============================================================================
@@ -133,7 +124,7 @@ mod sparse_matrix;
 
 pub use domain::{PartitionWeights, SubdomainCore};
 pub use error::{
-    ApplyError, LocalSolveError, PreconditionerBuildError, SolveError, SubdomainCoreBuildError,
+    LocalSolveError, PreconditionerBuildError, SolveError, SubdomainCoreBuildError,
     SubdomainEntryBuildError,
 };
 pub use local_solve::{LocalSolver, SubdomainEntry};

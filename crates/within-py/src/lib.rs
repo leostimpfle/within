@@ -602,10 +602,11 @@ impl PyFePreconditioner {
             )));
         }
         let mut y = vec![0.0; self.inner.nrows()];
-        self.inner.apply(x_slice, &mut y);
+        self.inner
+            .apply(x_slice, &mut y)
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
         Ok(numpy::PyArray1::from_vec(py, y))
     }
-
     /// Number of rows (DOFs).
     #[getter]
     fn nrows(&self) -> usize {

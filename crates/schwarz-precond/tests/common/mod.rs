@@ -2,7 +2,9 @@
 
 #![allow(dead_code)]
 
-use schwarz_precond::{LocalSolveError, LocalSolver, Operator, SubdomainCore, SubdomainEntry};
+use schwarz_precond::{
+    LocalSolveError, LocalSolver, Operator, SolveError, SubdomainCore, SubdomainEntry,
+};
 
 // ---------------------------------------------------------------------------
 // Operators
@@ -27,7 +29,7 @@ impl Operator for TridiagOperator {
     fn ncols(&self) -> usize {
         self.n
     }
-    fn apply(&self, x: &[f64], y: &mut [f64]) {
+    fn apply(&self, x: &[f64], y: &mut [f64]) -> Result<(), SolveError> {
         for i in 0..self.n {
             y[i] = self.diag_val * x[i];
             if i > 0 {
@@ -37,9 +39,10 @@ impl Operator for TridiagOperator {
                 y[i] -= x[i + 1];
             }
         }
+        Ok(())
     }
-    fn apply_adjoint(&self, x: &[f64], y: &mut [f64]) {
-        self.apply(x, y);
+    fn apply_adjoint(&self, x: &[f64], y: &mut [f64]) -> Result<(), SolveError> {
+        self.apply(x, y)
     }
 }
 
@@ -142,7 +145,7 @@ impl LocalSolver for FailingLocalSolver {
 pub fn check_residual<A: Operator>(op: &A, x: &[f64], b: &[f64], tol: f64) {
     let n = b.len();
     let mut ax = vec![0.0; n];
-    op.apply(x, &mut ax);
+    op.apply(x, &mut ax).expect("apply succeeds");
     let err: f64 = ax
         .iter()
         .zip(b.iter())

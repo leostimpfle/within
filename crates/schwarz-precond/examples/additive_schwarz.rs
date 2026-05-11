@@ -4,8 +4,8 @@
 //! subdomains and diagonal local solvers.
 
 use schwarz_precond::{
-    lsmr, mlsmr, LocalSolveError, LocalSolver, Operator, SchwarzPreconditioner, SubdomainCore,
-    SubdomainEntry,
+    lsmr, mlsmr, LocalSolveError, LocalSolver, Operator, SchwarzPreconditioner, SolveError,
+    SubdomainCore, SubdomainEntry,
 };
 
 // ---------------------------------------------------------------------------
@@ -23,7 +23,7 @@ impl Operator for TridiagOperator {
     fn ncols(&self) -> usize {
         self.n
     }
-    fn apply(&self, x: &[f64], y: &mut [f64]) {
+    fn apply(&self, x: &[f64], y: &mut [f64]) -> Result<(), SolveError> {
         for i in 0..self.n {
             y[i] = 3.0 * x[i];
             if i > 0 {
@@ -33,12 +33,12 @@ impl Operator for TridiagOperator {
                 y[i] -= x[i + 1];
             }
         }
+        Ok(())
     }
-    fn apply_adjoint(&self, x: &[f64], y: &mut [f64]) {
-        self.apply(x, y); // symmetric
+    fn apply_adjoint(&self, x: &[f64], y: &mut [f64]) -> Result<(), SolveError> {
+        self.apply(x, y) // symmetric
     }
 }
-
 // ---------------------------------------------------------------------------
 // Diagonal local solver: y = rhs / diag_val
 // ---------------------------------------------------------------------------
