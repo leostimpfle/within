@@ -18,6 +18,7 @@ ndarray = "0.16"
 portable-atomic = { version = "1", features = ["float"] }
 rayon = "1.10"
 faer = "0.24.0"
+thiserror = "2"
 
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports"] }

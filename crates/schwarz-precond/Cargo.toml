@@ -16,4 +16,5 @@ serde = ["dep:serde"]
 rayon = "1.10"
 faer = "0.24.0"
 serde = { version = "1", features = ["derive"], optional = true }
+thiserror = "2"
 thread_local = "1.1"

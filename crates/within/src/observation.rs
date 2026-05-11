@@ -44,7 +44,7 @@
 
 use ndarray::ArrayView2;
 
-use crate::error::{WithinError, WithinResult};
+use crate::error::BuildError;
 
 // ---------------------------------------------------------------------------
 // FactorMeta — per-factor metadata (no observation data)
@@ -107,10 +107,10 @@ pub struct FactorMajorStore {
 
 impl FactorMajorStore {
     /// Create a new factor-major store, validating that all columns have length `n_obs`.
-    pub fn new(factor_levels: Vec<Vec<u32>>, n_obs: usize) -> WithinResult<Self> {
+    pub fn new(factor_levels: Vec<Vec<u32>>, n_obs: usize) -> Result<Self, BuildError> {
         for (factor, col) in factor_levels.iter().enumerate() {
             if col.len() != n_obs {
-                return Err(WithinError::ObservationCountMismatch {
+                return Err(BuildError::ObservationCountMismatch {
                     factor,
                     expected: n_obs,
                     got: col.len(),
@@ -173,7 +173,7 @@ pub struct ArrayStore<'a> {
 
 impl<'a> ArrayStore<'a> {
     /// Create a zero-copy store from a borrowed 2-D category array.
-    pub fn new(categories: ArrayView2<'a, u32>) -> WithinResult<Self> {
+    pub fn new(categories: ArrayView2<'a, u32>) -> Result<Self, BuildError> {
         Ok(Self { categories })
     }
 }
@@ -217,10 +217,10 @@ impl Store for ArrayStore<'_> {
 ///
 /// `None` is always valid (interpreted as unit weights). `Some(w)` requires
 /// `w.len() == n_obs`.
-pub(crate) fn validate_weights(weights: Option<&[f64]>, n_obs: usize) -> WithinResult<()> {
+pub(crate) fn validate_weights(weights: Option<&[f64]>, n_obs: usize) -> Result<(), BuildError> {
     if let Some(w) = weights {
         if w.len() != n_obs {
-            return Err(WithinError::WeightCountMismatch {
+            return Err(BuildError::WeightCountMismatch {
                 expected: n_obs,
                 got: w.len(),
             });

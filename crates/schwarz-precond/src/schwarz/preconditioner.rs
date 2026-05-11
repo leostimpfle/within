@@ -6,7 +6,7 @@
 //! the executor. `apply` is lock-free in steady state (buffers are
 //! borrowed from a pool).
 
-use crate::error::{validate_entries, PreconditionerBuildError, SolveError};
+use crate::error::{validate_entries, BuildError, SolveError};
 use crate::local_solve::{LocalSolver, SubdomainEntry};
 use crate::Operator;
 
@@ -77,10 +77,7 @@ pub struct SchwarzPreconditioner<S: LocalSolver> {
 
 impl<S: LocalSolver> SchwarzPreconditioner<S> {
     /// Construct from pre-built subdomain entries using the default strategy.
-    pub fn new(
-        entries: Vec<SubdomainEntry<S>>,
-        n_dofs: usize,
-    ) -> Result<Self, PreconditionerBuildError> {
+    pub fn new(entries: Vec<SubdomainEntry<S>>, n_dofs: usize) -> Result<Self, BuildError> {
         Self::with_strategy(entries, n_dofs, ReductionStrategy::default())
     }
 
@@ -89,7 +86,7 @@ impl<S: LocalSolver> SchwarzPreconditioner<S> {
         entries: Vec<SubdomainEntry<S>>,
         n_dofs: usize,
         strategy: ReductionStrategy,
-    ) -> Result<Self, PreconditionerBuildError> {
+    ) -> Result<Self, BuildError> {
         validate_entries(&entries, n_dofs)?;
         let max_scratch_size = entries
             .iter()

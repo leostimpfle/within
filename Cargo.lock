@@ -1664,6 +1664,7 @@ dependencies = [
  "faer",
  "rayon",
  "serde",
+ "thiserror 2.0.18",
  "thread_local",
 ]
 
@@ -2324,6 +2325,7 @@ dependencies = [
  "rayon",
  "schwarz-precond",
  "serde",
+ "thiserror 2.0.18",
 ]
 
 [[package]]

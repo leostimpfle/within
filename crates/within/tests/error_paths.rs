@@ -1,9 +1,9 @@
 use std::error::Error;
 
 use ndarray::Array2;
-use schwarz_precond::{PreconditionerBuildError, SolveError};
+use schwarz_precond::SolveError;
 use within::observation::FactorMajorStore;
-use within::{solve, Design, Preconditioner, Solver, SolverParams, WithinError};
+use within::{solve, BuildError, Design, Preconditioner, Solver, SolverParams, WithinError};
 
 #[test]
 fn test_empty_observations_error() {
@@ -12,7 +12,7 @@ fn test_empty_observations_error() {
     let result = Design::from_store(store);
     assert!(result.is_err());
     match result.unwrap_err() {
-        WithinError::EmptyObservations => {}
+        BuildError::EmptyObservations => {}
         other => panic!("Expected EmptyObservations, got: {:?}", other),
     }
 }
@@ -23,7 +23,7 @@ fn test_observation_count_mismatch_error() {
     let result = FactorMajorStore::new(vec![vec![0, 1, 2], vec![0, 1]], 3);
     assert!(result.is_err());
     match result.unwrap_err() {
-        WithinError::ObservationCountMismatch { .. } => {}
+        BuildError::ObservationCountMismatch { .. } => {}
         other => panic!("Expected ObservationCountMismatch, got: {:?}", other),
     }
 }
@@ -39,7 +39,7 @@ fn test_weight_count_mismatch_error() {
         .err()
         .expect("expected WeightCountMismatch error, got Ok");
     match err {
-        WithinError::WeightCountMismatch { .. } => {}
+        BuildError::WeightCountMismatch { .. } => {}
         other => panic!("Expected WeightCountMismatch, got: {:?}", other),
     }
 }
@@ -52,21 +52,28 @@ fn test_empty_categories_via_solve() {
     let precond = Preconditioner::default();
     let result = solve(cats.view(), &y, None, &params, Some(&precond));
     assert!(result.is_err());
+    match result.unwrap_err() {
+        WithinError::Build(BuildError::EmptyObservations) => {}
+        other => panic!(
+            "Expected Build(EmptyObservations) via solve(), got: {:?}",
+            other
+        ),
+    }
 }
 
 // ---------------------------------------------------------------------------
-// Display tests for all WithinError variants
+// Display tests for BuildError variants
 // ---------------------------------------------------------------------------
 
 #[test]
-fn test_within_error_display_empty_observations() {
-    let e = WithinError::EmptyObservations;
+fn test_build_error_display_empty_observations() {
+    let e = BuildError::EmptyObservations;
     assert_eq!(e.to_string(), "no observations provided");
 }
 
 #[test]
-fn test_within_error_display_observation_count_mismatch() {
-    let e = WithinError::ObservationCountMismatch {
+fn test_build_error_display_observation_count_mismatch() {
+    let e = BuildError::ObservationCountMismatch {
         factor: 1,
         expected: 10,
         got: 5,
@@ -78,8 +85,8 @@ fn test_within_error_display_observation_count_mismatch() {
 }
 
 #[test]
-fn test_within_error_display_weight_count_mismatch() {
-    let e = WithinError::WeightCountMismatch {
+fn test_build_error_display_weight_count_mismatch() {
+    let e = BuildError::WeightCountMismatch {
         expected: 10,
         got: 5,
     };
@@ -89,8 +96,8 @@ fn test_within_error_display_weight_count_mismatch() {
 }
 
 #[test]
-fn test_within_error_display_singular_diagonal() {
-    let e = WithinError::SingularDiagonal {
+fn test_build_error_display_singular_diagonal() {
+    let e = BuildError::SingularDiagonal {
         block: "test_block",
         index: 42,
     };
@@ -100,29 +107,39 @@ fn test_within_error_display_singular_diagonal() {
 }
 
 #[test]
-fn test_within_error_display_local_solver_build() {
-    let e = WithinError::LocalSolverBuild("factorization failed".to_string());
+fn test_build_error_display_local_solver_build() {
+    let e = BuildError::LocalSolverBuild("factorization failed".to_string());
     assert!(e.to_string().contains("factorization failed"));
 }
 
 #[test]
-fn test_within_error_display_preconditioner_build() {
-    let inner = PreconditionerBuildError::GlobalIndexOutOfBounds {
+fn test_build_error_display_preconditioner() {
+    let inner = schwarz_precond::BuildError::GlobalIndexOutOfBounds {
         subdomain: 0,
         local_index: 1,
         global_index: 5,
         n_dofs: 3,
     };
-    let e = WithinError::PreconditionerBuild(inner);
+    let e = BuildError::Preconditioner(inner);
     let s = e.to_string();
     assert!(s.contains("5"));
     assert!(s.contains("3"));
 }
 
+// ---------------------------------------------------------------------------
+// Display tests for WithinError union
+// ---------------------------------------------------------------------------
+
 #[test]
-fn test_within_error_display_iterative_solve() {
+fn test_within_error_display_build() {
+    let e = WithinError::Build(BuildError::EmptyObservations);
+    assert_eq!(e.to_string(), "no observations provided");
+}
+
+#[test]
+fn test_within_error_display_solve() {
     let inner = SolveError::Synchronization { context: "test" };
-    let e = WithinError::IterativeSolve(inner);
+    let e = WithinError::Solve(inner);
     assert!(e.to_string().contains("test"));
 }
 
@@ -131,23 +148,23 @@ fn test_within_error_display_iterative_solve() {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn test_within_error_source_none_variants() {
-    let variants: Vec<WithinError> = vec![
-        WithinError::EmptyObservations,
-        WithinError::ObservationCountMismatch {
+fn test_build_error_source_leaf_variants_have_no_source() {
+    let variants: Vec<BuildError> = vec![
+        BuildError::EmptyObservations,
+        BuildError::ObservationCountMismatch {
             factor: 0,
             expected: 1,
             got: 2,
         },
-        WithinError::WeightCountMismatch {
+        BuildError::WeightCountMismatch {
             expected: 1,
             got: 2,
         },
-        WithinError::SingularDiagonal {
+        BuildError::SingularDiagonal {
             block: "b",
             index: 0,
         },
-        WithinError::LocalSolverBuild("x".to_string()),
+        BuildError::LocalSolverBuild("x".to_string()),
     ];
     for e in &variants {
         assert!(e.source().is_none(), "expected None source for {:?}", e);
@@ -155,40 +172,56 @@ fn test_within_error_source_none_variants() {
 }
 
 #[test]
-fn test_within_error_source_preconditioner_build() {
-    let inner = PreconditionerBuildError::GlobalIndexOutOfBounds {
+fn test_build_error_source_preconditioner_chains() {
+    let inner = schwarz_precond::BuildError::GlobalIndexOutOfBounds {
         subdomain: 0,
         local_index: 1,
         global_index: 5,
         n_dofs: 3,
     };
-    let e = WithinError::PreconditionerBuild(inner);
+    let e = BuildError::Preconditioner(inner);
     assert!(e.source().is_some());
 }
 
 #[test]
-fn test_within_error_source_iterative_solve() {
-    let inner = SolveError::Synchronization { context: "test" };
-    let e = WithinError::IterativeSolve(inner);
-    assert!(e.source().is_some());
+fn test_within_error_build_leaf_variant_has_no_source() {
+    // WithinError::Build is transparent, so source() forwards to the inner
+    // BuildError's source. A leaf variant has no underlying source.
+    let e = WithinError::Build(BuildError::EmptyObservations);
+    assert!(e.source().is_none());
 }
 
-// ---------------------------------------------------------------------------
-// From conversions
-// ---------------------------------------------------------------------------
-
 #[test]
-fn test_within_error_from_preconditioner_build_error() {
-    let inner = PreconditionerBuildError::GlobalIndexOutOfBounds {
+fn test_within_error_build_preconditioner_chains_through_transparent_wrapper() {
+    // Transparent: WithinError -> (BuildError::Preconditioner via #[source]) -> schwarz_precond::BuildError
+    let inner = schwarz_precond::BuildError::GlobalIndexOutOfBounds {
         subdomain: 0,
-        local_index: 0,
-        global_index: 100,
-        n_dofs: 50,
+        local_index: 1,
+        global_index: 5,
+        n_dofs: 3,
     };
+    let e = WithinError::Build(BuildError::Preconditioner(inner));
+    assert!(e.source().is_some());
+}
+
+#[test]
+fn test_within_error_solve_leaf_variant_has_no_source() {
+    let inner = SolveError::Synchronization { context: "test" };
+    let e = WithinError::Solve(inner);
+    assert!(e.source().is_none());
+}
+
+// ---------------------------------------------------------------------------
+// Convenience-wrapper From conversions
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_within_error_from_build_error() {
+    let inner = BuildError::EmptyObservations;
     let e: WithinError = inner.into();
     match e {
-        WithinError::PreconditionerBuild(_) => {}
-        other => panic!("expected PreconditionerBuild, got: {:?}", other),
+        WithinError::Build(BuildError::EmptyObservations) => {}
+        other => panic!("expected Build(EmptyObservations), got: {:?}", other),
     }
 }
 
@@ -197,7 +230,7 @@ fn test_within_error_from_solve_error() {
     let inner = SolveError::Synchronization { context: "test" };
     let e: WithinError = inner.into();
     match e {
-        WithinError::IterativeSolve(_) => {}
-        other => panic!("expected IterativeSolve, got: {:?}", other),
+        WithinError::Solve(_) => {}
+        other => panic!("expected Solve, got: {:?}", other),
     }
 }

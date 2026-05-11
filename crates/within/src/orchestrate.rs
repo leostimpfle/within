@@ -29,7 +29,7 @@ use std::time::Instant;
 use ndarray::ArrayView2;
 
 use crate::config::{Preconditioner, SolverParams};
-use crate::WithinResult;
+use crate::WithinError;
 
 /// Common solve output for all orchestration entry points.
 #[derive(Debug, Clone)]
@@ -154,7 +154,7 @@ pub fn solve(
     weights: Option<&[f64]>,
     params: &SolverParams,
     preconditioner: Option<&Preconditioner>,
-) -> WithinResult<SolveResult> {
+) -> Result<SolveResult, WithinError> {
     let t_start = Instant::now();
     let solver = crate::solver::Solver::new(categories, weights, params, preconditioner)?;
     let time_setup = t_start.elapsed().as_secs_f64();
@@ -175,7 +175,7 @@ pub fn solve_batch(
     weights: Option<&[f64]>,
     params: &SolverParams,
     preconditioner: Option<&Preconditioner>,
-) -> WithinResult<BatchSolveResult> {
+) -> Result<BatchSolveResult, WithinError> {
     let t_start = Instant::now();
     let solver = crate::solver::Solver::new(categories, weights, params, preconditioner)?;
     let mut result = solver.solve_batch(ys)?;

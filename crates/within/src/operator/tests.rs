@@ -308,7 +308,7 @@ mod schur_complement_tests {
 
         let result = ExactSchurComplement.compute(&cross_tab);
         match result {
-            Err(crate::WithinError::SingularDiagonal { index: 2, .. }) => {}
+            Err(crate::BuildError::SingularDiagonal { index: 2, .. }) => {}
             Err(e) => panic!("expected SingularDiagonal at index 2, got: {e}"),
             Ok(_) => panic!("expected SingularDiagonal error, got Ok"),
         }

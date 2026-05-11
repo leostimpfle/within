@@ -115,7 +115,7 @@ pub fn make_schwarz_entries(n: usize) -> Vec<SubdomainEntry<UniformDiagLocalSolv
     entries
 }
 
-/// Local solver that always fails with `ApproxCholSolveFailed`.
+/// Local solver that always fails with `BackendFailed`.
 pub struct FailingLocalSolver {
     pub n_local: usize,
     pub scratch_size: usize,
@@ -134,7 +134,7 @@ impl LocalSolver for FailingLocalSolver {
         _sol: &mut [f64],
         _allow_inner_parallelism: bool,
     ) -> Result<(), LocalSolveError> {
-        Err(LocalSolveError::ApproxCholSolveFailed {
+        Err(LocalSolveError::BackendFailed {
             context: "test.failing_local_solver",
             message: format!("deliberate failure for n={}", self.n_local),
         })

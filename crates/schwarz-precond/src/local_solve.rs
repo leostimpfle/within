@@ -15,7 +15,7 @@
 use std::sync::atomic::AtomicU64;
 
 use crate::domain::SubdomainCore;
-use crate::error::{LocalSolveError, SubdomainEntryBuildError};
+use crate::error::{BuildError, LocalSolveError};
 
 // ---------------------------------------------------------------------------
 // LocalSolver trait
@@ -78,11 +78,11 @@ pub struct SubdomainEntry<S: LocalSolver> {
 
 impl<S: LocalSolver> SubdomainEntry<S> {
     /// Create a validated subdomain entry from a core and a local solver.
-    pub fn try_new(core: SubdomainCore, solver: S) -> Result<Self, SubdomainEntryBuildError> {
+    pub fn try_new(core: SubdomainCore, solver: S) -> Result<Self, BuildError> {
         let index_count = core.n_local();
         let solver_n_local = solver.n_local();
         if solver_n_local != index_count {
-            return Err(SubdomainEntryBuildError::LocalDofCountMismatch {
+            return Err(BuildError::LocalDofCountMismatch {
                 index_count,
                 solver_n_local,
             });
@@ -90,7 +90,7 @@ impl<S: LocalSolver> SubdomainEntry<S> {
 
         let scratch_size = solver.scratch_size();
         if scratch_size < index_count {
-            return Err(SubdomainEntryBuildError::ScratchSizeTooSmall {
+            return Err(BuildError::ScratchSizeTooSmall {
                 scratch_size,
                 required_min: index_count,
             });

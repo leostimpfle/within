@@ -38,7 +38,7 @@ use super::schur_complement::{
 };
 use crate::config::{ApproxCholConfig, ApproxSchurConfig, LocalSolverConfig};
 use crate::domain::Subdomain;
-use crate::{WithinError, WithinResult};
+use crate::BuildError;
 
 /// Concrete additive Schwarz type used in the parent crate.
 #[derive(Clone, Serialize, Deserialize)]
@@ -103,17 +103,18 @@ pub(crate) fn build_additive_with_strategy(
     n_dofs: usize,
     config: &LocalSolverConfig,
     strategy: schwarz_precond::ReductionStrategy,
-) -> WithinResult<FeSchwarz> {
+) -> Result<FeSchwarz, BuildError> {
     let entries = build_entries_from_pairs(domains, config)?;
-    Ok(FeSchwarz::new(SchwarzPreconditioner::with_strategy(
-        entries, n_dofs, strategy,
-    )?))
+    Ok(FeSchwarz::new(
+        SchwarzPreconditioner::with_strategy(entries, n_dofs, strategy)
+            .map_err(BuildError::Preconditioner)?,
+    ))
 }
 
 fn build_entries_from_pairs(
     domain_pairs: Vec<(Subdomain, CrossTab)>,
     config: &LocalSolverConfig,
-) -> WithinResult<Vec<SubdomainEntry<BlockElimSolver>>> {
+) -> Result<Vec<SubdomainEntry<BlockElimSolver>>, BuildError> {
     domain_pairs
         .into_par_iter()
         .map(|(domain, cross_tab)| build_entry(domain, cross_tab, config))
@@ -129,7 +130,7 @@ pub(crate) fn build_entry(
     domain: Subdomain,
     cross_tab: CrossTab,
     config: &LocalSolverConfig,
-) -> WithinResult<SubdomainEntry<BlockElimSolver>> {
+) -> Result<SubdomainEntry<BlockElimSolver>, BuildError> {
     let schur_config = ReducedSchurConfig {
         approx_chol: config.approx_chol,
         approx_schur: config.approx_schur,
@@ -142,8 +143,7 @@ pub(crate) fn build_entry(
         reduced.factor,
         reduced.elimination.eliminate_q,
     );
-    SubdomainEntry::try_new(domain.core, solver)
-        .map_err(|e| WithinError::LocalSolverBuild(format!("invalid subdomain entry: {e}")))
+    SubdomainEntry::try_new(domain.core, solver).map_err(BuildError::Preconditioner)
 }
 
 pub(crate) struct ReducedSchurBuild {
@@ -158,7 +158,7 @@ fn dense_fast_path_enabled(n_keep: usize, threshold: usize) -> bool {
 fn compute_schur(
     cross_tab: &CrossTab,
     approx_schur: Option<ApproxSchurConfig>,
-) -> WithinResult<SchurResult> {
+) -> Result<SchurResult, BuildError> {
     match approx_schur {
         None => ExactSchurComplement.compute(cross_tab),
         Some(cfg) => ApproxSchurComplement::new(cfg).compute(cross_tab),
@@ -168,7 +168,7 @@ fn compute_schur(
 fn build_sparse_reduced_factor(
     matrix: &schwarz_precond::SparseMatrix,
     approx_chol: ApproxCholConfig,
-) -> WithinResult<ReducedFactor> {
+) -> Result<ReducedFactor, BuildError> {
     let schur_builder = Builder::new(approx_chol.to_approx_chol());
     let csr = CsrRef::new(
         matrix.indptr(),
@@ -176,12 +176,12 @@ fn build_sparse_reduced_factor(
         matrix.data(),
         matrix.n() as u32,
     )
-    .map_err(|e| WithinError::LocalSolverBuild(format!("invalid Schur complement CSR: {e}")))?;
+    .map_err(|e| BuildError::LocalSolverBuild(format!("invalid Schur complement CSR: {e}")))?;
     schur_builder
         .build(csr)
         .map(ReducedFactor::approx)
         .map_err(|e| {
-            WithinError::LocalSolverBuild(format!("failed Schur complement factorization: {e}"))
+            BuildError::LocalSolverBuild(format!("failed Schur complement factorization: {e}"))
         })
 }
 
@@ -195,7 +195,7 @@ pub(crate) struct ReducedSchurConfig {
 pub(crate) fn build_reduced_schur_factor(
     cross_tab: &CrossTab,
     config: &ReducedSchurConfig,
-) -> WithinResult<ReducedSchurBuild> {
+) -> Result<ReducedSchurBuild, BuildError> {
     let n_keep = cross_tab.n_q().min(cross_tab.n_r());
     let prefer_dense = dense_fast_path_enabled(n_keep, config.dense_threshold);
 

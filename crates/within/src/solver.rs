@@ -45,7 +45,7 @@ use crate::domain::Design;
 use crate::observation::{validate_weights, ArrayStore, Store};
 use crate::operator::preconditioner::{build_preconditioner, FePreconditioner};
 use crate::orchestrate::{BatchSolveResult, SolveResult};
-use crate::WithinResult;
+use crate::{BuildError, SolveError};
 
 fn norm(v: &[f64]) -> f64 {
     v.iter().map(|x| x * x).sum::<f64>().sqrt()
@@ -76,7 +76,7 @@ impl<S: Store> Solver<S> {
         weights: Option<Vec<f64>>,
         params: &SolverParams,
         preconditioner: Option<&Preconditioner>,
-    ) -> WithinResult<Self> {
+    ) -> Result<Self, BuildError> {
         validate_weights(weights.as_deref(), design.n_rows)?;
         let built_precond = match preconditioner {
             Some(config) => Some(build_preconditioner(&design, weights.as_deref(), config)?),
@@ -99,7 +99,7 @@ impl<S: Store> Solver<S> {
         weights: Option<Vec<f64>>,
         params: &SolverParams,
         preconditioner: FePreconditioner,
-    ) -> WithinResult<Self> {
+    ) -> Result<Self, BuildError> {
         validate_weights(weights.as_deref(), design.n_rows)?;
         Ok(Self {
             design,
@@ -112,7 +112,7 @@ impl<S: Store> Solver<S> {
     }
 
     /// Solve for a single RHS vector.
-    pub fn solve(&self, y: &[f64]) -> WithinResult<SolveResult> {
+    pub fn solve(&self, y: &[f64]) -> Result<SolveResult, SolveError> {
         let t_start = Instant::now();
         let t_setup_start = Instant::now();
 
@@ -162,11 +162,11 @@ impl<S: Store> Solver<S> {
     }
 
     /// Solve for multiple RHS vectors in parallel.
-    pub fn solve_batch(&self, ys: &[&[f64]]) -> WithinResult<BatchSolveResult> {
+    pub fn solve_batch(&self, ys: &[&[f64]]) -> Result<BatchSolveResult, SolveError> {
         let t_start = Instant::now();
         let n_rhs = ys.len();
 
-        let results: Vec<WithinResult<SolveResult>> =
+        let results: Vec<Result<SolveResult, SolveError>> =
             ys.par_iter().map(|y| self.solve(y)).collect();
 
         let mut x = Vec::with_capacity(self.design.n_dofs * n_rhs);
@@ -221,7 +221,7 @@ impl<'a> Solver<ArrayStore<'a>> {
         weights: Option<&[f64]>,
         params: &SolverParams,
         preconditioner: Option<&Preconditioner>,
-    ) -> WithinResult<Self> {
+    ) -> Result<Self, BuildError> {
         let store = ArrayStore::new(categories)?;
         let design = Design::from_store(store)?;
         let weights = weights.map(|w| w.to_vec());
@@ -234,7 +234,7 @@ impl<'a> Solver<ArrayStore<'a>> {
         weights: Option<&[f64]>,
         params: &SolverParams,
         preconditioner: FePreconditioner,
-    ) -> WithinResult<Self> {
+    ) -> Result<Self, BuildError> {
         let store = ArrayStore::new(categories)?;
         let design = Design::from_store(store)?;
         let weights = weights.map(|w| w.to_vec());

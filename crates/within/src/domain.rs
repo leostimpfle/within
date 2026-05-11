@@ -76,7 +76,7 @@ impl std::fmt::Debug for Subdomain {
 // ===========================================================================
 
 use crate::observation::{FactorMeta, Store};
-use crate::{WithinError, WithinResult};
+use crate::BuildError;
 
 /// Fixed-effects design, generic over observation storage.
 ///
@@ -119,9 +119,9 @@ impl<S: Store + std::fmt::Debug> std::fmt::Debug for Design<S> {
 impl<S: Store> Design<S> {
     /// Construct from a store, inferring the number of levels per factor
     /// from the maximum observed level in each column (`max + 1`).
-    pub fn from_store(store: S) -> WithinResult<Self> {
+    pub fn from_store(store: S) -> Result<Self, BuildError> {
         if store.n_obs() == 0 {
-            return Err(WithinError::EmptyObservations);
+            return Err(BuildError::EmptyObservations);
         }
 
         let mut factors = Vec::with_capacity(store.n_factors());

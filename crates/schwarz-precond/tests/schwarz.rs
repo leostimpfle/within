@@ -390,9 +390,7 @@ fn test_additive_auto_matches_resolved_backend() {
     }
 }
 
-use schwarz_precond::{
-    PreconditionerBuildError, SolveError, SubdomainCoreBuildError, SubdomainEntryBuildError,
-};
+use schwarz_precond::{BuildError, SolveError};
 use std::error::Error;
 
 // ============================================================================
@@ -444,7 +442,7 @@ fn test_additive_schwarz_apply_subdomain_empty_indices() {
 
 #[test]
 fn test_subdomain_entry_build_error_display_local_dof_mismatch() {
-    let err = SubdomainEntryBuildError::LocalDofCountMismatch {
+    let err = BuildError::LocalDofCountMismatch {
         index_count: 5,
         solver_n_local: 3,
     };
@@ -455,7 +453,7 @@ fn test_subdomain_entry_build_error_display_local_dof_mismatch() {
 
 #[test]
 fn test_subdomain_entry_build_error_display_scratch_size_too_small() {
-    let err = SubdomainEntryBuildError::ScratchSizeTooSmall {
+    let err = BuildError::ScratchSizeTooSmall {
         scratch_size: 2,
         required_min: 4,
     };
@@ -466,7 +464,7 @@ fn test_subdomain_entry_build_error_display_scratch_size_too_small() {
 
 #[test]
 fn test_subdomain_core_build_error_display_partition_weight_mismatch() {
-    let err = SubdomainCoreBuildError::PartitionWeightLengthMismatch {
+    let err = BuildError::PartitionWeightLengthMismatch {
         index_count: 3,
         weight_count: 5,
     };
@@ -477,7 +475,7 @@ fn test_subdomain_core_build_error_display_partition_weight_mismatch() {
 
 #[test]
 fn test_preconditioner_build_error_display_global_index_out_of_bounds() {
-    let err = PreconditionerBuildError::GlobalIndexOutOfBounds {
+    let err = BuildError::GlobalIndexOutOfBounds {
         subdomain: 3,
         local_index: 1,
         global_index: 99,
@@ -494,7 +492,7 @@ fn test_preconditioner_build_error_display_global_index_out_of_bounds() {
 
 #[test]
 fn test_local_solve_error_display() {
-    let err = LocalSolveError::ApproxCholSolveFailed {
+    let err = LocalSolveError::BackendFailed {
         context: "backsolve",
         message: "singular matrix".to_string(),
     };
@@ -505,7 +503,7 @@ fn test_local_solve_error_display() {
 
 #[test]
 fn test_solve_error_display_local_solve_failed() {
-    let local_err = LocalSolveError::ApproxCholSolveFailed {
+    let local_err = LocalSolveError::BackendFailed {
         context: "test",
         message: "fail".to_string(),
     };
@@ -536,7 +534,7 @@ fn test_solve_error_display_synchronization() {
 
 #[test]
 fn test_solve_error_source() {
-    let local_err = LocalSolveError::ApproxCholSolveFailed {
+    let local_err = LocalSolveError::BackendFailed {
         context: "test",
         message: "err".to_string(),
     };
@@ -578,7 +576,7 @@ fn test_validate_local_dof_count_mismatch() {
     let core = SubdomainCore::uniform(vec![0, 1]); // 2 indices
     let result = SubdomainEntry::try_new(core, solver);
     match result {
-        Err(SubdomainEntryBuildError::LocalDofCountMismatch { .. }) => {}
+        Err(BuildError::LocalDofCountMismatch { .. }) => {}
         Ok(_) => panic!("expected LocalDofCountMismatch, got Ok"),
         Err(other) => panic!("expected LocalDofCountMismatch, got: {:?}", other),
     }
@@ -591,8 +589,9 @@ fn test_validate_global_index_out_of_bounds() {
     let entry = make_entry(core, solver);
     let result = SchwarzPreconditioner::new(vec![entry], 5);
     match result {
-        Err(PreconditionerBuildError::GlobalIndexOutOfBounds { .. }) => {}
+        Err(BuildError::GlobalIndexOutOfBounds { .. }) => {}
         Ok(_) => panic!("expected GlobalIndexOutOfBounds, got Ok"),
+        Err(other) => panic!("expected GlobalIndexOutOfBounds, got: {:?}", other),
     }
 }
 
@@ -603,8 +602,9 @@ fn test_validate_partition_weight_length_mismatch() {
         PartitionWeights::NonUniform(vec![1.0, 0.5, 0.3]),
     );
     match result {
-        Err(SubdomainCoreBuildError::PartitionWeightLengthMismatch { .. }) => {}
+        Err(BuildError::PartitionWeightLengthMismatch { .. }) => {}
         Ok(_) => panic!("expected PartitionWeightLengthMismatch, got Ok"),
+        Err(other) => panic!("expected PartitionWeightLengthMismatch, got: {:?}", other),
     }
 }
 
