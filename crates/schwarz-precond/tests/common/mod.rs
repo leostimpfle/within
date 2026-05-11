@@ -69,7 +69,12 @@ impl LocalSolver for UniformDiagLocalSolver {
     fn scratch_size(&self) -> usize {
         self.n_local
     }
-    fn solve_local(&self, rhs: &mut [f64], sol: &mut [f64]) -> Result<(), LocalSolveError> {
+    fn solve_local(
+        &self,
+        rhs: &mut [f64],
+        sol: &mut [f64],
+        _allow_inner_parallelism: bool,
+    ) -> Result<(), LocalSolveError> {
         for i in 0..self.n_local {
             sol[i] = rhs[i] * self.inv_diag;
         }
@@ -120,7 +125,12 @@ impl LocalSolver for FailingLocalSolver {
     fn scratch_size(&self) -> usize {
         self.scratch_size
     }
-    fn solve_local(&self, _rhs: &mut [f64], _sol: &mut [f64]) -> Result<(), LocalSolveError> {
+    fn solve_local(
+        &self,
+        _rhs: &mut [f64],
+        _sol: &mut [f64],
+        _allow_inner_parallelism: bool,
+    ) -> Result<(), LocalSolveError> {
         Err(LocalSolveError::ApproxCholSolveFailed {
             context: "test.failing_local_solver",
             message: format!("deliberate failure for n={}", self.n_local),

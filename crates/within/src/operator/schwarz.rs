@@ -32,7 +32,7 @@ use schwarz_precond::{SchwarzPreconditioner, SubdomainEntry};
 use serde::{Deserialize, Serialize};
 
 use super::gramian::CrossTab;
-use super::local_solver::{BlockElimSolver, FeLocalSolveInvoker, ReducedFactor};
+use super::local_solver::{BlockElimSolver, ReducedFactor};
 use super::schur_complement::{
     ApproxSchurComplement, EliminationInfo, ExactSchurComplement, SchurComplement, SchurResult,
 };
@@ -42,10 +42,10 @@ use crate::{WithinError, WithinResult};
 
 /// Concrete additive Schwarz type used in the parent crate.
 #[derive(Clone, Serialize, Deserialize)]
-pub struct FeSchwarz(SchwarzPreconditioner<BlockElimSolver, FeLocalSolveInvoker>);
+pub struct FeSchwarz(SchwarzPreconditioner<BlockElimSolver>);
 
 impl FeSchwarz {
-    pub(crate) fn new(inner: SchwarzPreconditioner<BlockElimSolver, FeLocalSolveInvoker>) -> Self {
+    pub(crate) fn new(inner: SchwarzPreconditioner<BlockElimSolver>) -> Self {
         Self(inner)
     }
 
@@ -122,14 +122,9 @@ pub(crate) fn build_additive_with_strategy(
     strategy: schwarz_precond::ReductionStrategy,
 ) -> WithinResult<FeSchwarz> {
     let entries = build_entries_from_pairs(domains, config)?;
-    Ok(FeSchwarz::new(
-        SchwarzPreconditioner::with_strategy_and_invoker(
-            entries,
-            n_dofs,
-            strategy,
-            FeLocalSolveInvoker,
-        )?,
-    ))
+    Ok(FeSchwarz::new(SchwarzPreconditioner::with_strategy(
+        entries, n_dofs, strategy,
+    )?))
 }
 
 fn build_entries_from_pairs(

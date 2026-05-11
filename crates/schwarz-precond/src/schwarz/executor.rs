@@ -27,7 +27,7 @@ use rayon::prelude::*;
 use thread_local::ThreadLocal;
 
 use crate::error::ApplyError;
-use crate::local_solve::{LocalSolveInvoker, LocalSolver, SubdomainEntry};
+use crate::local_solve::{LocalSolver, SubdomainEntry};
 
 use super::planning::{ReductionPlan, ResolvedReductionStrategy};
 
@@ -244,26 +244,23 @@ fn take_reduction_buffer(
 // Executor
 // ============================================================================
 
-pub(super) struct AdditiveExecutor<S: LocalSolver, I: LocalSolveInvoker<S>> {
+pub(super) struct AdditiveExecutor<S: LocalSolver> {
     pub(super) subdomains: Arc<Vec<SubdomainEntry<S>>>,
     pub(super) n_dofs: usize,
     pub(super) max_scratch_size: usize,
-    invoker: I,
     buf_pool: BufferPool,
 }
 
-impl<S: LocalSolver, I: LocalSolveInvoker<S>> AdditiveExecutor<S, I> {
+impl<S: LocalSolver> AdditiveExecutor<S> {
     pub(super) fn new(
         entries: Vec<SubdomainEntry<S>>,
         n_dofs: usize,
         max_scratch_size: usize,
-        invoker: I,
     ) -> Self {
         Self {
             subdomains: Arc::new(entries),
             n_dofs,
             max_scratch_size,
-            invoker,
             buf_pool: BufferPool::default(),
         }
     }
@@ -277,7 +274,6 @@ impl<S: LocalSolver, I: LocalSolveInvoker<S>> AdditiveExecutor<S, I> {
             subdomains: Arc::clone(&self.subdomains),
             n_dofs: self.n_dofs,
             max_scratch_size: self.max_scratch_size,
-            invoker: self.invoker.clone(),
             buf_pool: BufferPool::default(),
         }
     }
@@ -314,12 +310,11 @@ impl<S: LocalSolver, I: LocalSolveInvoker<S>> AdditiveExecutor<S, I> {
             || LocalSolveScratch::new(self.max_scratch_size),
             |scratch, (subdomain, entry)| {
                 entry
-                    .apply_weighted_into_atomic_by(
+                    .apply_weighted_into_atomic(
                         r,
                         accum,
                         &mut scratch.r_scratch,
                         &mut scratch.z_scratch,
-                        &self.invoker,
                         allow_inner_parallelism,
                     )
                     .map_err(|source| ApplyError::LocalSolveFailed { subdomain, source })
@@ -355,12 +350,11 @@ impl<S: LocalSolver, I: LocalSolveInvoker<S>> AdditiveExecutor<S, I> {
                 .try_for_each(|(subdomain, entry)| {
                     worker_buffers.with_buffer(|buffers| {
                         entry
-                            .apply_weighted_into_with_scratch_by(
+                            .apply_weighted_into_with_scratch(
                                 r,
                                 &mut buffers.global_accum,
                                 &mut buffers.scratch.r_scratch,
                                 &mut buffers.scratch.z_scratch,
-                                &self.invoker,
                                 allow_inner_parallelism,
                             )
                             .map_err(|source| ApplyError::LocalSolveFailed { subdomain, source })
@@ -373,13 +367,12 @@ impl<S: LocalSolver, I: LocalSolveInvoker<S>> AdditiveExecutor<S, I> {
     }
 }
 
-impl<S: LocalSolver, I: LocalSolveInvoker<S>> Clone for AdditiveExecutor<S, I> {
+impl<S: LocalSolver> Clone for AdditiveExecutor<S> {
     fn clone(&self) -> Self {
         Self {
             subdomains: Arc::clone(&self.subdomains),
             n_dofs: self.n_dofs,
             max_scratch_size: self.max_scratch_size,
-            invoker: self.invoker.clone(),
             buf_pool: self.buf_pool.clone(),
         }
     }
