@@ -94,7 +94,6 @@ impl<'a, S: ObservationStore> WeightedDesignOperator<'a, S> {
         }
     }
 }
-
 impl<S: ObservationStore> Operator for WeightedDesignOperator<'_, S> {
     fn nrows(&self) -> usize {
         self.design.n_rows
@@ -104,7 +103,7 @@ impl<S: ObservationStore> Operator for WeightedDesignOperator<'_, S> {
         self.design.n_dofs
     }
 
-    fn apply(&self, x: &[f64], y: &mut [f64]) {
+    fn apply(&self, x: &[f64], y: &mut [f64]) -> Result<(), schwarz_precond::SolveError> {
         // y = W^{1/2} (D x)
         self.design.matvec_d(x, y);
         if let Some(sw) = &self.sqrt_weights {
@@ -112,9 +111,10 @@ impl<S: ObservationStore> Operator for WeightedDesignOperator<'_, S> {
                 *yi *= swi;
             }
         }
+        Ok(())
     }
 
-    fn apply_adjoint(&self, x: &[f64], y: &mut [f64]) {
+    fn apply_adjoint(&self, x: &[f64], y: &mut [f64]) -> Result<(), schwarz_precond::SolveError> {
         // y = D^T (W^{1/2} x)
         match &self.sqrt_weights {
             None => self.design.rmatvec_dt(x, y),
@@ -126,5 +126,6 @@ impl<S: ObservationStore> Operator for WeightedDesignOperator<'_, S> {
                 self.design.rmatvec_dt(&tmp, y);
             }
         }
+        Ok(())
     }
 }

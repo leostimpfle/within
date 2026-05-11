@@ -1,14 +1,13 @@
 //! Error types for the `schwarz-precond` crate.
 //!
-//! Errors are layered to match the build → apply → solve lifecycle:
+//! Errors are layered to match the build → solve lifecycle:
 //!
 //! - **Build errors** ([`SubdomainCoreBuildError`], [`SubdomainEntryBuildError`],
 //!   [`PreconditionerBuildError`]) — caught during construction, before any
 //!   solve begins.
-//! - **Apply errors** ([`ApplyError`]) — runtime failures during a single
-//!   preconditioner or operator application (e.g. a local solver diverges).
-//! - **Solve errors** ([`SolveError`]) — wraps `ApplyError` for the iterative
-//!   solver layer.
+//! - **Solve errors** ([`SolveError`]) — runtime failures during a solve,
+//!   including operator/preconditioner application (e.g. a local solver
+//!   diverges) and iterative-solver input validation.
 //!
 //! Each level chains to its source via [`Error::source`].
 
@@ -145,51 +144,25 @@ impl Display for LocalSolveError {
 
 impl Error for LocalSolveError {}
 
-/// Runtime failure while applying a Schwarz preconditioner/operator.
+/// Runtime failure while executing a solve.
+///
+/// Covers both operator/preconditioner application failures (e.g. a local
+/// solver diverges) and iterative-solver input validation.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ApplyError {
-    /// A local subdomain solve failed.
+#[non_exhaustive]
+pub enum SolveError {
+    /// A local subdomain solve failed during a preconditioner apply.
     LocalSolveFailed {
         /// Index of the failing subdomain entry in the preconditioner.
         subdomain: usize,
         /// Local solver error.
         source: LocalSolveError,
     },
-    /// Internal synchronization failed (e.g. poisoned mutex).
+    /// Internal synchronization failed (e.g. poisoned mutex) during an apply.
     Synchronization {
         /// Context string identifying the lock/synchronization site.
         context: &'static str,
     },
-}
-
-impl Display for ApplyError {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::LocalSolveFailed { subdomain, source } => {
-                write!(f, "subdomain {subdomain} local solve failed: {source}")
-            }
-            Self::Synchronization { context } => {
-                write!(f, "synchronization failure at {context}")
-            }
-        }
-    }
-}
-
-impl Error for ApplyError {
-    fn source(&self) -> Option<&(dyn Error + 'static)> {
-        match self {
-            Self::LocalSolveFailed { source, .. } => Some(source),
-            Self::Synchronization { .. } => None,
-        }
-    }
-}
-
-/// Runtime failure while executing an iterative solver.
-#[derive(Debug, Clone, PartialEq, Eq)]
-#[non_exhaustive]
-pub enum SolveError {
-    /// Operator/preconditioner apply failed.
-    Apply(ApplyError),
     /// Solver input was invalid before any iteration was attempted.
     InvalidInput {
         /// Context string identifying the validation site.
@@ -202,7 +175,12 @@ pub enum SolveError {
 impl Display for SolveError {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Apply(err) => write!(f, "operator apply failed: {err}"),
+            Self::LocalSolveFailed { subdomain, source } => {
+                write!(f, "subdomain {subdomain} local solve failed: {source}")
+            }
+            Self::Synchronization { context } => {
+                write!(f, "synchronization failure at {context}")
+            }
             Self::InvalidInput { context, message } => {
                 write!(f, "invalid solver input at {context}: {message}")
             }
@@ -213,15 +191,10 @@ impl Display for SolveError {
 impl Error for SolveError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
-            Self::Apply(err) => Some(err),
+            Self::LocalSolveFailed { source, .. } => Some(source),
+            Self::Synchronization { .. } => None,
             Self::InvalidInput { .. } => None,
         }
-    }
-}
-
-impl From<ApplyError> for SolveError {
-    fn from(value: ApplyError) -> Self {
-        Self::Apply(value)
     }
 }
 

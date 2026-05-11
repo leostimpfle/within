@@ -285,7 +285,7 @@ fn bench_matvec(c: &mut Criterion) {
         let x: Vec<f64> = (0..n_dofs).map(|i| (i as f64).sin()).collect();
         let mut y = vec![0.0; n_obs];
         group.bench_function(BenchmarkId::new("apply", &label), |b| {
-            b.iter(|| op.apply(&x, &mut y))
+            b.iter(|| op.apply(&x, &mut y).expect("apply succeeds"))
         });
     }
     group.finish();

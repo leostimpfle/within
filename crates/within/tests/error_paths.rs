@@ -1,7 +1,7 @@
 use std::error::Error;
 
 use ndarray::Array2;
-use schwarz_precond::{ApplyError, PreconditionerBuildError, SolveError};
+use schwarz_precond::{PreconditionerBuildError, SolveError};
 use within::observation::{FactorMajorStore, ObservationWeights};
 use within::{solve, Preconditioner, SolverParams, WeightedDesign, WithinError};
 
@@ -121,7 +121,7 @@ fn test_within_error_display_preconditioner_build() {
 
 #[test]
 fn test_within_error_display_iterative_solve() {
-    let inner = SolveError::Apply(ApplyError::Synchronization { context: "test" });
+    let inner = SolveError::Synchronization { context: "test" };
     let e = WithinError::IterativeSolve(inner);
     assert!(e.to_string().contains("test"));
 }
@@ -168,7 +168,7 @@ fn test_within_error_source_preconditioner_build() {
 
 #[test]
 fn test_within_error_source_iterative_solve() {
-    let inner = SolveError::Apply(ApplyError::Synchronization { context: "test" });
+    let inner = SolveError::Synchronization { context: "test" };
     let e = WithinError::IterativeSolve(inner);
     assert!(e.source().is_some());
 }
@@ -194,7 +194,7 @@ fn test_within_error_from_preconditioner_build_error() {
 
 #[test]
 fn test_within_error_from_solve_error() {
-    let inner = SolveError::Apply(ApplyError::Synchronization { context: "test" });
+    let inner = SolveError::Synchronization { context: "test" };
     let e: WithinError = inner.into();
     match e {
         WithinError::IterativeSolve(_) => {}

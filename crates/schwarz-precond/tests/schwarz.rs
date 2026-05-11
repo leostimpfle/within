@@ -131,8 +131,7 @@ fn run_nested_parallel_reduction_regression_case() {
 
         for _ in 0..8 {
             let mut z = vec![0.0; n];
-            schwarz.apply(&rhs, &mut z);
-
+            schwarz.apply(&rhs, &mut z).expect("apply succeeds");
             for (i, (&zi, &ri)) in z.iter().zip(&rhs).enumerate() {
                 assert!(
                     (zi - 2.0 * ri).abs() <= 1e-12,
@@ -225,13 +224,18 @@ fn test_clone_produces_independent_preconditioner() {
     let mut z_orig = vec![0.0; n];
     let mut z_clone = vec![0.0; n];
 
-    original.apply(&r1, &mut z_orig);
-    cloned.apply(&r2, &mut z_clone);
+    original
+        .apply(&r1, &mut z_orig)
+        .expect("original apply succeeds");
+    cloned
+        .apply(&r2, &mut z_clone)
+        .expect("cloned apply succeeds");
 
     // Verify independently: apply the original with r2 to check the clone's result.
     let mut z_check = vec![0.0; n];
-    original.apply(&r2, &mut z_check);
-
+    original
+        .apply(&r2, &mut z_check)
+        .expect("check apply succeeds");
     for i in 0..n {
         assert!(
             (z_clone[i] - z_check[i]).abs() < 1e-14,
@@ -244,7 +248,7 @@ fn test_clone_produces_independent_preconditioner() {
 
     // Verify the original was not corrupted by the clone's apply.
     let mut z_orig2 = vec![0.0; n];
-    original.apply(&r1, &mut z_orig2);
+    original.apply(&r1, &mut z_orig2).expect("apply succeeds");
     for i in 0..n {
         assert!(
             (z_orig[i] - z_orig2[i]).abs() < 1e-14,
@@ -266,9 +270,10 @@ fn test_additive_schwarz_operator_dimensions() {
     let r = vec![1.0; n];
     let mut z1 = vec![0.0; n];
     let mut z2 = vec![0.0; n];
-    schwarz.apply(&r, &mut z1);
-    schwarz.apply_adjoint(&r, &mut z2);
-
+    schwarz.apply(&r, &mut z1).expect("apply succeeds");
+    schwarz
+        .apply_adjoint(&r, &mut z2)
+        .expect("apply_adjoint succeeds");
     for i in 0..n {
         assert!(
             (z1[i] - z2[i]).abs() < 1e-14,
@@ -299,12 +304,11 @@ fn test_additive_schwarz_parallel_apply_stress_no_panics() {
         .map(|rhs| {
             let mut z = vec![0.0; n];
             for _ in 0..16 {
-                schwarz.apply(rhs, &mut z);
+                schwarz.apply(rhs, &mut z).expect("apply succeeds");
             }
             z
         })
         .collect();
-
     assert_eq!(outputs.len(), rhs_columns.len());
     assert!(
         outputs.iter().flatten().all(|v| v.is_finite()),
@@ -337,9 +341,12 @@ fn test_additive_backends_match_on_overlapping_subdomains() {
 
         let mut z_atomic = vec![0.0; n];
         let mut z_reduction = vec![0.0; n];
-        atomic.apply(&rhs, &mut z_atomic);
-        reduction.apply(&rhs, &mut z_reduction);
-
+        atomic
+            .apply(&rhs, &mut z_atomic)
+            .expect("atomic apply succeeds");
+        reduction
+            .apply(&rhs, &mut z_reduction)
+            .expect("reduction apply succeeds");
         assert_vec_close(&z_atomic, &z_reduction, 1e-12);
     });
 }
@@ -374,48 +381,22 @@ fn test_additive_auto_matches_resolved_backend() {
 
             let mut z_auto = vec![0.0; n];
             let mut z_explicit = vec![0.0; n];
-            auto.apply(&rhs, &mut z_auto);
-            explicit.apply(&rhs, &mut z_explicit);
-
+            auto.apply(&rhs, &mut z_auto).expect("auto apply succeeds");
+            explicit
+                .apply(&rhs, &mut z_explicit)
+                .expect("explicit apply succeeds");
             assert_vec_close(&z_auto, &z_explicit, 1e-12);
         });
     }
 }
 
 use schwarz_precond::{
-    ApplyError, PreconditionerBuildError, SolveError, SubdomainCoreBuildError,
-    SubdomainEntryBuildError,
+    PreconditionerBuildError, SolveError, SubdomainCoreBuildError, SubdomainEntryBuildError,
 };
 use std::error::Error;
 
 // ============================================================================
-// Default try_apply / try_apply_adjoint tests
-// ============================================================================
-
-#[test]
-fn test_try_apply_default_succeeds() {
-    let a = TridiagOperator::new(5, 3.0);
-    let x = vec![1.0, 2.0, 3.0, 4.0, 5.0];
-    let mut y_apply = vec![0.0; 5];
-    let mut y_try = vec![0.0; 5];
-    a.apply(&x, &mut y_apply);
-    let result = a.try_apply(&x, &mut y_try);
-    assert!(result.is_ok());
-    assert_eq!(y_apply, y_try);
-}
-
-#[test]
-fn test_try_apply_adjoint_default_succeeds() {
-    let a = TridiagOperator::new(5, 3.0);
-    let x = vec![1.0, 2.0, 3.0, 4.0, 5.0];
-    let mut y_apply = vec![0.0; 5];
-    let mut y_try = vec![0.0; 5];
-    a.apply_adjoint(&x, &mut y_apply);
-    let result = a.try_apply_adjoint(&x, &mut y_try);
-    assert!(result.is_ok());
-    assert_eq!(y_apply, y_try);
-}
-
+// Additive Schwarz edge cases
 // ============================================================================
 // Additive Schwarz edge cases
 // ============================================================================
@@ -444,8 +425,9 @@ fn test_additive_schwarz_apply_subdomain_empty_indices() {
             // Verify apply works with empty subdomain
             let r = vec![1.0; 5];
             let mut z = vec![0.0; 5];
-            schwarz.apply(&r, &mut z);
-            // Empty subdomain contributes nothing
+            schwarz
+                .apply(&r, &mut z)
+                .expect("apply with empty subdomain succeeds");
             for &v in &z {
                 assert!((v - 0.0).abs() < 1e-14);
             }
@@ -522,12 +504,12 @@ fn test_local_solve_error_display() {
 }
 
 #[test]
-fn test_apply_error_display_local_solve_failed() {
+fn test_solve_error_display_local_solve_failed() {
     let local_err = LocalSolveError::ApproxCholSolveFailed {
         context: "test",
         message: "fail".to_string(),
     };
-    let err = ApplyError::LocalSolveFailed {
+    let err = SolveError::LocalSolveFailed {
         subdomain: 7,
         source: local_err,
     };
@@ -540,8 +522,8 @@ fn test_apply_error_display_local_solve_failed() {
 }
 
 #[test]
-fn test_apply_error_display_synchronization() {
-    let err = ApplyError::Synchronization {
+fn test_solve_error_display_synchronization() {
+    let err = SolveError::Synchronization {
         context: "mutex.lock",
     };
     let msg = err.to_string();
@@ -553,12 +535,12 @@ fn test_apply_error_display_synchronization() {
 }
 
 #[test]
-fn test_apply_error_source() {
+fn test_solve_error_source() {
     let local_err = LocalSolveError::ApproxCholSolveFailed {
         context: "test",
         message: "err".to_string(),
     };
-    let err = ApplyError::LocalSolveFailed {
+    let err = SolveError::LocalSolveFailed {
         subdomain: 0,
         source: local_err,
     };
@@ -567,31 +549,10 @@ fn test_apply_error_source() {
         "LocalSolveFailed should have a source"
     );
 
-    let err2 = ApplyError::Synchronization { context: "test" };
+    let err2 = SolveError::Synchronization { context: "test" };
     assert!(
         err2.source().is_none(),
         "Synchronization should have no source"
-    );
-}
-
-#[test]
-fn test_solve_error_display() {
-    let apply_err = ApplyError::Synchronization { context: "test" };
-    let err = SolveError::Apply(apply_err);
-    let msg = err.to_string();
-    assert!(
-        msg.contains("operator apply failed"),
-        "missing prefix: {msg}"
-    );
-}
-
-#[test]
-fn test_solve_error_source() {
-    let apply_err = ApplyError::Synchronization { context: "test" };
-    let err = SolveError::Apply(apply_err);
-    assert!(
-        err.source().is_some(),
-        "SolveError::Apply should have a source"
     );
 }
 
@@ -606,19 +567,6 @@ fn test_solve_error_invalid_input_display_and_source() {
     assert!(msg.contains("bad dimension"));
     assert!(err.source().is_none());
 }
-
-#[test]
-fn test_solve_error_from_apply_error() {
-    let apply_err = ApplyError::Synchronization { context: "conv" };
-    let solve_err: SolveError = apply_err.into();
-    match solve_err {
-        SolveError::Apply(ApplyError::Synchronization { context }) => {
-            assert_eq!(context, "conv");
-        }
-        _ => panic!("expected SolveError::Apply(Synchronization)"),
-    }
-}
-
 // ============================================================================
 // Validation error tests
 // ============================================================================
@@ -693,22 +641,23 @@ fn test_additive_schwarz_parallel_readout_large_n() {
 
     let rhs = vec![4.0; n];
     let mut z = vec![0.0; n];
-    let result = schwarz.try_apply(&rhs, &mut z);
-    assert!(result.is_ok(), "try_apply should succeed: {:?}", result);
+    let result = schwarz.apply(&rhs, &mut z);
+    assert!(result.is_ok(), "apply should succeed: {:?}", result);
 
     // Each DOF: output = 1.0 * (1.0 * 4.0 / 2.0) = 2.0
     for (i, &v) in z.iter().enumerate() {
-        assert!((v - 2.0).abs() < 1e-12, "z[{i}] = {v}, expected 2.0",);
+        assert!((v - 2.0_f64).abs() < 1e-12, "z[{i}] = {v}, expected 2.0",);
     }
 }
 
 // ============================================================================
-// NaN-fill on solver error (apply, not try_apply)
+// apply propagates local-solver failure
 // ============================================================================
 
 #[test]
-fn test_additive_schwarz_apply_fills_nan_on_solver_failure() {
-    // FailingLocalSolver always returns Err — apply must fill z with NAN.
+fn test_additive_schwarz_apply_returns_err_on_solver_failure() {
+    // FailingLocalSolver always returns Err — apply must propagate the error
+    // (previously this silently filled z with NaN).
     let n = 4;
     let solver = FailingLocalSolver {
         n_local: 2,
@@ -722,53 +671,12 @@ fn test_additive_schwarz_apply_fills_nan_on_solver_failure() {
 
     let rhs = vec![1.0; n];
     let mut z = vec![0.0; n];
-    schwarz.apply(&rhs, &mut z);
+    let result = schwarz.apply(&rhs, &mut z);
 
-    assert!(
-        z.iter().all(|v| v.is_nan()),
-        "all outputs should be NaN when solver fails, got: {:?}",
-        z,
-    );
-}
-
-// ============================================================================
-// try_apply / try_apply_adjoint direct calls match apply / apply_adjoint
-// ============================================================================
-
-#[test]
-fn test_additive_schwarz_try_apply_matches_apply() {
-    let n = 10;
-    let schwarz =
-        SchwarzPreconditioner::new(make_schwarz_entries(n), n).expect("valid additive schwarz");
-
-    let rhs: Vec<f64> = (0..n).map(|i| (i + 1) as f64).collect();
-
-    // apply path
-    let mut z_apply = vec![0.0; n];
-    schwarz.apply(&rhs, &mut z_apply);
-
-    // try_apply direct call
-    let mut z_try = vec![0.0; n];
-    let res = SchwarzPreconditioner::try_apply(&schwarz, &rhs, &mut z_try);
-    assert!(res.is_ok(), "try_apply should return Ok");
-
-    // try_apply_adjoint direct call (symmetric — same result)
-    let mut z_try_adj = vec![0.0; n];
-    let res_adj = Operator::try_apply_adjoint(&schwarz, &rhs, &mut z_try_adj);
-    assert!(res_adj.is_ok(), "try_apply_adjoint should return Ok");
-
-    for i in 0..n {
-        assert!(
-            (z_apply[i] - z_try[i]).abs() < 1e-14,
-            "try_apply mismatch at {i}: apply={}, try={}",
-            z_apply[i],
-            z_try[i],
-        );
-        assert!(
-            (z_apply[i] - z_try_adj[i]).abs() < 1e-14,
-            "try_apply_adjoint mismatch at {i}: apply={}, try_adj={}",
-            z_apply[i],
-            z_try_adj[i],
-        );
+    match result {
+        Err(SolveError::LocalSolveFailed { subdomain, .. }) => {
+            assert_eq!(subdomain, 0, "failure should be reported for subdomain 0");
+        }
+        other => panic!("expected LocalSolveFailed, got: {:?}", other),
     }
 }

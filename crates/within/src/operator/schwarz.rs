@@ -65,8 +65,8 @@ impl FeSchwarz {
     }
 
     /// Apply the preconditioner, returning an error on local-solver failure.
-    pub fn try_apply(&self, r: &[f64], z: &mut [f64]) -> Result<(), schwarz_precond::ApplyError> {
-        self.0.try_apply(r, z)
+    pub fn apply(&self, r: &[f64], z: &mut [f64]) -> Result<(), schwarz_precond::SolveError> {
+        self.0.apply(r, z)
     }
 
     #[cfg(test)]
@@ -84,24 +84,12 @@ impl schwarz_precond::Operator for FeSchwarz {
         self.0.ncols()
     }
 
-    fn apply(&self, x: &[f64], y: &mut [f64]) {
-        self.0.apply(x, y);
+    fn apply(&self, x: &[f64], y: &mut [f64]) -> Result<(), schwarz_precond::SolveError> {
+        self.0.apply(x, y)
     }
 
-    fn apply_adjoint(&self, x: &[f64], y: &mut [f64]) {
-        self.0.apply_adjoint(x, y);
-    }
-
-    fn try_apply(&self, x: &[f64], y: &mut [f64]) -> Result<(), schwarz_precond::ApplyError> {
-        self.0.try_apply(x, y)
-    }
-
-    fn try_apply_adjoint(
-        &self,
-        x: &[f64],
-        y: &mut [f64],
-    ) -> Result<(), schwarz_precond::ApplyError> {
-        self.0.try_apply_adjoint(x, y)
+    fn apply_adjoint(&self, x: &[f64], y: &mut [f64]) -> Result<(), schwarz_precond::SolveError> {
+        self.0.apply_adjoint(x, y)
     }
 }
 

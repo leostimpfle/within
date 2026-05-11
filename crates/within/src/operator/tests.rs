@@ -35,13 +35,13 @@ mod design_tests {
         let r = vec![0.1, 0.2, -0.3, 0.4, -0.5];
 
         let mut dx = vec![0.0; 5];
-        op.apply(&x, &mut dx);
+        op.apply(&x, &mut dx).expect("apply succeeds");
         let lhs: f64 = dx.iter().zip(r.iter()).map(|(a, b)| a * b).sum();
 
         let mut dtr = vec![0.0; 7];
-        op.apply_adjoint(&r, &mut dtr);
+        op.apply_adjoint(&r, &mut dtr)
+            .expect("apply_adjoint succeeds");
         let rhs: f64 = x.iter().zip(dtr.iter()).map(|(a, b)| a * b).sum();
-
         assert!((lhs - rhs).abs() < 1e-12);
     }
 
@@ -51,7 +51,7 @@ mod design_tests {
         let op = WeightedDesignOperator::new(&schema);
         let x = vec![1.0, 2.0, 3.0, 10.0, 20.0, 30.0, 40.0];
         let mut y = vec![0.0; 5];
-        op.apply(&x, &mut y);
+        op.apply(&x, &mut y).expect("apply succeeds");
         assert_eq!(y, vec![11.0, 22.0, 33.0, 41.0, 12.0]);
     }
 
@@ -61,7 +61,8 @@ mod design_tests {
         let op = WeightedDesignOperator::new(&schema);
         let r = vec![1.0, 2.0, 3.0, 4.0, 5.0];
         let mut x = vec![0.0; 7];
-        op.apply_adjoint(&r, &mut x);
+        op.apply_adjoint(&r, &mut x)
+            .expect("apply_adjoint succeeds");
         assert_eq!(x, vec![5.0, 7.0, 3.0, 6.0, 2.0, 3.0, 4.0]);
     }
 }
@@ -436,7 +437,7 @@ mod schwarz_tests {
     use crate::operator::schwarz::{
         build_additive_with_strategy, build_entry, build_reduced_schur_factor, ReducedSchurConfig,
     };
-    use schwarz_precond::{LocalSolver, Operator, ReductionStrategy};
+    use schwarz_precond::{LocalSolver, ReductionStrategy};
 
     const BLOCK_ELIM_NESTED_RAYON_CHILD_ENV: &str = "WITHIN_TEST_BLOCK_ELIM_NESTED_RAYON_CHILD";
 
@@ -616,9 +617,12 @@ mod schwarz_tests {
             for _ in 0..4 {
                 let mut z_reduction = vec![0.0; n_dofs];
                 let mut z_atomic = vec![0.0; n_dofs];
-                reduction.apply(&rhs, &mut z_reduction);
-                atomic.apply(&rhs, &mut z_atomic);
-
+                reduction
+                    .apply(&rhs, &mut z_reduction)
+                    .expect("reduction apply succeeds");
+                atomic
+                    .apply(&rhs, &mut z_atomic)
+                    .expect("atomic apply succeeds");
                 for (i, (&zr, &za)) in z_reduction.iter().zip(&z_atomic).enumerate() {
                     assert!(
                         zr.is_finite() && za.is_finite(),
@@ -761,8 +765,7 @@ mod schwarz_tests {
 
         let r = vec![1.0; design.n_dofs];
         let mut z = vec![0.0; design.n_dofs];
-        schwarz.apply(&r, &mut z);
-        assert!(z.iter().all(|&v| v.is_finite()));
+        schwarz.apply(&r, &mut z).expect("schwarz apply succeeds");
     }
 
     #[test]

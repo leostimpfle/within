@@ -6,10 +6,9 @@
 use faer::{MatRef, Side};
 
 use schwarz_precond::{
-    mlsmr, LocalSolveError, LocalSolver, Operator, SchwarzPreconditioner, SparseMatrix,
+    mlsmr, LocalSolveError, LocalSolver, Operator, SchwarzPreconditioner, SolveError, SparseMatrix,
     SubdomainCore, SubdomainEntry,
 };
-
 // ---------------------------------------------------------------------------
 // Tridiagonal operator
 // ---------------------------------------------------------------------------
@@ -25,7 +24,7 @@ impl Operator for TridiagOperator {
     fn ncols(&self) -> usize {
         self.n
     }
-    fn apply(&self, x: &[f64], y: &mut [f64]) {
+    fn apply(&self, x: &[f64], y: &mut [f64]) -> Result<(), SolveError> {
         for i in 0..self.n {
             y[i] = 3.0 * x[i];
             if i > 0 {
@@ -35,12 +34,12 @@ impl Operator for TridiagOperator {
                 y[i] -= x[i + 1];
             }
         }
+        Ok(())
     }
-    fn apply_adjoint(&self, x: &[f64], y: &mut [f64]) {
-        self.apply(x, y);
+    fn apply_adjoint(&self, x: &[f64], y: &mut [f64]) -> Result<(), SolveError> {
+        self.apply(x, y)
     }
 }
-
 // ---------------------------------------------------------------------------
 // Build the same tridiag as a SparseMatrix (CSR) for submatrix extraction
 // ---------------------------------------------------------------------------

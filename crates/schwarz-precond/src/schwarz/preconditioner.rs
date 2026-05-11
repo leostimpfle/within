@@ -6,7 +6,7 @@
 //! the executor. `apply` is lock-free in steady state (buffers are
 //! borrowed from a pool).
 
-use crate::error::{validate_entries, ApplyError, PreconditionerBuildError};
+use crate::error::{validate_entries, PreconditionerBuildError, SolveError};
 use crate::local_solve::{LocalSolver, SubdomainEntry};
 use crate::Operator;
 
@@ -131,10 +131,10 @@ impl<S: LocalSolver> SchwarzPreconditioner<S> {
         }
     }
 
-    /// Fallible operator apply that propagates local-solver failures.
-    pub fn try_apply(&self, r: &[f64], z: &mut [f64]) -> Result<(), ApplyError> {
+    /// Operator apply that propagates local-solver failures.
+    pub fn apply(&self, r: &[f64], z: &mut [f64]) -> Result<(), SolveError> {
         let plan = self.reduction_plan();
-        self.executor.try_apply(plan, r, z)
+        self.executor.apply(plan, r, z)
     }
 
     fn reduction_plan(&self) -> ReductionPlan {
@@ -165,21 +165,11 @@ impl<S: LocalSolver> Operator for SchwarzPreconditioner<S> {
         self.executor.n_dofs
     }
 
-    fn apply(&self, r: &[f64], z: &mut [f64]) {
-        if self.try_apply(r, z).is_err() {
-            z.fill(f64::NAN);
-        }
+    fn apply(&self, r: &[f64], z: &mut [f64]) -> Result<(), SolveError> {
+        SchwarzPreconditioner::apply(self, r, z)
     }
 
-    fn apply_adjoint(&self, r: &[f64], z: &mut [f64]) {
-        self.apply(r, z);
-    }
-
-    fn try_apply(&self, r: &[f64], z: &mut [f64]) -> Result<(), ApplyError> {
-        SchwarzPreconditioner::try_apply(self, r, z)
-    }
-
-    fn try_apply_adjoint(&self, r: &[f64], z: &mut [f64]) -> Result<(), ApplyError> {
-        SchwarzPreconditioner::try_apply(self, r, z)
+    fn apply_adjoint(&self, r: &[f64], z: &mut [f64]) -> Result<(), SolveError> {
+        SchwarzPreconditioner::apply(self, r, z)
     }
 }
