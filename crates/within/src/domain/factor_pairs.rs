@@ -40,8 +40,8 @@
 //!
 //! [`build_local_domains`] builds subdomains for preconditioner construction.
 
-use super::{PartitionWeights, Subdomain, WeightedDesign};
-use crate::observation::ObservationStore;
+use super::{Design, PartitionWeights, Subdomain};
+use crate::observation::Store;
 use crate::operator::gramian::{find_all_active_levels, BipartiteComponent, CrossTab};
 
 /// Build local subdomains (with pre-built CrossTabs) for pairs of factors.
@@ -54,8 +54,8 @@ use crate::operator::gramian::{find_all_active_levels, BipartiteComponent, Cross
 /// Factor pairs are processed in parallel via Rayon. The
 /// `compute_partition_weights` step remains sequential after the parallel
 /// collect.
-pub(crate) fn build_local_domains<S: ObservationStore>(
-    design: &WeightedDesign<S>,
+pub(crate) fn build_local_domains<S: Store>(
+    design: &Design<S>,
     weights: Option<&[f64]>,
 ) -> Vec<(Subdomain, CrossTab)> {
     use rayon::prelude::*;
@@ -74,8 +74,8 @@ pub(crate) fn build_local_domains<S: ObservationStore>(
     domain_pairs
 }
 
-fn domains_for_pair<S: ObservationStore>(
-    design: &WeightedDesign<S>,
+fn domains_for_pair<S: Store>(
+    design: &Design<S>,
     weights: Option<&[f64]>,
     q: usize,
     r: usize,
@@ -193,10 +193,10 @@ fn compute_partition_weights(domain_pairs: &mut [(Subdomain, CrossTab)], n_dofs:
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::WeightedDesign;
+    use crate::domain::Design;
     use crate::observation::FactorMajorStore;
 
-    fn make_test_design() -> WeightedDesign<FactorMajorStore> {
+    fn make_test_design() -> Design<FactorMajorStore> {
         let store = FactorMajorStore::new(
             vec![
                 vec![0, 1, 2, 0, 1, 2],
@@ -206,7 +206,7 @@ mod tests {
             6,
         )
         .expect("valid factor-major store");
-        WeightedDesign::from_store(store).expect("valid test design")
+        Design::from_store(store).expect("valid test design")
     }
 
     #[test]

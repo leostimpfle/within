@@ -3,8 +3,8 @@
 //! This module sits between raw observation storage ([`crate::observation`]) and
 //! the linear-algebra operators ([`crate::operator`]).  It answers two questions:
 //!
-//! 1. **What does the design matrix look like?** — [`WeightedDesign`] wraps an
-//!    [`ObservationStore`] with per-factor metadata ([`FactorMeta`]) and
+//! 1. **What does the design matrix look like?** — [`Design`] wraps an
+//!    [`Store`] with per-factor metadata ([`FactorMeta`]) and
 //!    provides the core matrix-vector products (`D·x`, `D^T·r`, `D^T·W·r`)
 //!    needed by every solver path. Observation weights are passed in as
 //!    `Option<&[f64]>` rather than owned, keeping the design itself purely
@@ -77,7 +77,7 @@ impl std::fmt::Debug for Subdomain {
 // Weighted design matrix
 // ===========================================================================
 
-// `WeightedDesign<S>` is generic over `ObservationStore`. It stores per-factor
+// `Design<S>` is generic over `Store`. It stores per-factor
 // metadata via `FactorMeta` and delegates observation data access to the
 // pluggable store backend `S`. Observation weights are not owned here — they
 // are passed in as `Option<&[f64]>` to the weight-sensitive matvec methods.
@@ -86,7 +86,7 @@ use std::sync::atomic::Ordering;
 use portable_atomic::AtomicF64;
 use rayon::prelude::*;
 
-use crate::observation::{FactorMeta, ObservationStore};
+use crate::observation::{FactorMeta, Store};
 use crate::{WithinError, WithinResult};
 
 /// Weighted fixed-effects design matrix, generic over observation storage.
@@ -95,7 +95,7 @@ use crate::{WithinError, WithinResult};
 /// metadata (n_levels, offset). Observation weights are **not** stored — they
 /// are passed in to methods that need them via `Option<&[f64]>` (where `None`
 /// denotes unit weights).
-pub struct WeightedDesign<S: ObservationStore> {
+pub struct Design<S: Store> {
     /// Observation storage backend (owns or borrows the raw factor levels).
     pub store: S,
     /// Per-factor metadata: level count and global DOF offset.
@@ -106,7 +106,7 @@ pub struct WeightedDesign<S: ObservationStore> {
     pub n_dofs: usize,
 }
 
-impl<S: ObservationStore + Clone> Clone for WeightedDesign<S> {
+impl<S: Store + Clone> Clone for Design<S> {
     fn clone(&self) -> Self {
         Self {
             store: self.store.clone(),
@@ -117,9 +117,9 @@ impl<S: ObservationStore + Clone> Clone for WeightedDesign<S> {
     }
 }
 
-impl<S: ObservationStore + std::fmt::Debug> std::fmt::Debug for WeightedDesign<S> {
+impl<S: Store + std::fmt::Debug> std::fmt::Debug for Design<S> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("WeightedDesign")
+        f.debug_struct("Design")
             .field("store", &self.store)
             .field("factors", &self.factors)
             .field("n_rows", &self.n_rows)
@@ -128,7 +128,7 @@ impl<S: ObservationStore + std::fmt::Debug> std::fmt::Debug for WeightedDesign<S
     }
 }
 
-impl<S: ObservationStore> WeightedDesign<S> {
+impl<S: Store> Design<S> {
     /// Construct from a store, inferring the number of levels per factor
     /// from the maximum observed level in each column (`max + 1`).
     pub fn from_store(store: S) -> WithinResult<Self> {
@@ -147,7 +147,7 @@ impl<S: ObservationStore> WeightedDesign<S> {
             offset += n_levels;
         }
         let n_rows = store.n_obs();
-        Ok(WeightedDesign {
+        Ok(Design {
             store,
             factors,
             n_rows,
@@ -211,7 +211,7 @@ enum ScatterStrategy {
 }
 
 #[inline]
-fn level_from_column_or_store<S: ObservationStore>(
+fn level_from_column_or_store<S: Store>(
     store: &S,
     levels: Option<&[u32]>,
     row: usize,
@@ -232,7 +232,7 @@ fn level_from_column_or_store<S: ObservationStore>(
 /// All branches share the same per-row `(level, value)` computation via
 /// `level_value`; only the accumulation strategy differs.
 #[allow(clippy::too_many_arguments)]
-fn scatter_add_single_factor<S: ObservationStore>(
+fn scatter_add_single_factor<S: Store>(
     slice: &mut [f64],
     n_rows: usize,
     n_levels: usize,
@@ -244,7 +244,7 @@ fn scatter_add_single_factor<S: ObservationStore>(
     atomic_buf: &mut Vec<AtomicF64>,
 ) {
     #[inline(always)]
-    fn level_value<S: ObservationStore>(
+    fn level_value<S: Store>(
         store: &S,
         levels: Option<&[u32]>,
         q: usize,
@@ -302,7 +302,7 @@ fn scatter_add_single_factor<S: ObservationStore>(
     }
 }
 
-impl<S: ObservationStore> WeightedDesign<S> {
+impl<S: Store> Design<S> {
     /// Gather-add: `dst[i] += src[offset_q + level(i, q)]` for each factor `q` and row `i`.
     ///
     /// This is the core loop of `y = D·x`. Loop order is chosen based on the
@@ -430,17 +430,17 @@ mod tests {
     use super::*;
     use crate::observation::FactorMajorStore;
 
-    fn make_test_design() -> WeightedDesign<FactorMajorStore> {
+    fn make_test_design() -> Design<FactorMajorStore> {
         let categories = vec![vec![0, 1, 2, 0, 1], vec![0, 1, 2, 3, 0]];
         let store = FactorMajorStore::new(categories, 5).expect("valid factor-major store");
-        WeightedDesign::from_store(store).expect("valid test design")
+        Design::from_store(store).expect("valid test design")
     }
 
-    fn make_test_design_2x2() -> WeightedDesign<FactorMajorStore> {
+    fn make_test_design_2x2() -> Design<FactorMajorStore> {
         let categories = vec![vec![0, 1, 0, 1], vec![0, 0, 1, 1]];
         let store =
             FactorMajorStore::new(categories, 4).expect("valid weighted factor-major store");
-        WeightedDesign::from_store(store).expect("valid weighted design")
+        Design::from_store(store).expect("valid weighted design")
     }
 
     #[test]

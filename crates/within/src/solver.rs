@@ -38,11 +38,11 @@ use ndarray::ArrayView2;
 use rayon::prelude::*;
 use schwarz_precond::{lsmr, mlsmr};
 
-use crate::operator::WeightedDesignOperator;
+use crate::operator::DesignOperator;
 
 use crate::config::{Preconditioner, SolverParams};
-use crate::domain::WeightedDesign;
-use crate::observation::{validate_weights, ArrayStore, ObservationStore};
+use crate::domain::Design;
+use crate::observation::{validate_weights, ArrayStore, Store};
 use crate::operator::preconditioner::{build_preconditioner, FePreconditioner};
 use crate::orchestrate::{BatchSolveResult, SolveResult};
 use crate::WithinResult;
@@ -57,8 +57,8 @@ fn norm(v: &[f64]) -> f64 {
 /// [`Solver::solve`] or [`Solver::solve_batch`] repeatedly with different RHS
 /// vectors. The expensive preconditioner factorization happens only at
 /// construction time.
-pub struct Solver<S: ObservationStore> {
-    design: WeightedDesign<S>,
+pub struct Solver<S: Store> {
+    design: Design<S>,
     weights: Option<Vec<f64>>,
     preconditioner: Option<FePreconditioner>,
     tol: f64,
@@ -66,13 +66,13 @@ pub struct Solver<S: ObservationStore> {
     local_size: Option<usize>,
 }
 
-impl<S: ObservationStore> Solver<S> {
-    /// Build from an existing [`WeightedDesign`] and optional observation weights.
+impl<S: Store> Solver<S> {
+    /// Build from an existing [`Design`] and optional observation weights.
     ///
     /// `weights = None` denotes unit weights (length must match `design.n_rows`
     /// when `Some`).
     pub fn from_design(
-        design: WeightedDesign<S>,
+        design: Design<S>,
         weights: Option<Vec<f64>>,
         params: &SolverParams,
         preconditioner: Option<&Preconditioner>,
@@ -95,7 +95,7 @@ impl<S: ObservationStore> Solver<S> {
 
     /// Build from a design with a pre-built preconditioner (e.g. deserialized).
     pub fn from_design_with_preconditioner(
-        design: WeightedDesign<S>,
+        design: Design<S>,
         weights: Option<Vec<f64>>,
         params: &SolverParams,
         preconditioner: FePreconditioner,
@@ -116,7 +116,7 @@ impl<S: ObservationStore> Solver<S> {
         let t_start = Instant::now();
         let t_setup_start = Instant::now();
 
-        let rect_op = WeightedDesignOperator::new(&self.design, self.weights.as_deref());
+        let rect_op = DesignOperator::new(&self.design, self.weights.as_deref());
         let b = rect_op.weighted_rhs(y);
 
         let t_solve_start = Instant::now();
@@ -217,7 +217,7 @@ impl<'a> Solver<ArrayStore<'a>> {
         preconditioner: Option<&Preconditioner>,
     ) -> WithinResult<Self> {
         let store = ArrayStore::new(categories)?;
-        let design = WeightedDesign::from_store(store)?;
+        let design = Design::from_store(store)?;
         let weights = weights.map(|w| w.to_vec());
         Self::from_design(design, weights, params, preconditioner)
     }
@@ -230,7 +230,7 @@ impl<'a> Solver<ArrayStore<'a>> {
         preconditioner: FePreconditioner,
     ) -> WithinResult<Self> {
         let store = ArrayStore::new(categories)?;
-        let design = WeightedDesign::from_store(store)?;
+        let design = Design::from_store(store)?;
         let weights = weights.map(|w| w.to_vec());
         Self::from_design_with_preconditioner(design, weights, params, preconditioner)
     }

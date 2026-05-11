@@ -1,6 +1,6 @@
 use ndarray::{array, Array2, ShapeBuilder};
-use within::observation::{ArrayStore, FactorMajorStore, ObservationStore};
-use within::{solve, Preconditioner, SolverParams, WeightedDesign};
+use within::observation::{ArrayStore, FactorMajorStore, Store};
+use within::{solve, Design, Preconditioner, SolverParams};
 
 #[path = "common/orchestrate_helpers.rs"]
 mod common;
@@ -55,7 +55,7 @@ fn test_array_store_f_contiguous_matches_factor_major() {
         .map(|f| cats.column(f).iter().copied().collect())
         .collect();
     let store = FactorMajorStore::new(factor_cols, cats.nrows()).expect("valid FactorMajorStore");
-    let design = WeightedDesign::from_store(store).expect("valid design");
+    let design = Design::from_store(store).expect("valid design");
     let solver =
         within::Solver::from_design(design, None, &default_params(), Some(&additive_precond()))
             .expect("solver");

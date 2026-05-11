@@ -1,18 +1,18 @@
-//! Integration tests for the domain layer: WeightedDesign operations,
+//! Integration tests for the domain layer: Design operations,
 //! adjoint properties, and convergence through the solve API for designs that
 //! exercise partition-of-unity weights and disconnected bipartite structure.
 
 use proptest::prelude::*;
 use within::observation::FactorMajorStore;
-use within::WeightedDesign;
+use within::Design;
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
-fn make_design(categories: Vec<Vec<u32>>, n_obs: usize) -> WeightedDesign<FactorMajorStore> {
+fn make_design(categories: Vec<Vec<u32>>, n_obs: usize) -> Design<FactorMajorStore> {
     let store = FactorMajorStore::new(categories, n_obs).expect("valid factor-major store");
-    WeightedDesign::from_store(store).expect("valid design")
+    Design::from_store(store).expect("valid design")
 }
 
 fn dot(a: &[f64], b: &[f64]) -> f64 {
@@ -26,7 +26,7 @@ fn dot(a: &[f64], b: &[f64]) -> f64 {
 /// Build a 15,000-row design with two factors (~50 levels each).
 /// This exercises the parallel code paths in `gather_add` (par_chunks_mut)
 /// and `scatter_add` (Fold strategy: n_rows > 10,000, n_levels < 100,000).
-fn make_large_design() -> WeightedDesign<FactorMajorStore> {
+fn make_large_design() -> Design<FactorMajorStore> {
     let n_obs = 15_000;
     let n_levels_a = 50usize;
     let n_levels_b = 50usize;
@@ -132,7 +132,7 @@ proptest! {
             .collect();
 
         let store = FactorMajorStore::new(vec![fa, fb], n_obs).unwrap();
-        let dm = WeightedDesign::from_store(store).unwrap();
+        let dm = Design::from_store(store).unwrap();
 
         let n_dofs = dm.n_dofs;
         let n_rows = dm.n_rows;
@@ -188,7 +188,7 @@ fn test_three_factor_design_solve_converges() {
     let fc: Vec<u32> = (0..n_obs).map(|i| ((i * 3) % n_lev) as u32).collect();
 
     let store = FactorMajorStore::new(vec![fa, fb, fc], n_obs).expect("valid 3-factor store");
-    let dm = WeightedDesign::from_store(store).expect("valid 3-factor design");
+    let dm = Design::from_store(store).expect("valid 3-factor design");
 
     assert_eq!(dm.n_factors(), 3);
 
@@ -252,7 +252,7 @@ fn test_disconnected_design_larger_converges() {
 
     let store = FactorMajorStore::new(vec![fa.clone(), fb.clone()], n_obs)
         .expect("valid disconnected store");
-    let dm = WeightedDesign::from_store(store).expect("valid disconnected design");
+    let dm = Design::from_store(store).expect("valid disconnected design");
 
     let x_true = vec![1.0f64; dm.n_dofs];
     let mut y = vec![0.0f64; dm.n_rows];
@@ -315,7 +315,7 @@ fn test_disconnected_design_solve_converges() {
 fn test_single_factor_design_construction() {
     let categories = vec![vec![0u32, 1, 2, 0, 1]];
     let store = FactorMajorStore::new(categories, 5).expect("valid store");
-    let dm = WeightedDesign::from_store(store).expect("valid single-factor design");
+    let dm = Design::from_store(store).expect("valid single-factor design");
 
     assert_eq!(dm.n_factors(), 1, "expected 1 factor");
     assert_eq!(dm.n_dofs, 3, "expected 3 DOFs (levels 0,1,2)");
@@ -326,7 +326,7 @@ fn test_single_factor_design_construction() {
 fn test_single_factor_design_adjoint_property() {
     let categories = vec![vec![0u32, 1, 2, 0, 1]];
     let store = FactorMajorStore::new(categories, 5).expect("valid store");
-    let dm = WeightedDesign::from_store(store).expect("valid single-factor design");
+    let dm = Design::from_store(store).expect("valid single-factor design");
 
     let n_dofs = dm.n_dofs;
     let n_rows = dm.n_rows;
@@ -388,7 +388,7 @@ fn test_single_factor_matvec_d_values() {
     // D·[a, b, c] with levels [0,1,2,0,1] should give [a, b, c, a, b]
     let categories = vec![vec![0u32, 1, 2, 0, 1]];
     let store = FactorMajorStore::new(categories, 5).expect("valid store");
-    let dm = WeightedDesign::from_store(store).expect("valid single-factor design");
+    let dm = Design::from_store(store).expect("valid single-factor design");
 
     let x = vec![10.0, 20.0, 30.0];
     let mut y = vec![0.0f64; 5];
@@ -401,7 +401,7 @@ fn test_single_factor_rmatvec_dt_values() {
     // D^T·[1,2,3,4,5] with levels [0,1,2,0,1] should give [1+4, 2+5, 3] = [5, 7, 3]
     let categories = vec![vec![0u32, 1, 2, 0, 1]];
     let store = FactorMajorStore::new(categories, 5).expect("valid store");
-    let dm = WeightedDesign::from_store(store).expect("valid single-factor design");
+    let dm = Design::from_store(store).expect("valid single-factor design");
 
     let r = vec![1.0, 2.0, 3.0, 4.0, 5.0];
     let mut x = vec![0.0f64; 3];

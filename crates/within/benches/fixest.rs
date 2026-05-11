@@ -10,9 +10,9 @@ use schwarz_precond::Operator;
 use within::config::{
     ApproxCholConfig, LocalSolverConfig, Preconditioner, ReductionStrategy, SolverParams,
 };
-use within::domain::WeightedDesign;
+use within::domain::Design;
 use within::observation::FactorMajorStore;
-use within::operator::WeightedDesignOperator;
+use within::operator::DesignOperator;
 use within::Solver;
 
 // ===========================================================================
@@ -45,10 +45,7 @@ impl Case {
     }
 }
 
-fn generate_fixest_like_case(
-    case: Case,
-    seed: u64,
-) -> (WeightedDesign<FactorMajorStore>, Vec<f64>) {
+fn generate_fixest_like_case(case: Case, seed: u64) -> (Design<FactorMajorStore>, Vec<f64>) {
     let mut rng = SmallRng::seed_from_u64(seed);
     let n_years = 10usize;
     let n_indiv_per_firm = 23usize;
@@ -77,7 +74,7 @@ fn generate_fixest_like_case(
     };
 
     let store = FactorMajorStore::new(factor_levels, case.n_obs).expect("valid factor-major store");
-    let design = WeightedDesign::from_store(store).expect("valid design");
+    let design = Design::from_store(store).expect("valid design");
 
     let mut x_true = vec![0.0; design.n_dofs];
     for x in &mut x_true {
@@ -122,7 +119,7 @@ fn configure_group<'a>(
 fn run_smoke(
     group: &mut BenchmarkGroup<'_, WallTime>,
     label: &str,
-    design: &WeightedDesign<FactorMajorStore>,
+    design: &Design<FactorMajorStore>,
     y: &[f64],
 ) {
     group.bench_function(BenchmarkId::new(label, ""), |b| {
@@ -130,7 +127,7 @@ fn run_smoke(
     });
 }
 
-fn run_lsmr_one_level(design: &WeightedDesign<FactorMajorStore>, y: &[f64], ac2: bool) {
+fn run_lsmr_one_level(design: &Design<FactorMajorStore>, y: &[f64], ac2: bool) {
     let params = SolverParams {
         tol: TOL,
         maxiter: MAXITER,
@@ -280,7 +277,7 @@ fn bench_matvec(c: &mut Criterion) {
         let (design, _y) = generate_fixest_like_case(case, 42);
         let n_dofs = design.n_dofs;
         let n_obs = design.n_rows;
-        let op = WeightedDesignOperator::new(&design, None);
+        let op = DesignOperator::new(&design, None);
         let x: Vec<f64> = (0..n_dofs).map(|i| (i as f64).sin()).collect();
         let mut y = vec![0.0; n_obs];
         group.bench_function(BenchmarkId::new("apply", &label), |b| {

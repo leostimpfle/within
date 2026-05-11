@@ -12,7 +12,7 @@
 //!
 //! | Operator | Type | Description |
 //! |---|---|---|
-//! | **sqrt(W) D** | [`WeightedDesignOperator`] | Rectangular operator used by LSMR. Implements `sqrt(W) D x` and `D^T sqrt(W) x` via gather/scatter on the observation store |
+//! | **sqrt(W) D** | [`DesignOperator`] | Rectangular operator used by LSMR. Implements `sqrt(W) D x` and `D^T sqrt(W) x` via gather/scatter on the observation store |
 //!
 //! # Submodules
 //!
@@ -40,15 +40,15 @@ pub(crate) mod schwarz;
 mod tests;
 
 // ---------------------------------------------------------------------------
-// WeightedDesignOperator — rectangular, W^{1/2}·D·x / D^T·W^{1/2}·x
+// DesignOperator — rectangular, W^{1/2}·D·x / D^T·W^{1/2}·x
 // ---------------------------------------------------------------------------
 
 use std::sync::Mutex;
 
 use schwarz_precond::Operator;
 
-use crate::domain::WeightedDesign;
-use crate::observation::ObservationStore;
+use crate::domain::Design;
+use crate::observation::Store;
 
 /// Weighted rectangular design operator: `A = W^{1/2} D`.
 ///
@@ -57,20 +57,20 @@ use crate::observation::ObservationStore;
 ///
 /// The normal equations of this operator give `A^T A = D^T W D = G` (the Gramian),
 /// so the existing Schwarz preconditioner approximating `G^{-1}` can be used directly.
-pub struct WeightedDesignOperator<'a, S: ObservationStore> {
-    design: &'a WeightedDesign<S>,
+pub struct DesignOperator<'a, S: Store> {
+    design: &'a Design<S>,
     /// Pre-computed `sqrt(w_i)` per observation. `None` when unweighted.
     sqrt_weights: Option<Vec<f64>>,
     /// Scratch for the adjoint path: stores `sqrt(w_i) * u_i`.
     scratch: Mutex<Vec<f64>>,
 }
 
-impl<'a, S: ObservationStore> WeightedDesignOperator<'a, S> {
+impl<'a, S: Store> DesignOperator<'a, S> {
     /// Create from a weighted design matrix and optional observation weights.
     ///
     /// `weights = None` selects the unweighted fast-path: `sqrt_weights` is
     /// `None` and `apply` / `apply_adjoint` skip the per-row scaling entirely.
-    pub fn new(design: &'a WeightedDesign<S>, weights: Option<&[f64]>) -> Self {
+    pub fn new(design: &'a Design<S>, weights: Option<&[f64]>) -> Self {
         let sqrt_weights = weights.map(|w| w.iter().map(|wi| wi.sqrt()).collect::<Vec<f64>>());
         Self {
             scratch: Mutex::new(vec![0.0; design.n_rows]),
@@ -89,7 +89,7 @@ impl<'a, S: ObservationStore> WeightedDesignOperator<'a, S> {
         }
     }
 }
-impl<S: ObservationStore> Operator for WeightedDesignOperator<'_, S> {
+impl<S: Store> Operator for DesignOperator<'_, S> {
     fn nrows(&self) -> usize {
         self.design.n_rows
     }

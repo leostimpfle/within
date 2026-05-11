@@ -43,7 +43,7 @@ use within::config::{
     ApproxCholConfig, ApproxSchurConfig, LocalSolverConfig, Preconditioner, ReductionStrategy,
     SolverParams, DEFAULT_DENSE_SCHUR_THRESHOLD,
 };
-use within::domain::WeightedDesign;
+use within::domain::Design;
 use within::observation::FactorMajorStore;
 use within::{
     solve as solve_native, solve_batch as solve_batch_native, FePreconditioner, Operator,
@@ -701,7 +701,7 @@ impl PySolver {
             .map(|f| cats.column(f).iter().copied().collect())
             .collect();
         let store = FactorMajorStore::new(factor_levels, n_obs).map_err(value_err)?;
-        let design = WeightedDesign::from_store(store).map_err(value_err)?;
+        let design = Design::from_store(store).map_err(value_err)?;
         let weights_vec: Option<Vec<f64>> = weights
             .as_ref()
             .map(|w| w.as_array().iter().copied().collect());

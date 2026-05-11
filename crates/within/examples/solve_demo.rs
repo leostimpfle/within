@@ -20,11 +20,11 @@ fn main() {
 
     // Build design to compute D * x_true.
     use within::observation::FactorMajorStore;
-    use within::WeightedDesign;
+    use within::Design;
 
     let factor_levels = vec![categories.column(0).to_vec(), categories.column(1).to_vec()];
     let store = FactorMajorStore::new(factor_levels, n_obs).expect("valid factor-major store");
-    let design = WeightedDesign::from_store(store).expect("valid design");
+    let design = Design::from_store(store).expect("valid design");
 
     // True coefficient vector: x_true[j] = (j mod 7) - 3.
     let total_dofs = design.n_dofs;

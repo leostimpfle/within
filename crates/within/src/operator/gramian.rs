@@ -8,7 +8,7 @@
 //!
 //! The LSMR solver does not assemble the full Gramian `G = D^T W D`; it
 //! works on the rectangular operator `sqrt(W) D` directly via
-//! [`crate::operator::WeightedDesignOperator`]. Only per-pair `CrossTab`s are
+//! [`crate::operator::DesignOperator`]. Only per-pair `CrossTab`s are
 //! needed, and only for preconditioner construction.
 
 mod cross_tab;

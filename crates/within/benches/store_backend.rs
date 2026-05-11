@@ -8,7 +8,7 @@ use rand::rngs::SmallRng;
 use rand::{Rng, SeedableRng};
 
 use within::config::{Preconditioner, SolverParams};
-use within::domain::WeightedDesign;
+use within::domain::Design;
 use within::observation::{ArrayStore, FactorMajorStore};
 use within::Solver;
 
@@ -101,7 +101,7 @@ fn bench_store_backends(c: &mut Criterion) {
                     .map(|q| p.categories_c.column(q).to_vec())
                     .collect();
                 let store = FactorMajorStore::new(factor_levels, *n_obs).unwrap();
-                let design = WeightedDesign::from_store(store).unwrap();
+                let design = Design::from_store(store).unwrap();
                 let solver = Solver::from_design(design, None, &p.params, precond_ref).unwrap();
                 let r = solver.solve(&p.y).unwrap();
                 assert!(r.converged);
@@ -112,7 +112,7 @@ fn bench_store_backends(c: &mut Criterion) {
         group.bench_function(BenchmarkId::new("Array(C)", &p.label), |b| {
             b.iter(|| {
                 let store = ArrayStore::new(p.categories_c.view()).unwrap();
-                let design = WeightedDesign::from_store(store).unwrap();
+                let design = Design::from_store(store).unwrap();
                 let solver = Solver::from_design(design, None, &p.params, precond_ref).unwrap();
                 let r = solver.solve(&p.y).unwrap();
                 assert!(r.converged);
@@ -123,7 +123,7 @@ fn bench_store_backends(c: &mut Criterion) {
         group.bench_function(BenchmarkId::new("Array(F)", &p.label), |b| {
             b.iter(|| {
                 let store = ArrayStore::new(p.categories_f.view()).unwrap();
-                let design = WeightedDesign::from_store(store).unwrap();
+                let design = Design::from_store(store).unwrap();
                 let solver = Solver::from_design(design, None, &p.params, precond_ref).unwrap();
                 let r = solver.solve(&p.y).unwrap();
                 assert!(r.converged);

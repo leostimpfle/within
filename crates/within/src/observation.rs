@@ -13,7 +13,7 @@
 //! - **Rust tests and benchmarks** build data programmatically as `Vec<Vec<u32>>`,
 //!   which is naturally factor-major.
 //!
-//! The [`ObservationStore`] trait abstracts over these layouts so that all
+//! The [`Store`] trait abstracts over these layouts so that all
 //! upstream code (design matrix operations, domain decomposition, Gramian
 //! assembly) is generic and layout-agnostic.
 //!
@@ -24,7 +24,7 @@
 //! | [`FactorMajorStore`] | `factor_levels[q][i]` — grouped by factor | Yes | Rust-native construction; sequential factor-column access for Gramian build and domain decomposition |
 //! | [`ArrayStore`] | `categories[[i, q]]` — borrowed `ArrayView2` | No (borrows) | Zero-copy from numpy; F-contiguous arrays get contiguous column access matching `FactorMajorStore` performance |
 //!
-//! Both backends implement the optional [`ObservationStore::factor_column`]
+//! Both backends implement the optional [`Store::factor_column`]
 //! fast-path, which returns a contiguous `&[u32]` slice for a factor's levels
 //! when the memory layout permits it. The design-matrix scatter/gather loops
 //! exploit this to avoid per-element virtual dispatch.
@@ -32,8 +32,8 @@
 //! # Key types
 //!
 //! - [`FactorMeta`] — per-factor metadata (level count and global DOF offset),
-//!   separated from observation data so it can live in the [`WeightedDesign`](crate::domain::WeightedDesign).
-//! - [`ObservationStore`] — the core trait. All implementors must be
+//!   separated from observation data so it can live in the [`Design`](crate::domain::Design).
+//! - [`Store`] — the core trait. All implementors must be
 //!   `Send + Sync` to support Rayon parallelism in the layers above.
 //!
 //! # Weights
@@ -62,14 +62,14 @@ pub struct FactorMeta {
 }
 
 // ---------------------------------------------------------------------------
-// ObservationStore trait
+// Store trait
 // ---------------------------------------------------------------------------
 
 /// Core abstraction: how observation data is stored and accessed.
 ///
 /// Each backend optimizes for different data characteristics.
 /// All implementors must be `Send + Sync` for Rayon parallelism.
-pub trait ObservationStore: Send + Sync {
+pub trait Store: Send + Sync {
     /// Number of observations.
     fn n_obs(&self) -> usize;
 
@@ -130,7 +130,7 @@ impl FactorMajorStore {
     }
 }
 
-impl ObservationStore for FactorMajorStore {
+impl Store for FactorMajorStore {
     #[inline]
     fn n_obs(&self) -> usize {
         self.n_obs
@@ -178,7 +178,7 @@ impl<'a> ArrayStore<'a> {
     }
 }
 
-impl ObservationStore for ArrayStore<'_> {
+impl Store for ArrayStore<'_> {
     #[inline]
     fn n_obs(&self) -> usize {
         self.categories.nrows()

@@ -6,7 +6,7 @@
 use proptest::prelude::*;
 
 use super::CrossTab;
-use crate::domain::WeightedDesign;
+use crate::domain::Design;
 use crate::observation::FactorMajorStore;
 use crate::operator::gramian::find_all_active_levels;
 
@@ -28,7 +28,7 @@ fn test_cross_tab_sparse_accumulation_path() {
     // Sparse path (large level counts)
     let store_sparse =
         FactorMajorStore::new(vec![fa.clone(), fb.clone()], n_obs).expect("valid sparse store");
-    let design_sparse = WeightedDesign::from_store(store_sparse).expect("valid sparse design");
+    let design_sparse = Design::from_store(store_sparse).expect("valid sparse design");
     let (ct_sparse, _) = CrossTab::build_for_pair(&design_sparse, None, 0, 1)
         .expect("sparse cross tab should build");
 
@@ -38,7 +38,7 @@ fn test_cross_tab_sparse_accumulation_path() {
     let fb_small: Vec<u32> = fb.iter().map(|&x| x % 100).collect();
     let store_dense = FactorMajorStore::new(vec![fa_small.clone(), fb_small.clone()], n_obs)
         .expect("valid dense store");
-    let design_dense = WeightedDesign::from_store(store_dense).expect("valid dense design");
+    let design_dense = Design::from_store(store_dense).expect("valid dense design");
     let (ct_dense, _) =
         CrossTab::build_for_pair(&design_dense, None, 0, 1).expect("dense cross tab should build");
 
@@ -117,7 +117,7 @@ fn test_extract_component_two_components() {
     let fb = vec![0u32, 1, 0, 1, 2, 3, 2, 3];
     let n_obs = 8;
     let store = FactorMajorStore::new(vec![fa, fb], n_obs).expect("valid store");
-    let design = WeightedDesign::from_store(store).expect("valid design");
+    let design = Design::from_store(store).expect("valid design");
     let (ct, _) = CrossTab::build_for_pair(&design, None, 0, 1).expect("cross tab should build");
 
     let components = ct.bipartite_connected_components();
@@ -227,7 +227,7 @@ proptest! {
         }
 
         let store = FactorMajorStore::new(vec![fa, fb], n_obs).expect("valid store");
-        let design = WeightedDesign::from_store(store).expect("valid design");
+        let design = Design::from_store(store).expect("valid design");
         let (ct, _) = CrossTab::build_for_pair(&design, None, 0, 1)
             .expect("cross tab should build");
 
@@ -283,7 +283,7 @@ fn test_find_all_active_levels_with_gaps() {
     let fb = vec![0u32, 1, 2, 0, 1, 2];
     let n_obs = 6;
     let store = FactorMajorStore::new(vec![fa, fb], n_obs).expect("valid store");
-    let design = WeightedDesign::from_store(store).expect("valid design");
+    let design = Design::from_store(store).expect("valid design");
 
     let active = find_all_active_levels(&design);
 

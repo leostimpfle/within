@@ -17,8 +17,8 @@ use schwarz_precond::{LocalSolver, Operator, ReductionStrategy};
 use serde::{Deserialize, Serialize};
 
 use crate::config::Preconditioner;
-use crate::domain::WeightedDesign;
-use crate::observation::ObservationStore;
+use crate::domain::Design;
+use crate::observation::Store;
 use crate::operator::schwarz::{build_additive_with_strategy, FeSchwarz};
 use crate::WithinResult;
 
@@ -95,8 +95,8 @@ impl Operator for FePreconditioner {
 
 /// Build a [`FePreconditioner`] from a design, optional observation weights,
 /// and configuration.
-pub fn build_preconditioner<S: ObservationStore>(
-    design: &WeightedDesign<S>,
+pub fn build_preconditioner<S: Store>(
+    design: &Design<S>,
     weights: Option<&[f64]>,
     config: &Preconditioner,
 ) -> WithinResult<FePreconditioner> {

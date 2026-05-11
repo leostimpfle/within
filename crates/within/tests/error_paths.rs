@@ -3,13 +3,13 @@ use std::error::Error;
 use ndarray::Array2;
 use schwarz_precond::{PreconditionerBuildError, SolveError};
 use within::observation::FactorMajorStore;
-use within::{solve, Preconditioner, Solver, SolverParams, WeightedDesign, WithinError};
+use within::{solve, Design, Preconditioner, Solver, SolverParams, WithinError};
 
 #[test]
 fn test_empty_observations_error() {
-    // FactorMajorStore::new allows 0 rows; EmptyObservations is raised by WeightedDesign::from_store
+    // FactorMajorStore::new allows 0 rows; EmptyObservations is raised by Design::from_store
     let store = FactorMajorStore::new(vec![vec![], vec![]], 0).expect("store ok");
-    let result = WeightedDesign::from_store(store);
+    let result = Design::from_store(store);
     assert!(result.is_err());
     match result.unwrap_err() {
         WithinError::EmptyObservations => {}
@@ -32,7 +32,7 @@ fn test_observation_count_mismatch_error() {
 fn test_weight_count_mismatch_error() {
     // Weights of wrong length are caught at Solver construction time.
     let store = FactorMajorStore::new(vec![vec![0, 1, 2], vec![0, 1, 0]], 3).expect("store ok");
-    let design = WeightedDesign::from_store(store).expect("valid design");
+    let design = Design::from_store(store).expect("valid design");
     let params = SolverParams::default();
     let result = Solver::from_design(design, Some(vec![1.0, 2.0]), &params, None);
     let err = result
