@@ -13,7 +13,7 @@
 //! handling flows through `try_apply` for graceful reporting of local-solver
 //! failures.
 
-use schwarz_precond::{AdditiveSchwarzDiagnostics, LocalSolver, Operator, ReductionStrategy};
+use schwarz_precond::{LocalSolver, Operator, ReductionStrategy};
 use serde::{Deserialize, Serialize};
 
 use crate::config::Preconditioner;
@@ -63,13 +63,6 @@ impl FePreconditioner {
     pub fn resolved_additive_reduction_strategy(&self) -> Option<ReductionStrategy> {
         match self {
             Self::Additive(p) => Some(p.resolved_reduction_strategy()),
-        }
-    }
-
-    /// Build-time additive Schwarz scheduling diagnostics, if applicable.
-    pub fn additive_schwarz_diagnostics(&self) -> Option<AdditiveSchwarzDiagnostics> {
-        match self {
-            Self::Additive(p) => Some(p.diagnostics()),
         }
     }
 }

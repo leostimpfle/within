@@ -36,43 +36,6 @@ class ReductionStrategy(IntEnum):
     AtomicScatter = 1
     ParallelReduction = 2
 
-class AdditiveSchwarzDiagnostics:
-    """Diagnostics for an additive Schwarz preconditioner.
-
-    Provides insight into the parallel structure and work distribution
-    across subdomains. Useful for performance tuning.
-    """
-
-    @property
-    def reduction_strategy(self) -> ReductionStrategy:
-        """The configured reduction strategy (may be ``Auto``)."""
-        ...
-    @property
-    def resolved_reduction_strategy(self) -> ReductionStrategy:
-        """The actual strategy chosen after resolving ``Auto``."""
-        ...
-    @property
-    def total_inner_parallel_work(self) -> int:
-        """Sum of inner parallel work across all subdomains."""
-        ...
-    @property
-    def max_inner_parallel_work(self) -> int:
-        """Maximum inner parallel work in any single subdomain."""
-        ...
-    @property
-    def total_scatter_dofs(self) -> int:
-        """Total number of DOFs scattered across subdomains (with overlap)."""
-        ...
-    @property
-    def outer_parallel_capacity(self) -> float:
-        """Ratio indicating how well the outer loop parallelises (higher is better)."""
-        ...
-    @property
-    def scatter_overlap(self) -> float:
-        """Ratio of scattered DOFs to unique DOFs (1.0 = no overlap)."""
-        ...
-    def __repr__(self) -> str: ...
-
 class LSMR:
     """Modified LSMR solver configuration.
 
@@ -257,10 +220,6 @@ class FePreconditioner:
         ...
     def subdomain_inner_parallel_work(self) -> list[int]:
         """Estimated inner-parallel work per subdomain."""
-        ...
-    def additive_schwarz_diagnostics(self) -> AdditiveSchwarzDiagnostics | None:
-        """Diagnostics for the additive Schwarz scheduling. Returns ``None``
-        if this preconditioner is not the additive variant."""
         ...
     def __repr__(self) -> str: ...
     def __reduce__(self) -> tuple: ...

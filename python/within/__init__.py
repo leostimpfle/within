@@ -52,7 +52,6 @@ from within._within import (
     solve,
     solve_batch,
     AdditiveSchwarz,
-    AdditiveSchwarzDiagnostics,
     ReductionStrategy,
 )
 
@@ -66,6 +65,5 @@ __all__ = [
     "solve",
     "solve_batch",
     "AdditiveSchwarz",
-    "AdditiveSchwarzDiagnostics",
     "ReductionStrategy",
 ]

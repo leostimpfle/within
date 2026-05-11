@@ -11,9 +11,7 @@ use crate::local_solve::{LocalSolver, SubdomainEntry};
 use crate::Operator;
 
 use super::executor::AdditiveExecutor;
-use super::planning::{
-    AdditiveScheduler, AdditiveSchwarzDiagnostics, ReductionPlan, ReductionStrategy,
-};
+use super::planning::{AdditiveScheduler, ReductionPlan, ReductionStrategy};
 
 // ---------------------------------------------------------------------------
 // Serde
@@ -119,11 +117,6 @@ impl<S: LocalSolver> SchwarzPreconditioner<S> {
     /// Concrete backend selected for the current Rayon thread-pool width.
     pub fn resolved_reduction_strategy(&self) -> ReductionStrategy {
         self.reduction_plan().strategy.as_public()
-    }
-
-    /// Build-time metrics used by the additive scheduler.
-    pub fn diagnostics(&self) -> AdditiveSchwarzDiagnostics {
-        self.scheduler.diagnostics()
     }
 
     /// Return a copy that uses a different reduction strategy.

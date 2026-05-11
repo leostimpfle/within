@@ -64,11 +64,6 @@ impl FeSchwarz {
         self.0.resolved_reduction_strategy()
     }
 
-    /// Subdomain diagnostics (sizes, overlap counts).
-    pub fn diagnostics(&self) -> schwarz_precond::AdditiveSchwarzDiagnostics {
-        self.0.diagnostics()
-    }
-
     /// Apply the preconditioner, returning an error on local-solver failure.
     pub fn try_apply(&self, r: &[f64], z: &mut [f64]) -> Result<(), schwarz_precond::ApplyError> {
         self.0.try_apply(r, z)

@@ -49,6 +49,11 @@ Modified LSMR is now the sole iterative solver, replacing CG and GMRES.
   `schwarz_precond::schwarz::{additive, multiplicative}` flattened into
   `schwarz_precond::schwarz`; crate-root `SchwarzPreconditioner` re-export
   unchanged.
+- **BREAKING:** `AdditiveSchwarzDiagnostics` removed from Rust and Python
+  public APIs along with `SchwarzPreconditioner::diagnostics`,
+  `FePreconditioner::additive_schwarz_diagnostics`, and the Python
+  `AdditiveSchwarzDiagnostics` class. Scheduling metrics are now private
+  to the `Auto` heuristic (closes #34).
 
 ## [0.1.0] - 2026-03-12
 

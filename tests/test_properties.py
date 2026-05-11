@@ -6,7 +6,7 @@ import numpy as np
 from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 
-from within import Preconditioner, Solver, solve
+from within import Solver, solve
 from within import AdditiveSchwarz, ReductionStrategy
 
 
@@ -271,22 +271,6 @@ class TestAdvancedPreconditioners:
         )
         if r_atomic.converged and r_parallel.converged:
             np.testing.assert_allclose(r_atomic.x, r_parallel.x, atol=1e-4)
-
-    def test_additive_schwarz_diagnostics_available(self):
-        """FePreconditioner built with additive Schwarz should expose diagnostics."""
-        rng = np.random.default_rng(5)
-        categories = np.asfortranarray(
-            np.column_stack(
-                [rng.integers(0, 10, size=300), rng.integers(0, 10, size=300)]
-            ).astype(np.uint32)
-        )
-        solver = Solver(categories, preconditioner=Preconditioner.Additive)
-        precond = solver.preconditioner()
-        assert precond is not None
-        diag = precond.additive_schwarz_diagnostics()
-        assert diag is not None
-        assert diag.total_inner_parallel_work >= 0
-        assert diag.total_scatter_dofs >= 0
 
 
 class TestBatchProperties:
