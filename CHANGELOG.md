@@ -49,9 +49,19 @@ Modified LSMR is now the sole iterative solver, replacing CG and GMRES.
   weighted `apply` / `apply_adjoint` no longer allocate. The weighted
   `apply` fuses the `W^{1/2}` multiply into the last gather pass, so
   there is no trailing scale loop.
-- `build_preconditioner` now returns `WithinError::WeightCountMismatch`
+- `build_preconditioner` now returns `BuildError::WeightCountMismatch`
   for wrong-length weights instead of panicking on out-of-bounds access
   inside `CrossTab` assembly.
+- **BREAKING:** Error vocabulary collapsed to per-crate `BuildError` /
+  `SolveError`. `schwarz_precond` absorbs three sub-enums into one
+  `BuildError`. `within::WithinError` splits into `BuildError`, a
+  `SolveError` re-export, and a thin union for `solve()` / `solve_batch()`.
+  `WithinResult` removed. `LocalSolveError::ApproxCholSolveFailed` renamed
+  to `BackendFailed`; `LocalSolveError` is now `#[non_exhaustive]`.
+  `WithinError::{Build, Solve}` are transparent — `Display` and
+  `Error::source` forward to the inner error, so the union no longer
+  appears in the error chain. Internally migrated to `thiserror` (new
+  dependency on `schwarz-precond` and `within`). Closes #30.
 
 ### Removed
 

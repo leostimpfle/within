@@ -8,7 +8,9 @@ pub fn make_test_design() -> Design<FactorMajorStore> {
     make_design(vec![vec![0, 1, 0, 1, 2], vec![0, 0, 1, 1, 0]]).expect("valid test design")
 }
 
-pub fn make_design(categories: Vec<Vec<u32>>) -> within::WithinResult<Design<FactorMajorStore>> {
+pub fn make_design(
+    categories: Vec<Vec<u32>>,
+) -> Result<Design<FactorMajorStore>, within::BuildError> {
     let n_rows = categories.first().map_or(0, Vec::len);
     let store = FactorMajorStore::new(categories, n_rows)?;
     Design::from_store(store)

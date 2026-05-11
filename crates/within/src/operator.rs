@@ -288,7 +288,7 @@ impl<'a, S: Store> DesignOperator<'a, S> {
     ///
     /// Panics when `weights.is_some()` and `weights.unwrap().len()` does not
     /// equal `design.n_rows`. The `Solver` entry points perform fallible
-    /// validation against `WithinError::WeightCountMismatch` before
+    /// validation against `BuildError::WeightCountMismatch` before
     /// construction, so callers that go through `Solver::from_design` or
     /// `solve()` never trigger this panic.
     pub fn new(design: &'a Design<S>, weights: Option<&[f64]>) -> Self {

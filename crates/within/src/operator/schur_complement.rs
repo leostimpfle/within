@@ -56,7 +56,7 @@ use schwarz_precond::SparseMatrix;
 use super::csr_block::CsrBlock;
 use super::gramian::CrossTab;
 use crate::config::ApproxSchurConfig;
-use crate::{WithinError, WithinResult};
+use crate::BuildError;
 
 /// Undirected fill edge: `(lo_col, hi_col, weight)` with `lo_col < hi_col`.
 type Edge = (u32, u32, f64);
@@ -167,7 +167,7 @@ struct Elimination<'a> {
 
 impl<'a> Elimination<'a> {
     /// Select which block to eliminate and precompute inverse-diagonals.
-    fn new(cross_tab: &'a CrossTab) -> WithinResult<Self> {
+    fn new(cross_tab: &'a CrossTab) -> Result<Self, BuildError> {
         let n_q = cross_tab.n_q();
         let n_r = cross_tab.n_r();
         // Eliminate the larger block to minimize the reduced system size.
@@ -184,7 +184,7 @@ impl<'a> Elimination<'a> {
             if d > 0.0 {
                 inv_diag_elim.push(1.0 / d);
             } else {
-                return Err(WithinError::SingularDiagonal {
+                return Err(BuildError::SingularDiagonal {
                     block: if eliminate_q { "q (elim)" } else { "r (elim)" },
                     index: i,
                 });
@@ -627,7 +627,7 @@ pub(crate) struct AnchoredDenseSchurResult {
 
 /// Strategy for computing the Schur complement of a [`CrossTab`].
 pub(crate) trait SchurComplement {
-    fn compute(&self, cross_tab: &CrossTab) -> WithinResult<SchurResult>;
+    fn compute(&self, cross_tab: &CrossTab) -> Result<SchurResult, BuildError>;
 }
 
 /// Exact Schur complement via block elimination.
@@ -650,7 +650,7 @@ impl SchurComplement for ExactSchurComplement {
     /// For the bipartite SDDM `[D_q, -C; -C^T, D_r]`, eliminates the larger
     /// block (exact since it's diagonal) to get a reduced Laplacian on the
     /// smaller block.
-    fn compute(&self, cross_tab: &CrossTab) -> WithinResult<SchurResult> {
+    fn compute(&self, cross_tab: &CrossTab) -> Result<SchurResult, BuildError> {
         let elim = Elimination::new(cross_tab)?;
         let laplacian = SchurLaplacian::from_elimination(&elim);
         Ok(SchurResult {
@@ -666,7 +666,10 @@ impl ExactSchurComplement {
     /// Used by the tiny-system fast path to avoid sparse Schur assembly and
     /// sparse ApproxChol builder overhead.
     #[cfg(test)]
-    pub(crate) fn compute_dense(&self, cross_tab: &CrossTab) -> WithinResult<DenseSchurResult> {
+    pub(crate) fn compute_dense(
+        &self,
+        cross_tab: &CrossTab,
+    ) -> Result<DenseSchurResult, BuildError> {
         let elim = Elimination::new(cross_tab)?;
         let matrix = SchurLaplacian::dense_from_elimination(&elim);
         Ok(DenseSchurResult {
@@ -683,7 +686,7 @@ impl ExactSchurComplement {
     pub(crate) fn compute_dense_anchored(
         &self,
         cross_tab: &CrossTab,
-    ) -> WithinResult<AnchoredDenseSchurResult> {
+    ) -> Result<AnchoredDenseSchurResult, BuildError> {
         let elim = Elimination::new(cross_tab)?;
         let anchored_minor = SchurLaplacian::anchored_minor_from_elimination(&elim);
         Ok(AnchoredDenseSchurResult {
@@ -699,7 +702,7 @@ impl SchurComplement for ApproxSchurComplement {
     ///
     /// Each eliminated vertex produces at most deg-1 fill edges via the
     /// GKS 2023 Algorithm 5 clique-tree approximation.
-    fn compute(&self, cross_tab: &CrossTab) -> WithinResult<SchurResult> {
+    fn compute(&self, cross_tab: &CrossTab) -> Result<SchurResult, BuildError> {
         let elim = Elimination::new(cross_tab)?;
         let emitter = SampledCliqueEmitter::new(&self.config);
         let edges = elim.par_emit(&emitter);

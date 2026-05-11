@@ -123,10 +123,7 @@ mod schwarz;
 mod sparse_matrix;
 
 pub use domain::{PartitionWeights, SubdomainCore};
-pub use error::{
-    LocalSolveError, PreconditionerBuildError, SolveError, SubdomainCoreBuildError,
-    SubdomainEntryBuildError,
-};
+pub use error::{BuildError, LocalSolveError, SolveError};
 pub use local_solve::{LocalSolver, SubdomainEntry};
 pub use lsmr::{lsmr, mlsmr, LsmrResult, LsmrStopReason};
 pub use schwarz::{ReductionStrategy, SchwarzPreconditioner};

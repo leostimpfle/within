@@ -165,7 +165,7 @@ impl ReducedFactor {
             Self::Approx(f) => {
                 debug_assert_eq!(f.n(), x.len());
                 f.solve_in_place(x)
-                    .map_err(|e| LocalSolveError::ApproxCholSolveFailed {
+                    .map_err(|e| LocalSolveError::BackendFailed {
                         context: "within.local.block_elim.reduced_approx",
                         message: e.to_string(),
                     })?;

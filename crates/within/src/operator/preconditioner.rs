@@ -20,7 +20,7 @@ use crate::config::Preconditioner;
 use crate::domain::Design;
 use crate::observation::{validate_weights, Store};
 use crate::operator::schwarz::{build_additive_with_strategy, FeSchwarz};
-use crate::WithinResult;
+use crate::BuildError;
 
 /// A pre-built preconditioner ready for use in LSMR solves.
 ///
@@ -99,7 +99,7 @@ pub fn build_preconditioner<S: Store>(
     design: &Design<S>,
     weights: Option<&[f64]>,
     config: &Preconditioner,
-) -> WithinResult<FePreconditioner> {
+) -> Result<FePreconditioner, BuildError> {
     use crate::domain::build_local_domains;
 
     validate_weights(weights, design.n_rows)?;

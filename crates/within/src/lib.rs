@@ -106,7 +106,7 @@
 //! ├── solver              Persistent Solver<S> with preconditioner reuse
 //! ├── orchestrate         Public API: solve(), solve_batch()
 //! ├── config              SolverParams, Preconditioner, LocalSolverConfig
-//! └── error               WithinError, WithinResult<T>
+//! └── error               BuildError, SolveError, WithinError
 //! ```
 //!
 //! # Crate dependency tree
@@ -183,7 +183,7 @@ pub use config::{
     ApproxCholConfig, ApproxSchurConfig, LocalSolverConfig, Preconditioner, ReductionStrategy,
     SolverParams, DEFAULT_DENSE_SCHUR_THRESHOLD,
 };
-pub use error::{WithinError, WithinResult};
+pub use error::{BuildError, SolveError, WithinError};
 pub use orchestrate::SolveResult;
 
 // ---------------------------------------------------------------------------

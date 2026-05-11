@@ -1,31 +1,33 @@
 //! Error types for the `within` crate.
 //!
-//! Errors fall into three categories:
+//! Errors are partitioned by lifecycle phase:
 //!
-//! | Category | Variants | When it happens |
-//! |---|---|---|
-//! | **Validation** | [`WithinError::EmptyObservations`], [`ObservationCountMismatch`](WithinError::ObservationCountMismatch), [`WeightCountMismatch`](WithinError::WeightCountMismatch) | Bad input detected before any computation begins. |
-//! | **Build** | [`SingularDiagonal`](WithinError::SingularDiagonal), [`LocalSolverBuild`](WithinError::LocalSolverBuild), [`PreconditionerBuild`](WithinError::PreconditionerBuild) | Construction of operators or preconditioners fails due to degenerate data (e.g., a factor with zero observations at some level). |
-//! | **Runtime** | [`WithinError::IterativeSolve`] | The iterative solver diverges or exceeds the iteration limit. Wraps [`schwarz_precond::SolveError`]. |
+//! - **Build** ([`BuildError`]) — input validation and operator/preconditioner
+//!   construction failures.
+//! - **Solve** ([`SolveError`]) — runtime failures during the iterative solve.
+//!   Re-exported from [`schwarz_precond`] because this crate adds no new
+//!   solve-time failure modes.
+//! - **Union** ([`WithinError`]) — a thin convenience union used by
+//!   [`crate::solve`] and [`crate::solve_batch`] so callers see a single
+//!   error type at the top-level API boundary.
 //!
-//! All public APIs in this crate return [`WithinResult<T>`], which is
-//! `Result<T, WithinError>`. The build and runtime variants implement
-//! [`Error::source`] to chain the underlying `schwarz_precond` error.
+//! Per-phase functions return [`Result<T, BuildError>`] or
+//! [`Result<T, SolveError>`] directly. Only the top-level convenience
+//! wrappers return [`WithinError`].
 
-use std::error::Error;
-use std::fmt::{Display, Formatter};
+use thiserror::Error;
 
-use schwarz_precond::{PreconditionerBuildError, SolveError};
-
-/// Result alias used by fallible public APIs in this crate.
-pub type WithinResult<T> = Result<T, WithinError>;
+pub use schwarz_precond::SolveError;
 
 /// Errors produced while validating inputs or building solver components.
-#[derive(Debug)]
-pub enum WithinError {
+#[derive(Debug, Error)]
+#[non_exhaustive]
+pub enum BuildError {
     /// No observations provided.
+    #[error("no observations provided")]
     EmptyObservations,
     /// One factor column does not match the expected observation count.
+    #[error("factor {factor} has {got} observations, expected {expected}")]
     ObservationCountMismatch {
         /// Index of the factor with mismatched length.
         factor: usize,
@@ -35,6 +37,7 @@ pub enum WithinError {
         got: usize,
     },
     /// Weight vector does not match the number of observations.
+    #[error("weights has length {got}, expected {expected}")]
     WeightCountMismatch {
         /// Expected number of weights.
         expected: usize,
@@ -42,6 +45,7 @@ pub enum WithinError {
         got: usize,
     },
     /// A zero diagonal was encountered during block elimination.
+    #[error("zero diagonal in {block} block at index {index}")]
     SingularDiagonal {
         /// Which block contained the zero diagonal ("keep" or "elim").
         block: &'static str,
@@ -49,56 +53,30 @@ pub enum WithinError {
         index: usize,
     },
     /// Local solver construction failed.
+    #[error("local solver build failed: {0}")]
     LocalSolverBuild(String),
-    /// Preconditioner structural validation failed.
-    PreconditionerBuild(PreconditionerBuildError),
-    /// Iterative solver runtime error.
-    IterativeSolve(SolveError),
+    /// Schwarz preconditioner structural validation failed.
+    ///
+    /// Lifted from [`schwarz_precond::BuildError`] explicitly at call sites
+    /// via `.map_err(BuildError::Preconditioner)`; no `From` conversion is
+    /// provided so the cross-crate boundary stays visible.
+    #[error("preconditioner build failed: {0}")]
+    Preconditioner(#[source] schwarz_precond::BuildError),
 }
 
-impl Display for WithinError {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::EmptyObservations => write!(f, "no observations provided"),
-            Self::ObservationCountMismatch {
-                factor,
-                expected,
-                got,
-            } => write!(
-                f,
-                "factor {factor} has {got} observations, expected {expected}",
-            ),
-            Self::WeightCountMismatch { expected, got } => {
-                write!(f, "weights has length {got}, expected {expected}")
-            }
-            Self::SingularDiagonal { block, index } => {
-                write!(f, "zero diagonal in {block} block at index {index}")
-            }
-            Self::LocalSolverBuild(msg) => write!(f, "local solver build failed: {msg}"),
-            Self::PreconditionerBuild(err) => write!(f, "{err}"),
-            Self::IterativeSolve(err) => write!(f, "{err}"),
-        }
-    }
-}
-
-impl Error for WithinError {
-    fn source(&self) -> Option<&(dyn Error + 'static)> {
-        match self {
-            Self::PreconditionerBuild(err) => Some(err),
-            Self::IterativeSolve(err) => Some(err),
-            _ => None,
-        }
-    }
-}
-
-impl From<PreconditionerBuildError> for WithinError {
-    fn from(value: PreconditionerBuildError) -> Self {
-        Self::PreconditionerBuild(value)
-    }
-}
-
-impl From<SolveError> for WithinError {
-    fn from(value: SolveError) -> Self {
-        Self::IterativeSolve(value)
-    }
+/// Top-level error type returned by [`crate::solve`] and [`crate::solve_batch`].
+///
+/// Lifts the per-phase [`BuildError`] / [`SolveError`] pair into a single
+/// union at the convenience-wrapper boundary. Per-phase APIs do not return
+/// this type. The wrapping variants are transparent: [`Display`] and
+/// [`Error::source`] both forward to the inner error, so the union does not
+/// appear in the error chain.
+#[derive(Debug, Error)]
+pub enum WithinError {
+    /// Build-time failure: validation or operator/preconditioner construction.
+    #[error(transparent)]
+    Build(#[from] BuildError),
+    /// Solve-time failure: iterative solver runtime error.
+    #[error(transparent)]
+    Solve(#[from] SolveError),
 }
