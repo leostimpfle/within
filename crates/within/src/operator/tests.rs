@@ -42,7 +42,7 @@ mod design_tests {
     }
 
     #[test]
-    fn test_matvec_d() {
+    fn test_apply_unweighted_values() {
         let schema = make_test_design();
         let op = DesignOperator::new(&schema, None);
         let x = vec![1.0, 2.0, 3.0, 10.0, 20.0, 30.0, 40.0];
@@ -52,7 +52,7 @@ mod design_tests {
     }
 
     #[test]
-    fn test_rmatvec_dt() {
+    fn test_apply_adjoint_unweighted_values() {
         let schema = make_test_design();
         let op = DesignOperator::new(&schema, None);
         let r = vec![1.0, 2.0, 3.0, 4.0, 5.0];

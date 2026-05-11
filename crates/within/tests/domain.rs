@@ -57,7 +57,7 @@ fn make_large_design() -> Design<FactorMajorStore> {
 }
 
 #[test]
-fn test_large_design_adjoint_property_matvec_d_rmatvec_dt() {
+fn test_large_design_adjoint_property() {
     // Verify <D·x, r> == <x, D^T·r> for random-looking deterministic vectors.
     let dm = make_large_design();
     let n_dofs = dm.n_dofs;
@@ -105,7 +105,7 @@ fn test_large_design_matvec_correctness() {
 }
 
 #[test]
-fn test_large_design_rmatvec_dt_correctness() {
+fn test_large_design_apply_adjoint_correctness() {
     // D^T·1 should equal the per-level observation count for each factor.
     let dm = make_large_design();
     let n_dofs = dm.n_dofs;

@@ -273,7 +273,7 @@ fn matvec_cases() -> [Case; 4] {
 }
 
 fn bench_matvec(c: &mut Criterion) {
-    let mut group = configure_group(c, "matvec_weighted_design", 50, 200);
+    let mut group = configure_group(c, "design_operator_apply", 50, 200);
     for case in matvec_cases() {
         let label = case.label();
         let (design, _y) = generate_fixest_like_case(case, 42);
