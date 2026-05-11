@@ -44,6 +44,14 @@ Modified LSMR is now the sole iterative solver, replacing CG and GMRES.
   `rmatvec_dt`, `rmatvec_wdt`, `gramian_diagonal`, and `uid_weight`
   methods are removed — use `DesignOperator::new(&design, weights).apply`
   / `apply_adjoint` instead.
+- `DesignOperator::new` validates that `weights.len() == design.n_rows`
+  and panics on mismatch; the scratch `Mutex<Vec<f64>>` field is gone and
+  weighted `apply` / `apply_adjoint` no longer allocate. The weighted
+  `apply` fuses the `W^{1/2}` multiply into the last gather pass, so
+  there is no trailing scale loop.
+- `build_preconditioner` now returns `WithinError::WeightCountMismatch`
+  for wrong-length weights instead of panicking on out-of-bounds access
+  inside `CrossTab` assembly.
 
 ### Removed
 
