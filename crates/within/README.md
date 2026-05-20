@@ -16,7 +16,7 @@ cargo add within
 
 ```rust
 use ndarray::Array2;
-use within::{solve, SolverParams, Preconditioner};
+use within::{solve, LsmrOptions, PreconditionerConfig};
 
 // Two factors: 100 levels each, 10 000 observations
 let n_obs = 10_000usize;
@@ -27,16 +27,16 @@ for i in 0..n_obs {
 }
 let y: Vec<f64> = (0..n_obs).map(|i| i as f64 * 0.01).collect();
 
-// Solve with the default solver: LSMR + additive Schwarz
-let result = solve(categories.view(), &y, None, &SolverParams::default(), None)
+// Solve with library defaults: LSMR + additive Schwarz
+let result = solve(categories.view(), &y, None, &LsmrOptions::default(), None)
     .expect("solve should succeed");
 assert!(result.converged);
 println!("LSMR converged in {} iterations", result.iterations);
 
-// Tighter tolerance with explicit preconditioner config
-let params = SolverParams { tol: 1e-10, ..SolverParams::default() };
-let precond = Preconditioner::default();
-let result = solve(categories.view(), &y, None, &params, Some(&precond))
+// Tighter tolerance with an explicit preconditioner config
+let lsmr = LsmrOptions { tol: 1e-10, ..LsmrOptions::default() };
+let precond = PreconditionerConfig::default();
+let result = solve(categories.view(), &y, None, &lsmr, Some(&precond))
     .expect("solve should succeed");
 assert!(result.converged);
 ```
@@ -59,13 +59,13 @@ The crate is organized in four layers:
    factor metadata; `build_local_domains` constructs factor-pair subdomains
    with partition-of-unity weights for the Schwarz preconditioner.
 
-3. **`operator`** — Linear algebra primitives. `DesignOperator`
-   (rectangular `sqrt(W) D` for LSMR) and Schwarz preconditioner builders
+3. **`operator`** — Linear algebra primitives. Internal rectangular
+   `sqrt(W) D` operator for LSMR and Schwarz preconditioner builders
    that wire approximate Cholesky local solvers into the generic
    `schwarz-precond` framework.
 
 4. **`orchestrate`** — End-to-end solve entry points (`solve`, `solve_batch`)
-   with typed configuration (`SolverParams`, `Preconditioner`).
+   with typed configuration (`LsmrOptions`, `PreconditionerConfig`).
 
 ## License
 

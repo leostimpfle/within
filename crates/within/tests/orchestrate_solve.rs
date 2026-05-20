@@ -1,4 +1,5 @@
-use within::{LocalSolverConfig, Preconditioner, ReductionStrategy, Solver, SolverParams};
+use within::config::{LocalSolverConfig, ReductionStrategy};
+use within::{LsmrOptions, PreconditionerConfig, Solver};
 
 #[path = "common/orchestrate_helpers.rs"]
 mod common;
@@ -6,31 +7,34 @@ mod common;
 #[test]
 fn test_lsmr_unpreconditioned() {
     let design = common::make_test_design();
-    let y = common::make_y_from_unit_solution(&design);
+    let y = common::make_deterministic_y(&design);
 
-    let params = SolverParams {
+    let params = LsmrOptions {
         tol: 1e-8,
         maxiter: 1000,
         ..Default::default()
     };
-    let solver = Solver::from_design(design, None, &params, None).expect("build solver");
-    let result = solver.solve(&y).expect("solve");
+    let solver = Solver::new(design, None::<Vec<f64>>, None).expect("build solver");
+    let result = solver.solve(&y, &params).expect("solve");
     common::assert_converged_with_small_residual(&result, 1e-6);
 }
 
 #[test]
 fn test_lsmr_preconditioned() {
     let design = common::make_test_design();
-    let y = common::make_y_from_unit_solution(&design);
+    let y = common::make_deterministic_y(&design);
 
-    let params = SolverParams {
+    let params = LsmrOptions {
         tol: 1e-8,
         maxiter: 1000,
         ..Default::default()
     };
-    let precond = Preconditioner::Additive(LocalSolverConfig::default(), ReductionStrategy::Auto);
-    let solver = Solver::from_design(design, None, &params, Some(&precond)).expect("build solver");
-    let result = solver.solve(&y).expect("solve");
+    let precond = PreconditionerConfig::Additive {
+        local_solver: LocalSolverConfig::default(),
+        reduction: ReductionStrategy::Auto,
+    };
+    let solver = Solver::new(design, None::<Vec<f64>>, Some(&precond)).expect("build solver");
+    let result = solver.solve(&y, &params).expect("solve");
     common::assert_converged_with_small_residual(&result, 1e-6);
 }
 
@@ -39,13 +43,13 @@ fn test_lsmr_least_squares() {
     let design = common::make_test_design();
     let y = vec![1.0, 2.0, 3.0, 4.0, 5.0];
 
-    let params = SolverParams {
+    let params = LsmrOptions {
         tol: 1e-8,
         maxiter: 1000,
         ..Default::default()
     };
-    let solver = Solver::from_design(design, None, &params, None).expect("build solver");
-    let result = solver.solve(&y).expect("solve");
+    let solver = Solver::new(design, None::<Vec<f64>>, None).expect("build solver");
+    let result = solver.solve(&y, &params).expect("solve");
     assert!(result.converged, "LSMR LS did not converge");
     common::assert_solution_finite(&result);
 }
@@ -57,15 +61,14 @@ fn test_lsmr_least_squares_weighted_preconditioned() {
     let weights = vec![1.0, 2.0, 1.5, 0.5, 3.0];
     let y = vec![1.0, 2.0, 3.0, 4.0, 5.0];
 
-    let params = SolverParams {
+    let params = LsmrOptions {
         tol: 1e-8,
         maxiter: 1000,
         ..Default::default()
     };
-    let precond = Preconditioner::default();
-    let solver =
-        Solver::from_design(design, Some(weights), &params, Some(&precond)).expect("build solver");
-    let result = solver.solve(&y).expect("solve");
+    let precond = PreconditionerConfig::default();
+    let solver = Solver::new(design, Some(weights), Some(&precond)).expect("build solver");
+    let result = solver.solve(&y, &params).expect("solve");
     common::assert_converged_with_small_residual(&result, 1e-6);
     common::assert_solution_finite(&result);
 }
@@ -77,15 +80,14 @@ fn test_lsmr_weighted() {
     let weights = vec![1.0, 2.0, 1.5, 0.5, 3.0];
     let y = vec![1.0, 2.0, 3.0, 4.0, 5.0];
 
-    let params = SolverParams {
+    let params = LsmrOptions {
         tol: 1e-8,
         maxiter: 1000,
         ..Default::default()
     };
-    let precond = Preconditioner::default();
-    let solver =
-        Solver::from_design(design, Some(weights), &params, Some(&precond)).expect("build solver");
-    let result = solver.solve(&y).expect("solve");
+    let precond = PreconditionerConfig::default();
+    let solver = Solver::new(design, Some(weights), Some(&precond)).expect("build solver");
+    let result = solver.solve(&y, &params).expect("solve");
     common::assert_converged_with_small_residual(&result, 1e-6);
     common::assert_solution_finite(&result);
 }

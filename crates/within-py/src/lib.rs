@@ -1,3 +1,8 @@
+// The various __reduce__ methods return tuples whose Rust type signatures are
+// inherently noisy (Bound<'py, PyAny>, (PyO3 fields...)). Suppressing the
+// clippy lint keeps the PyO3 boilerplate readable per-method.
+#![allow(clippy::type_complexity)]
+
 //! Thin PyO3 bridge exposing the [`within`] Rust crate to Python as `within._within`.
 //!
 //! This crate is intentionally minimal: it converts between Python/numpy types
@@ -13,14 +18,15 @@
 //!
 //! # Type mapping
 //!
-//! | Python / numpy              | Rust                       |
-//! |-----------------------------|----------------------------|
-//! | `NDArray[np.uint32]` (2-D)  | `ndarray::ArrayView2<u32>` |
-//! | `NDArray[np.float64]` (1-D) | `&[f64]`                   |
-//! | `NDArray[np.float64]` (2-D) | `Vec<Vec<f64>>` (columns)  |
-//! | `LSMR`                      | [`SolverParams`]           |
-//! | `Preconditioner` enum       | [`Option<Preconditioner>`] |
-//! | `SolveResult`               | [`within::SolveResult`]    |
+//! | Python / numpy              | Rust                              |
+//! |-----------------------------|-----------------------------------|
+//! | `NDArray[np.uint32]` (2-D)  | `ndarray::ArrayView2<u32>`        |
+//! | `NDArray[np.float64]` (1-D) | `&[f64]`                          |
+//! | `NDArray[np.float64]` (2-D) | `Vec<Vec<f64>>` (columns)         |
+//! | `LsmrOptions`                | [`within::LsmrOptions`]            |
+//! | `PreconditionerConfig` enum | [`within::PreconditionerConfig`]  |
+//! | `Preconditioner` (built)    | [`within::Preconditioner`]        |
+//! | `SolveResult`               | [`within::SolveResult`]           |
 //!
 //! Category arrays are read directly via numpy's ndarray bridge (zero-copy
 //! when F-contiguous). Response vectors and weights are borrowed as slices
@@ -35,63 +41,61 @@
 
 use std::borrow::Cow;
 
-use numpy::ndarray::{Array1, Array2, ShapeBuilder};
+use numpy::ndarray::{Array2, ShapeBuilder};
 use numpy::{IntoPyArray, PyReadonlyArray1, PyReadonlyArray2};
 use pyo3::prelude::*;
 
 use within::config::{
-    ApproxCholConfig, ApproxSchurConfig, LocalSolverConfig, Preconditioner, ReductionStrategy,
-    SolverParams, DEFAULT_DENSE_SCHUR_THRESHOLD,
+    ApproxCholConfig, ApproxSchurConfig, LocalSolverConfig, LsmrOptions, PreconditionerConfig,
+    ReductionStrategy,
 };
-use within::domain::Design;
 use within::observation::FactorMajorStore;
 use within::{
-    solve as solve_native, solve_batch as solve_batch_native, FePreconditioner, Operator,
-    SolveResult, Solver,
+    solve as solve_native, solve_batch as solve_batch_native, Design, Preconditioner, SolveResult,
+    Solver, WithinError,
 };
 
 // ---------------------------------------------------------------------------
 // Low-level config classes (available via `_within` for benchmarks)
 // ---------------------------------------------------------------------------
 
-#[pyclass(frozen)]
+#[pyclass(frozen, module = "within._within")]
 #[pyo3(name = "ApproxCholConfig")]
 pub struct PyApproxCholConfig {
     #[pyo3(get)]
     pub seed: u64,
     #[pyo3(get)]
-    pub split: u32,
+    pub split_merge: Option<u32>,
 }
 
 #[pymethods]
 impl PyApproxCholConfig {
     #[new]
-    #[pyo3(signature = (seed=0, split=1))]
-    fn new(seed: u64, split: u32) -> PyResult<Self> {
-        if split == 0 {
-            return Err(pyo3::exceptions::PyValueError::new_err(
-                "split must be >= 1",
-            ));
-        }
-        Ok(Self { seed, split })
+    #[pyo3(signature = (seed=0, split_merge=None))]
+    fn new(seed: u64, split_merge: Option<u32>) -> Self {
+        Self { seed, split_merge }
+    }
+
+    /// Pickle support: serialize to ``(class, (seed, split_merge))``.
+    fn __reduce__<'py>(
+        &self,
+        py: Python<'py>,
+    ) -> PyResult<(Bound<'py, PyAny>, (u64, Option<u32>))> {
+        let cls = py.get_type::<Self>();
+        Ok((cls.into_any(), (self.seed, self.split_merge)))
     }
 }
 
 impl PyApproxCholConfig {
     fn to_native(&self) -> ApproxCholConfig {
-        let split_merge = if self.split > 1 {
-            Some(self.split)
-        } else {
-            None
-        };
         ApproxCholConfig {
             seed: self.seed,
-            split_merge,
+            split_merge: self.split_merge,
         }
     }
 }
 
-#[pyclass(frozen)]
+#[pyclass(frozen, module = "within._within")]
 #[pyo3(name = "ApproxSchurConfig")]
 pub struct PyApproxSchurConfig {
     #[pyo3(get)]
@@ -112,6 +116,12 @@ impl PyApproxSchurConfig {
         }
         Ok(Self { seed, split })
     }
+
+    /// Pickle support: serialize to ``(class, (seed, split))``.
+    fn __reduce__<'py>(&self, py: Python<'py>) -> PyResult<(Bound<'py, PyAny>, (u64, u32))> {
+        let cls = py.get_type::<Self>();
+        Ok((cls.into_any(), (self.seed, self.split)))
+    }
 }
 
 impl PyApproxSchurConfig {
@@ -124,22 +134,43 @@ impl PyApproxSchurConfig {
 }
 
 // ---------------------------------------------------------------------------
-// Preconditioner enum (public API)
+// PreconditionerConfig enum (IntEnum shortcut)
 // ---------------------------------------------------------------------------
 
-/// Preconditioner selection for the LSMR solver.
+/// Preconditioner selection shortcut for the LSMR solver.
 ///
-/// - ``Preconditioner.Additive`` — additive Schwarz (default)
-/// - ``Preconditioner.Off`` — no preconditioner
-#[pyclass(frozen, eq, eq_int)]
-#[pyo3(name = "Preconditioner")]
+/// - ``PreconditionerConfig.Additive`` — additive Schwarz (default)
+/// - ``PreconditionerConfig.Off`` — no preconditioner
+#[pyclass(frozen, eq, eq_int, module = "within._within")]
+#[pyo3(name = "PreconditionerConfig")]
 #[derive(Clone, Copy, PartialEq, Eq)]
-pub enum PyPreconditioner {
+pub enum PyPreconditionerConfig {
     Additive = 0,
     Off = 1,
 }
 
-#[pyclass(frozen, eq, eq_int)]
+#[pymethods]
+impl PyPreconditionerConfig {
+    /// Internal: int-to-variant constructor used by ``__reduce__``.
+    #[staticmethod]
+    fn _from_int(val: i32) -> PyResult<Self> {
+        match val {
+            0 => Ok(Self::Additive),
+            1 => Ok(Self::Off),
+            _ => Err(pyo3::exceptions::PyValueError::new_err(format!(
+                "invalid PreconditionerConfig discriminant: {val}"
+            ))),
+        }
+    }
+
+    fn __reduce__<'py>(&self, py: Python<'py>) -> PyResult<(Bound<'py, PyAny>, (i32,))> {
+        let cls = py.get_type::<Self>();
+        let from_int = cls.getattr("_from_int")?;
+        Ok((from_int, (*self as i32,)))
+    }
+}
+
+#[pyclass(frozen, eq, eq_int, module = "within._within")]
 #[pyo3(name = "ReductionStrategy")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PyReductionStrategy {
@@ -158,12 +189,35 @@ impl PyReductionStrategy {
     }
 }
 
+#[pymethods]
+impl PyReductionStrategy {
+    /// Internal: int-to-variant constructor used by ``__reduce__``.
+    #[staticmethod]
+    fn _from_int(val: i32) -> PyResult<Self> {
+        match val {
+            0 => Ok(Self::Auto),
+            1 => Ok(Self::AtomicScatter),
+            2 => Ok(Self::ParallelReduction),
+            _ => Err(pyo3::exceptions::PyValueError::new_err(format!(
+                "invalid ReductionStrategy discriminant: {val}"
+            ))),
+        }
+    }
+
+    fn __reduce__<'py>(&self, py: Python<'py>) -> PyResult<(Bound<'py, PyAny>, (i32,))> {
+        let cls = py.get_type::<Self>();
+        let from_int = cls.getattr("_from_int")?;
+        Ok((from_int, (*self as i32,)))
+    }
+}
+
 // ---------------------------------------------------------------------------
-// Local solver config classes (available via `_within` for benchmarks)
+// Local solver config (available via `_within` for benchmarks)
 // ---------------------------------------------------------------------------
-#[pyclass(frozen)]
-#[pyo3(name = "SchurComplement")]
-pub struct PySchurComplement {
+
+#[pyclass(frozen, subclass, module = "within._within")]
+#[pyo3(name = "LocalSolverConfig")]
+pub struct PyLocalSolverConfig {
     #[pyo3(get)]
     pub approx_chol: Option<Py<PyApproxCholConfig>>,
     #[pyo3(get)]
@@ -173,7 +227,7 @@ pub struct PySchurComplement {
 }
 
 #[pymethods]
-impl PySchurComplement {
+impl PyLocalSolverConfig {
     #[new]
     #[pyo3(signature = (approx_chol=None, approx_schur=None, dense_threshold=None))]
     fn new(
@@ -184,16 +238,42 @@ impl PySchurComplement {
         Self {
             approx_chol,
             approx_schur,
-            dense_threshold: dense_threshold.unwrap_or(DEFAULT_DENSE_SCHUR_THRESHOLD),
+            dense_threshold: dense_threshold
+                .unwrap_or_else(|| LocalSolverConfig::default().dense_threshold),
         }
+    }
+
+    /// Pickle support: serialize to ``(class, (approx_chol, approx_schur, dense_threshold))``.
+    ///
+    /// Nested ``Py<...>`` fields ride through via their own ``__reduce__``.
+    fn __reduce__<'py>(
+        &self,
+        py: Python<'py>,
+    ) -> PyResult<(
+        Bound<'py, PyAny>,
+        (
+            Option<Py<PyApproxCholConfig>>,
+            Option<Py<PyApproxSchurConfig>>,
+            usize,
+        ),
+    )> {
+        let cls = py.get_type::<Self>();
+        Ok((
+            cls.into_any(),
+            (
+                self.approx_chol.as_ref().map(|c| c.clone_ref(py)),
+                self.approx_schur.as_ref().map(|c| c.clone_ref(py)),
+                self.dense_threshold,
+            ),
+        ))
     }
 }
 
 // ---------------------------------------------------------------------------
-// Schwarz preconditioner classes (available via `_within` for benchmarks)
+// Schwarz preconditioner config (available via `_within` for benchmarks)
 // ---------------------------------------------------------------------------
 
-#[pyclass(frozen)]
+#[pyclass(frozen, module = "within._within")]
 #[pyo3(name = "AdditiveSchwarz")]
 pub struct PyAdditiveSchwarz {
     #[pyo3(get)]
@@ -212,15 +292,30 @@ impl PyAdditiveSchwarz {
             reduction,
         }
     }
+
+    /// Pickle support: serialize to ``(class, (local_solver, reduction))``.
+    fn __reduce__<'py>(
+        &self,
+        py: Python<'py>,
+    ) -> PyResult<(Bound<'py, PyAny>, (Option<PyObject>, PyReductionStrategy))> {
+        let cls = py.get_type::<Self>();
+        Ok((
+            cls.into_any(),
+            (
+                self.local_solver.as_ref().map(|o| o.clone_ref(py)),
+                self.reduction,
+            ),
+        ))
+    }
 }
 
 // ---------------------------------------------------------------------------
-// Solver config classes
+// LSMR config
 // ---------------------------------------------------------------------------
 
-#[pyclass(frozen)]
-#[pyo3(name = "LSMR")]
-pub struct PyLSMR {
+#[pyclass(frozen, module = "within._within")]
+#[pyo3(name = "LsmrOptions")]
+pub struct PyLsmrOptions {
     #[pyo3(get)]
     pub tol: f64,
     #[pyo3(get)]
@@ -230,7 +325,7 @@ pub struct PyLSMR {
 }
 
 #[pymethods]
-impl PyLSMR {
+impl PyLsmrOptions {
     #[new]
     #[pyo3(signature = (tol=1e-8, maxiter=1000, local_size=None))]
     fn new(tol: f64, maxiter: usize, local_size: Option<usize>) -> Self {
@@ -240,13 +335,22 @@ impl PyLSMR {
             local_size,
         }
     }
+
+    /// Pickle support: serialize to ``(class, (tol, maxiter, local_size))``.
+    fn __reduce__<'py>(
+        &self,
+        py: Python<'py>,
+    ) -> PyResult<(Bound<'py, PyAny>, (f64, usize, Option<usize>))> {
+        let cls = py.get_type::<Self>();
+        Ok((cls.into_any(), (self.tol, self.maxiter, self.local_size)))
+    }
 }
 
 // ---------------------------------------------------------------------------
 // Result types
 // ---------------------------------------------------------------------------
 
-#[pyclass]
+#[pyclass(module = "within._within")]
 #[pyo3(name = "SolveResult")]
 pub struct PySolveResult {
     #[pyo3(get)]
@@ -267,7 +371,7 @@ pub struct PySolveResult {
     pub time_solve: f64,
 }
 
-#[pyclass]
+#[pyclass(module = "within._within")]
 #[pyo3(name = "BatchSolveResult")]
 pub struct PyBatchSolveResult {
     #[pyo3(get)]
@@ -312,130 +416,92 @@ fn column_refs(columns: &[Vec<f64>]) -> Vec<&[f64]> {
 // Extraction helpers
 // ---------------------------------------------------------------------------
 
-/// Extract a `LocalSolverConfig` from a Python `SchurComplement` object.
-fn extract_local_solver_config(
-    py: Python<'_>,
-    obj: &Bound<'_, PyAny>,
-) -> PyResult<LocalSolverConfig> {
-    if let Ok(sc) = obj.downcast::<PySchurComplement>() {
-        let sc = sc.get();
-        let approx_chol = sc
-            .approx_chol
-            .as_ref()
-            .map(|c| c.bind(py).get().to_native())
-            .unwrap_or_default();
-        let approx_schur = sc
-            .approx_schur
-            .as_ref()
-            .map(|c| c.bind(py).get().to_native());
-        Ok(LocalSolverConfig {
-            approx_chol,
-            approx_schur,
-            dense_threshold: sc.dense_threshold,
-        })
-    } else {
-        Err(PyErr::new::<pyo3::exceptions::PyTypeError, _>(
-            "local_solver must be SchurComplement or None",
-        ))
-    }
-}
-
-/// Extract `LocalSolverConfig` from the `local_solver` field of a Schwarz class,
-/// falling back to the given default when the field is `None`.
-fn extract_local_solver_or_default(
-    py: Python<'_>,
-    local_solver: &Option<PyObject>,
-    default: LocalSolverConfig,
-) -> PyResult<LocalSolverConfig> {
-    match local_solver {
-        None => Ok(default),
-        Some(obj) => extract_local_solver_config(py, obj.bind(py)),
-    }
-}
-
-/// Extract `Option<Preconditioner>` from a Python preconditioner argument.
-///
-/// - `None` → additive Schwarz with default local solver
-/// - `Preconditioner.Off` → unpreconditioned (returns `Ok(None)`)
-/// - `Preconditioner.Additive` → additive Schwarz with default local solver
-/// - `AdditiveSchwarz(...)` → advanced config
 fn extract_preconditioner_config(
     py: Python<'_>,
     preconditioner: Option<&Bound<'_, PyAny>>,
-) -> PyResult<Option<Preconditioner>> {
-    let obj = match preconditioner {
-        None => {
-            return Ok(Some(Preconditioner::default()));
-        }
-        Some(obj) => obj,
+) -> PyResult<Option<PreconditionerConfig>> {
+    let Some(obj) = preconditioner else {
+        return Ok(None);
     };
 
     // Enum shorthand
-    if let Ok(p) = obj.extract::<PyPreconditioner>() {
-        return match p {
-            PyPreconditioner::Off => Ok(None),
-            PyPreconditioner::Additive => Ok(Some(Preconditioner::default())),
-        };
+    if let Ok(p) = obj.extract::<PyPreconditionerConfig>() {
+        return Ok(Some(match p {
+            PyPreconditionerConfig::Off => PreconditionerConfig::Off,
+            PyPreconditionerConfig::Additive => PreconditionerConfig::default(),
+        }));
     }
 
     // Advanced: AdditiveSchwarz object
     if let Ok(schwarz) = obj.downcast::<PyAdditiveSchwarz>() {
         let s = schwarz.get();
-        let local = extract_local_solver_or_default(
-            py,
-            &s.local_solver,
-            LocalSolverConfig::solver_default(),
-        )?;
+        let local = match &s.local_solver {
+            None => LocalSolverConfig::default(),
+            Some(obj) => {
+                let obj = obj.bind(py);
+                let Ok(sc) = obj.downcast::<PyLocalSolverConfig>() else {
+                    return Err(PyErr::new::<pyo3::exceptions::PyTypeError, _>(
+                        "local_solver must be LocalSolverConfig or None",
+                    ));
+                };
+                let sc = sc.get();
+                let approx_chol = sc
+                    .approx_chol
+                    .as_ref()
+                    .map(|c| c.bind(py).get().to_native())
+                    .unwrap_or_else(|| LocalSolverConfig::default().approx_chol);
+                let approx_schur = sc
+                    .approx_schur
+                    .as_ref()
+                    .map(|c| c.bind(py).get().to_native());
+                LocalSolverConfig {
+                    approx_chol,
+                    approx_schur,
+                    dense_threshold: sc.dense_threshold,
+                }
+            }
+        };
         let reduction = s.reduction.to_native();
-        return Ok(Some(Preconditioner::Additive(local, reduction)));
+        return Ok(Some(PreconditionerConfig::Additive {
+            local_solver: local,
+            reduction,
+        }));
     }
 
     Err(PyErr::new::<pyo3::exceptions::PyTypeError, _>(
-        "preconditioner must be Preconditioner.Additive, Preconditioner.Off, \
-         AdditiveSchwarz(...), or None",
+        "preconditioner must be PreconditionerConfig.Additive, PreconditionerConfig.Off, \
+         AdditiveSchwarz(...), Preconditioner(...), or None",
     ))
 }
 
-/// Extract solver parameters from an LSMR config object.
-fn extract_solver_params(config: &Bound<'_, PyAny>) -> PyResult<SolverParams> {
-    if let Ok(lsmr) = config.downcast::<PyLSMR>() {
+fn resolve_lsmr_config(config: Option<&Bound<'_, PyAny>>) -> PyResult<LsmrOptions> {
+    let Some(c) = config else {
+        return Ok(LsmrOptions::default());
+    };
+    if let Ok(lsmr) = c.downcast::<PyLsmrOptions>() {
         let lsmr = lsmr.get();
-        return Ok(SolverParams {
+        return Ok(LsmrOptions {
             tol: lsmr.tol,
             maxiter: lsmr.maxiter,
             local_size: lsmr.local_size,
         });
     }
     Err(PyErr::new::<pyo3::exceptions::PyTypeError, _>(
-        "config must be LSMR",
+        "options must be LsmrOptions",
     ))
 }
 
-/// Extract solver config and preconditioner, applying solver/preconditioner validation.
-fn extract_and_validate_config(
-    py: Python<'_>,
-    config: Option<&Bound<'_, PyAny>>,
-    preconditioner: Option<&Bound<'_, PyAny>>,
-) -> PyResult<(SolverParams, Option<Preconditioner>)> {
-    let params = match config {
-        Some(c) => extract_solver_params(c)?,
-        None => SolverParams::default(),
-    };
-    let precond = extract_preconditioner_config(py, preconditioner)?;
-    Ok((params, precond))
-}
-
 // ---------------------------------------------------------------------------
-// Helpers: numpy ↔ Rust conversions
+// Result conversion helpers
 // ---------------------------------------------------------------------------
 
 fn into_py_result(py: Python<'_>, result: SolveResult) -> PySolveResult {
     PySolveResult {
-        x: Array1::from_vec(result.x).into_pyarray(py).unbind(),
-        demeaned: Array1::from_vec(result.demeaned).into_pyarray(py).unbind(),
+        x: result.x.into_pyarray(py).unbind(),
+        demeaned: result.demeaned.into_pyarray(py).unbind(),
         converged: result.converged,
         iterations: result.iterations,
-        residual: result.final_residual,
+        residual: result.residual,
         time_total: result.time_total,
         time_setup: result.time_setup,
         time_solve: result.time_solve,
@@ -448,25 +514,26 @@ fn into_py_batch_result(
     n_dofs: usize,
     n_obs: usize,
 ) -> PyBatchSolveResult {
-    let n_rhs = result.n_rhs();
+    let n_rhs = result.converged.len();
 
-    let x_flat = result.x_all().to_vec();
-    let x_arr = Array2::from_shape_vec((n_dofs, n_rhs).f(), x_flat).expect("x shape mismatch");
-
-    let demeaned_flat = result.demeaned_all().to_vec();
-    let demeaned_arr =
-        Array2::from_shape_vec((n_obs, n_rhs).f(), demeaned_flat).expect("demeaned shape mismatch");
+    let x = Array2::from_shape_vec((n_dofs, n_rhs).f(), result.x).expect("shape matches x length");
+    let demeaned = Array2::from_shape_vec((n_obs, n_rhs).f(), result.demeaned)
+        .expect("shape matches demeaned length");
 
     PyBatchSolveResult {
-        x: x_arr.into_pyarray(py).unbind(),
-        demeaned: demeaned_arr.into_pyarray(py).unbind(),
-        converged: result.converged().to_vec(),
-        iterations: result.iterations().to_vec(),
-        residual: result.final_residual().to_vec(),
-        time_solve: result.time_solve().to_vec(),
-        time_total: result.time_total(),
+        x: x.into_pyarray(py).unbind(),
+        demeaned: demeaned.into_pyarray(py).unbind(),
+        converged: result.converged,
+        iterations: result.iterations,
+        residual: result.residual,
+        time_solve: result.time_solve,
+        time_total: result.time_total,
     }
 }
+
+// ---------------------------------------------------------------------------
+// Misc helpers
+// ---------------------------------------------------------------------------
 
 /// Extract columns from a 2-D array as owned vectors.
 ///
@@ -477,11 +544,8 @@ fn extract_columns(arr: &numpy::ndarray::ArrayView2<'_, f64>) -> Vec<Vec<f64>> {
         .collect()
 }
 
-/// Extract an optional weight vector from a numpy array, returning owned data.
 fn extract_weight_vec(weights: &Option<PyReadonlyArray1<'_, f64>>) -> Option<Vec<f64>> {
-    weights
-        .as_ref()
-        .map(|w| w.as_array().iter().copied().collect())
+    weights.as_ref().map(|w| w.as_array().to_vec())
 }
 
 fn warn_c_contiguous(py: Python<'_>, strides: &[isize]) -> PyResult<()> {
@@ -498,17 +562,26 @@ fn warn_c_contiguous(py: Python<'_>, strides: &[isize]) -> PyResult<()> {
     Ok(())
 }
 
+/// If the Python preconditioner argument is a pre-built `Preconditioner`,
+/// return a clone of the inner native value. Otherwise `None`.
+fn extract_prebuilt(preconditioner: Option<&Bound<'_, PyAny>>) -> Option<Preconditioner> {
+    let obj = preconditioner?;
+    obj.downcast::<PyPreconditioner>()
+        .ok()
+        .map(|b| b.get().inner.clone())
+}
+
 // ---------------------------------------------------------------------------
-// One-shot solve
+// Public solve functions
 // ---------------------------------------------------------------------------
 
 #[pyfunction]
-#[pyo3(signature = (categories, y, config=None, weights=None, preconditioner=None))]
+#[pyo3(signature = (categories, y, options=None, weights=None, preconditioner=None))]
 pub fn solve<'py>(
     py: Python<'py>,
     categories: PyReadonlyArray2<'py, u32>,
     y: PyReadonlyArray1<'py, f64>,
-    config: Option<&Bound<'py, PyAny>>,
+    options: Option<&Bound<'py, PyAny>>,
     weights: Option<PyReadonlyArray1<'py, f64>>,
     preconditioner: Option<&Bound<'py, PyAny>>,
 ) -> PyResult<PySolveResult> {
@@ -519,27 +592,30 @@ pub fn solve<'py>(
     let y_cow = coerce_to_slice(&y_arr);
     let w_vec = extract_weight_vec(&weights);
     let w_ref = w_vec.as_deref();
+    let params = resolve_lsmr_config(options)?;
 
-    let (params, precond) = extract_and_validate_config(py, config, preconditioner)?;
-
-    let result = py
-        .allow_threads(|| solve_native(cats, &y_cow, w_ref, &params, precond.as_ref()))
-        .map_err(value_err)?;
+    let result = if let Some(built) = extract_prebuilt(preconditioner) {
+        py.allow_threads(|| -> Result<SolveResult, WithinError> {
+            let solver = Solver::new(cats, w_vec, built)?;
+            Ok(solver.solve(&y_cow, &params)?)
+        })
+        .map_err(value_err)?
+    } else {
+        let precond = extract_preconditioner_config(py, preconditioner)?;
+        py.allow_threads(|| solve_native(cats, &y_cow, w_ref, &params, precond.as_ref()))
+            .map_err(value_err)?
+    };
 
     Ok(into_py_result(py, result))
 }
 
-// ---------------------------------------------------------------------------
-// One-shot batch solve
-// ---------------------------------------------------------------------------
-
 #[pyfunction]
-#[pyo3(signature = (categories, Y, config=None, weights=None, preconditioner=None))]
+#[pyo3(signature = (categories, Y, options=None, weights=None, preconditioner=None))]
 pub fn solve_batch<'py>(
     py: Python<'py>,
     categories: PyReadonlyArray2<'py, u32>,
     #[allow(non_snake_case)] Y: PyReadonlyArray2<'py, f64>,
-    config: Option<&Bound<'py, PyAny>>,
+    options: Option<&Bound<'py, PyAny>>,
     weights: Option<PyReadonlyArray1<'py, f64>>,
     preconditioner: Option<&Bound<'py, PyAny>>,
 ) -> PyResult<PyBatchSolveResult> {
@@ -547,25 +623,42 @@ pub fn solve_batch<'py>(
     warn_c_contiguous(py, cats.strides())?;
 
     let y_arr = Y.as_array();
-    let n_obs = y_arr.nrows();
+
+    // Validate Y row count against the design up front. Without this, an empty
+    // batch (Y.shape[1] == 0) would silently skip the per-column length check
+    // inside `Solver::solve`.
+    if y_arr.nrows() != cats.nrows() {
+        return Err(value_err(format!(
+            "Y has {} rows but categories has {} observations",
+            y_arr.nrows(),
+            cats.nrows()
+        )));
+    }
 
     let columns = extract_columns(&y_arr);
     let col_refs = column_refs(&columns);
 
     let w_vec = extract_weight_vec(&weights);
     let w_ref = w_vec.as_deref();
+    let params = resolve_lsmr_config(options)?;
 
-    let (params, precond) = extract_and_validate_config(py, config, preconditioner)?;
-
-    let result = py
-        .allow_threads(|| solve_batch_native(cats, &col_refs, w_ref, &params, precond.as_ref()))
-        .map_err(value_err)?;
-
-    let n_dofs = if result.n_rhs() > 0 {
-        result.x_all().len() / result.n_rhs()
+    let result = if let Some(built) = extract_prebuilt(preconditioner) {
+        py.allow_threads(|| -> Result<_, WithinError> {
+            let solver = Solver::new(cats, w_vec, built)?;
+            Ok(solver.solve_batch(&col_refs, &params)?)
+        })
+        .map_err(value_err)?
     } else {
-        0
+        let precond = extract_preconditioner_config(py, preconditioner)?;
+        py.allow_threads(|| solve_batch_native(cats, &col_refs, w_ref, &params, precond.as_ref()))
+            .map_err(value_err)?
     };
+
+    // Use the design dimensions carried by the result rather than inferring
+    // them from output lengths — that keeps empty batches well-shaped at
+    // (n_dofs, 0) / (n_obs, 0).
+    let n_dofs = result.n_dofs;
+    let n_obs = result.n_obs;
     Ok(into_py_batch_result(py, result, n_dofs, n_obs))
 }
 
@@ -575,16 +668,16 @@ pub fn solve_batch<'py>(
 
 /// A pre-built preconditioner that can be pickled and reused.
 ///
-/// Obtained via ``Solver.preconditioner()``.  Pass it back to a new
+/// Obtained via ``Solver.preconditioner``. Pass it back to a new
 /// ``Solver(…, preconditioner=p)`` to skip the expensive factorisation.
 #[pyclass(frozen, module = "within._within")]
-#[pyo3(name = "FePreconditioner")]
-pub struct PyFePreconditioner {
-    inner: FePreconditioner,
+#[pyo3(name = "Preconditioner")]
+pub struct PyPreconditioner {
+    inner: Preconditioner,
 }
 
 #[pymethods]
-impl PyFePreconditioner {
+impl PyPreconditioner {
     /// Apply the preconditioner: ``y = M⁻¹ x``.
     fn apply<'py>(
         &self,
@@ -604,7 +697,9 @@ impl PyFePreconditioner {
         let mut y = vec![0.0; self.inner.nrows()];
         self.inner
             .apply(x_slice, &mut y)
-            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+            .map_err(|e: within::SolveError| {
+                pyo3::exceptions::PyRuntimeError::new_err(e.to_string())
+            })?;
         Ok(numpy::PyArray1::from_vec(py, y))
     }
     /// Number of rows (DOFs).
@@ -619,20 +714,8 @@ impl PyFePreconditioner {
         self.inner.ncols()
     }
 
-    /// Number of Schwarz subdomains in the built preconditioner.
-    #[getter]
-    fn n_subdomains(&self) -> usize {
-        self.inner.n_subdomains()
-    }
-
-    /// Estimated nested-parallel work per subdomain.
-    #[getter]
-    fn subdomain_inner_parallel_work(&self) -> Vec<usize> {
-        self.inner.subdomain_inner_parallel_work()
-    }
-
     fn __repr__(&self) -> String {
-        format!("FePreconditioner(Additive, n={})", self.inner.nrows())
+        format!("Preconditioner(Additive, n={})", self.inner.nrows())
     }
 
     /// Pickle support: serialize to ``(bytes,)`` constructor arg.
@@ -650,7 +733,7 @@ impl PyFePreconditioner {
     /// Construct from serialised bytes (used by pickle and for manual persistence).
     #[new]
     fn new(data: &[u8]) -> PyResult<Self> {
-        let inner: FePreconditioner = postcard::from_bytes(data).map_err(|e| {
+        let inner: Preconditioner = postcard::from_bytes(data).map_err(|e| {
             pyo3::exceptions::PyValueError::new_err(format!(
                 "failed to deserialize preconditioner: {}",
                 e
@@ -669,7 +752,7 @@ impl PyFePreconditioner {
 /// Build once with `Solver(categories, ...)`, then call `solve()` or
 /// `solve_batch()` repeatedly. The expensive preconditioner factorization
 /// happens only at construction time.
-#[pyclass(frozen)]
+#[pyclass(frozen, module = "within._within")]
 #[pyo3(name = "Solver")]
 pub struct PySolver {
     solver: Solver<FactorMajorStore>,
@@ -678,21 +761,15 @@ pub struct PySolver {
 #[pymethods]
 impl PySolver {
     #[new]
-    #[pyo3(signature = (categories, config=None, weights=None, preconditioner=None))]
+    #[pyo3(signature = (categories, weights=None, preconditioner=None))]
     fn new<'py>(
         py: Python<'py>,
         categories: PyReadonlyArray2<'py, u32>,
-        config: Option<&Bound<'py, PyAny>>,
         weights: Option<PyReadonlyArray1<'py, f64>>,
         preconditioner: Option<&Bound<'py, PyAny>>,
     ) -> PyResult<Self> {
         let cats = categories.as_array();
         warn_c_contiguous(py, cats.strides())?;
-
-        let params = match config {
-            Some(c) => extract_solver_params(c)?,
-            None => SolverParams::default(),
-        };
 
         // Build owned factor-major store from numpy array
         let n_obs = cats.nrows();
@@ -706,37 +783,34 @@ impl PySolver {
             .as_ref()
             .map(|w| w.as_array().iter().copied().collect());
 
-        // Handle pre-built FePreconditioner separately (uses a different constructor);
+        // Pre-built Preconditioner uses the reuse path;
         // all other variants go through extract_preconditioner_config.
-        let solver = if let Some(Ok(fe)) =
-            preconditioner.map(|o| o.downcast::<PyFePreconditioner>())
-        {
-            let fe_precond = fe.get().inner.clone();
-            py.allow_threads(|| {
-                Solver::from_design_with_preconditioner(design, weights_vec, &params, fe_precond)
-            })
-            .map_err(value_err)?
+        let solver = if let Some(built) = extract_prebuilt(preconditioner) {
+            py.allow_threads(|| Solver::new(design, weights_vec, built))
+                .map_err(value_err)?
         } else {
             let precond = extract_preconditioner_config(py, preconditioner)?;
-            py.allow_threads(|| Solver::from_design(design, weights_vec, &params, precond.as_ref()))
+            py.allow_threads(|| Solver::new(design, weights_vec, precond.as_ref()))
                 .map_err(value_err)?
         };
 
         Ok(Self { solver })
     }
 
-    /// Solve for a single response vector.
-    #[pyo3(name = "solve")]
+    /// Solve for a single response vector with the given LSMR tuning.
+    #[pyo3(name = "solve", signature = (y, options=None))]
     fn solve_py<'py>(
         &self,
         py: Python<'py>,
         y: PyReadonlyArray1<'py, f64>,
+        options: Option<&Bound<'py, PyAny>>,
     ) -> PyResult<PySolveResult> {
         let y_arr = y.as_array();
         let y_cow = coerce_to_slice(&y_arr);
+        let params = resolve_lsmr_config(options)?;
 
         let result = py
-            .allow_threads(|| self.solver.solve(&y_cow))
+            .allow_threads(|| self.solver.solve(&y_cow, &params))
             .map_err(value_err)?;
 
         Ok(into_py_result(py, result))
@@ -746,22 +820,32 @@ impl PySolver {
     ///
     /// `Y` is a 2-D array of shape `(n_obs, k)` where each column is a
     /// separate response vector.
-    #[pyo3(name = "solve_batch")]
+    #[pyo3(name = "solve_batch", signature = (Y, options=None))]
     fn solve_batch_py<'py>(
         &self,
         py: Python<'py>,
-        y_matrix: PyReadonlyArray2<'py, f64>,
+        #[allow(non_snake_case)] Y: PyReadonlyArray2<'py, f64>,
+        options: Option<&Bound<'py, PyAny>>,
     ) -> PyResult<PyBatchSolveResult> {
-        let y_arr = y_matrix.as_array();
+        let y_arr = Y.as_array();
+
+        let n_obs = self.solver.n_obs();
+        if y_arr.nrows() != n_obs {
+            return Err(value_err(format!(
+                "Y has {} rows but solver has {} observations",
+                y_arr.nrows(),
+                n_obs
+            )));
+        }
 
         let columns = extract_columns(&y_arr);
         let col_refs = column_refs(&columns);
 
         let n_dofs = self.solver.n_dofs();
-        let n_obs = self.solver.n_obs();
+        let params = resolve_lsmr_config(options)?;
 
         let result = py
-            .allow_threads(|| self.solver.solve_batch(&col_refs))
+            .allow_threads(|| self.solver.solve_batch(&col_refs, &params))
             .map_err(value_err)?;
 
         Ok(into_py_batch_result(py, result, n_dofs, n_obs))
@@ -771,11 +855,12 @@ impl PySolver {
     ///
     /// The returned object is picklable and can be passed to a new
     /// ``Solver(…, preconditioner=p)`` to skip the expensive build step.
+    #[getter]
     #[pyo3(name = "preconditioner")]
-    fn preconditioner_py(&self) -> PyResult<Option<PyFePreconditioner>> {
+    fn preconditioner_py(&self) -> PyResult<Option<PyPreconditioner>> {
         match self.solver.preconditioner() {
             None => Ok(None),
-            Some(p) => Ok(Some(PyFePreconditioner { inner: p.clone() })),
+            Some(p) => Ok(Some(PyPreconditioner { inner: p.clone() })),
         }
     }
 
@@ -800,14 +885,14 @@ impl PySolver {
 fn _within(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PySolveResult>()?;
     m.add_class::<PyBatchSolveResult>()?;
-    m.add_class::<PyLSMR>()?;
+    m.add_class::<PyLsmrOptions>()?;
     m.add_class::<PyAdditiveSchwarz>()?;
     m.add_class::<PyReductionStrategy>()?;
-    m.add_class::<PyPreconditioner>()?;
+    m.add_class::<PyPreconditionerConfig>()?;
     m.add_class::<PyApproxCholConfig>()?;
     m.add_class::<PyApproxSchurConfig>()?;
-    m.add_class::<PySchurComplement>()?;
-    m.add_class::<PyFePreconditioner>()?;
+    m.add_class::<PyLocalSolverConfig>()?;
+    m.add_class::<PyPreconditioner>()?;
     m.add_class::<PySolver>()?;
     m.add_function(wrap_pyfunction!(solve, m)?)?;
     m.add_function(wrap_pyfunction!(solve_batch, m)?)?;

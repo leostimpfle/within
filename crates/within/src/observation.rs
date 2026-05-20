@@ -1,46 +1,4 @@
-//! Observation storage layer: traits, backends, and metadata.
-//!
-//! This is the lowest layer of the `within` crate. It defines *how*
-//! per-observation factor-level data is stored and accessed, without knowing
-//! anything about design matrices, operators, weights, or solvers.
-//!
-//! # Why pluggable backends?
-//!
-//! Different callers supply data in different layouts:
-//!
-//! - **Python (via PyO3)** passes a borrowed numpy array — copying it into a
-//!   Rust-owned layout would double memory and add latency.
-//! - **Rust tests and benchmarks** build data programmatically as `Vec<Vec<u32>>`,
-//!   which is naturally factor-major.
-//!
-//! The [`Store`] trait abstracts over these layouts so that all
-//! upstream code (design matrix operations, domain decomposition, Gramian
-//! assembly) is generic and layout-agnostic.
-//!
-//! # Backends
-//!
-//! | Backend | Layout | Owns data? | Best for |
-//! |---|---|---|---|
-//! | [`FactorMajorStore`] | `factor_levels[q][i]` — grouped by factor | Yes | Rust-native construction; sequential factor-column access for Gramian build and domain decomposition |
-//! | [`ArrayStore`] | `categories[[i, q]]` — borrowed `ArrayView2` | No (borrows) | Zero-copy from numpy; F-contiguous arrays get contiguous column access matching `FactorMajorStore` performance |
-//!
-//! Both backends implement the optional [`Store::factor_column`]
-//! fast-path, which returns a contiguous `&[u32]` slice for a factor's levels
-//! when the memory layout permits it. The design-matrix scatter/gather loops
-//! exploit this to avoid per-element virtual dispatch.
-//!
-//! # Key types
-//!
-//! - [`FactorMeta`] — per-factor metadata (level count and global DOF offset),
-//!   separated from observation data so it can live in the [`Design`](crate::domain::Design).
-//! - [`Store`] — the core trait. All implementors must be
-//!   `Send + Sync` to support Rayon parallelism in the layers above.
-//!
-//! # Weights
-//!
-//! Observation weights are intentionally **not** part of this layer. They flow
-//! alongside the store as `Option<&[f64]>` (borrowed) or `Option<Vec<f64>>`
-//! (owned at the solver layer), where `None` means "all weights = 1.0".
+//! Observation storage: [`Store`] trait + [`FactorMajorStore`] / [`ArrayStore`] backends.
 
 use ndarray::ArrayView2;
 
@@ -229,24 +187,14 @@ pub(crate) fn validate_weights(weights: Option<&[f64]>, n_obs: usize) -> Result<
     Ok(())
 }
 
-// ---------------------------------------------------------------------------
-// Test helpers
-// ---------------------------------------------------------------------------
-
-#[cfg(test)]
-/// Small two-factor dataset for unit tests: 4 observations, factors with 3 and 2 levels.
-pub fn sample_factor_levels() -> Vec<Vec<u32>> {
-    vec![vec![0, 1, 2, 0], vec![0, 1, 0, 1]]
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn test_factor_major_store_basic() {
-        let store =
-            FactorMajorStore::new(sample_factor_levels(), 4).expect("valid factor-major store");
+        let store = FactorMajorStore::new(vec![vec![0, 1, 2, 0], vec![0, 1, 0, 1]], 4)
+            .expect("valid factor-major store");
         assert_eq!(store.n_obs(), 4);
         assert_eq!(store.n_factors(), 2);
         assert_eq!(store.level(0, 0), 0);

@@ -1,16 +1,16 @@
 use ndarray::{array, Array2, ShapeBuilder};
 use within::observation::{ArrayStore, FactorMajorStore, Store};
-use within::{solve, Design, Preconditioner, SolverParams};
+use within::{solve, Design, LsmrOptions, PreconditionerConfig};
 
 #[path = "common/orchestrate_helpers.rs"]
 mod common;
 
-fn default_params() -> SolverParams {
-    SolverParams::default()
+fn default_params() -> LsmrOptions {
+    LsmrOptions::default()
 }
 
-fn additive_precond() -> Preconditioner {
-    Preconditioner::default()
+fn additive_precond() -> PreconditionerConfig {
+    PreconditionerConfig::default()
 }
 
 /// Build a larger problem for more meaningful convergence tests.
@@ -57,9 +57,10 @@ fn test_array_store_f_contiguous_matches_factor_major() {
     let store = FactorMajorStore::new(factor_cols, cats.nrows()).expect("valid FactorMajorStore");
     let design = Design::from_store(store).expect("valid design");
     let solver =
-        within::Solver::from_design(design, None, &default_params(), Some(&additive_precond()))
-            .expect("solver");
-    let result_fms = solver.solve(&y).expect("FactorMajorStore solve");
+        within::Solver::new(design, None::<Vec<f64>>, Some(&additive_precond())).expect("solver");
+    let result_fms = solver
+        .solve(&y, &default_params())
+        .expect("FactorMajorStore solve");
 
     assert!(result_array.converged);
     assert!(result_fms.converged);

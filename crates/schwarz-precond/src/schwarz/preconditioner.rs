@@ -1,12 +1,14 @@
 //! Public [`SchwarzPreconditioner`] type — the one-level additive Schwarz.
 //!
 //! Implements [`Operator`](crate::Operator) so it can be passed directly
-//! to an iterative solver as a preconditioner. Construction validates
-//! subdomain indices, pre-computes scheduling diagnostics, and allocates
-//! the executor. `apply` is lock-free in steady state (buffers are
+//! to an iterative solver as a preconditioner. The constructor walks the
+//! subdomain entries once to derive `n_dofs`, `max_scratch_size`, and the
+//! scheduling metrics. `apply` is lock-free in steady state (buffers are
 //! borrowed from a pool).
 
-use crate::error::{validate_entries, BuildError, SolveError};
+use std::sync::Arc;
+
+use crate::error::SolveError;
 use crate::local_solve::{LocalSolver, SubdomainEntry};
 use crate::Operator;
 
@@ -17,9 +19,9 @@ use super::planning::{AdditiveScheduler, ReductionPlan, ReductionStrategy};
 // Serde
 // ---------------------------------------------------------------------------
 
-/// Only the subdomain entries, DOF count, and scratch size are persisted.
-/// The reduction strategy resets to `Auto` on deserialize; buffers are
-/// re-allocated fresh.
+/// Persists only the subdomain entries; `n_dofs` and `max_scratch_size` are
+/// re-derived from the entries at deserialize time. The reduction strategy
+/// resets to `Auto`; buffers are re-allocated fresh.
 #[cfg(feature = "serde")]
 impl<S> serde::Serialize for SchwarzPreconditioner<S>
 where
@@ -27,10 +29,8 @@ where
 {
     fn serialize<Ser: serde::Serializer>(&self, serializer: Ser) -> Result<Ser::Ok, Ser::Error> {
         use serde::ser::SerializeStruct;
-        let mut state = serializer.serialize_struct("SchwarzPreconditioner", 3)?;
-        state.serialize_field("subdomains", &*self.executor.subdomains)?;
-        state.serialize_field("n_dofs", &self.executor.n_dofs)?;
-        state.serialize_field("max_scratch_size", &self.executor.max_scratch_size)?;
+        let mut state = serializer.serialize_struct("SchwarzPreconditioner", 1)?;
+        state.serialize_field("subdomains", self.executor.subdomains())?;
         state.end()
     }
 }
@@ -47,16 +47,13 @@ where
         #[serde(bound(deserialize = "S: serde::de::DeserializeOwned"))]
         struct Helper<S: LocalSolver> {
             subdomains: Vec<SubdomainEntry<S>>,
-            n_dofs: usize,
-            max_scratch_size: usize,
         }
 
         let h: Helper<S> = Helper::deserialize(deserializer)?;
-        Ok(SchwarzPreconditioner {
-            reduction_strategy: ReductionStrategy::default(),
-            scheduler: AdditiveScheduler::from_entries(&h.subdomains, h.n_dofs),
-            executor: AdditiveExecutor::new(h.subdomains, h.n_dofs, h.max_scratch_size),
-        })
+        Ok(SchwarzPreconditioner::new(
+            h.subdomains,
+            ReductionStrategy::default(),
+        ))
     }
 }
 
@@ -67,38 +64,51 @@ where
 /// safe concurrent `apply()` calls on the same instance — each caller grabs
 /// an independent buffer set from the pool for the duration of the call.
 pub struct SchwarzPreconditioner<S: LocalSolver> {
-    /// Strategy for combining per-subdomain results.
-    pub(super) reduction_strategy: ReductionStrategy,
-    /// Build-time scheduler state for additive apply.
-    pub(super) scheduler: AdditiveScheduler,
-    /// Static execution state for additive apply.
-    pub(super) executor: AdditiveExecutor<S>,
+    reduction_strategy: ReductionStrategy,
+    scheduler: AdditiveScheduler,
+    executor: AdditiveExecutor<S>,
 }
 
 impl<S: LocalSolver> SchwarzPreconditioner<S> {
-    /// Construct from pre-built subdomain entries using the default strategy.
-    pub fn new(entries: Vec<SubdomainEntry<S>>, n_dofs: usize) -> Result<Self, BuildError> {
-        Self::with_strategy(entries, n_dofs, ReductionStrategy::default())
-    }
+    /// Construct from pre-built subdomain entries with a reduction strategy.
+    ///
+    /// `n_dofs` is derived from the maximum global index across entries
+    /// (or 0 if `entries` is empty). An empty entry list yields a degenerate
+    /// preconditioner; misuse is caught at apply time by the dimension check.
+    pub fn new(entries: Vec<SubdomainEntry<S>>, strategy: ReductionStrategy) -> Self {
+        let mut n_dofs: usize = 0;
+        let mut max_scratch_size: usize = 0;
+        let mut total_inner_parallel_work: usize = 0;
+        let mut max_inner_parallel_work: usize = 0;
+        let mut total_scatter_dofs: usize = 0;
 
-    /// Construct from pre-built subdomain entries with an explicit reduction strategy.
-    pub fn with_strategy(
-        entries: Vec<SubdomainEntry<S>>,
-        n_dofs: usize,
-        strategy: ReductionStrategy,
-    ) -> Result<Self, BuildError> {
-        validate_entries(&entries, n_dofs)?;
-        let max_scratch_size = entries
-            .iter()
-            .map(SubdomainEntry::scratch_size)
-            .max()
-            .unwrap_or(0);
-        let scheduler = AdditiveScheduler::from_entries(&entries, n_dofs);
-        Ok(Self {
+        for entry in &entries {
+            let work = entry.solver().inner_parallelism_work_estimate();
+            total_inner_parallel_work = total_inner_parallel_work.saturating_add(work);
+            max_inner_parallel_work = max_inner_parallel_work.max(work);
+            max_scratch_size = max_scratch_size.max(entry.scratch_size());
+
+            let indices = entry.global_indices();
+            total_scatter_dofs = total_scatter_dofs.saturating_add(indices.len());
+            if let Some(&max_idx) = indices.iter().max() {
+                let candidate = max_idx as usize + 1;
+                if candidate > n_dofs {
+                    n_dofs = candidate;
+                }
+            }
+        }
+
+        let executor = AdditiveExecutor::new(Arc::new(entries), n_dofs, max_scratch_size);
+        let scheduler = AdditiveScheduler {
+            total_inner_parallel_work,
+            max_inner_parallel_work,
+            total_scatter_dofs,
+        };
+        Self {
             reduction_strategy: strategy,
             scheduler,
-            executor: AdditiveExecutor::new(entries, n_dofs, max_scratch_size),
-        })
+            executor,
+        }
     }
 
     /// Access the underlying subdomain entries.
@@ -106,38 +116,38 @@ impl<S: LocalSolver> SchwarzPreconditioner<S> {
         self.executor.subdomains()
     }
 
-    /// Configured additive reduction strategy.
-    pub fn reduction_strategy(&self) -> ReductionStrategy {
-        self.reduction_strategy
-    }
-
     /// Concrete backend selected for the current Rayon thread-pool width.
-    pub fn resolved_reduction_strategy(&self) -> ReductionStrategy {
+    pub fn reduction_strategy(&self) -> ReductionStrategy {
         self.reduction_plan().strategy.as_public()
-    }
-
-    /// Return a copy that uses a different reduction strategy.
-    ///
-    /// Shares the subdomain data via `Arc` (O(1)), but creates a fresh
-    /// buffer pool since buffers are strategy-specific.
-    pub fn with_reduction_strategy(&self, strategy: ReductionStrategy) -> Self {
-        Self {
-            reduction_strategy: strategy,
-            scheduler: self.scheduler,
-            executor: self.executor.with_fresh_buffers(),
-        }
     }
 
     /// Operator apply that propagates local-solver failures.
     pub fn apply(&self, r: &[f64], z: &mut [f64]) -> Result<(), SolveError> {
+        let n_dofs = self.executor.n_dofs();
+        if r.len() != n_dofs {
+            return Err(SolveError::InvalidInput {
+                context: "SchwarzPreconditioner::apply",
+                message: format!("r.len() ({}) != n_dofs ({})", r.len(), n_dofs),
+            });
+        }
+        if z.len() != n_dofs {
+            return Err(SolveError::InvalidInput {
+                context: "SchwarzPreconditioner::apply",
+                message: format!("z.len() ({}) != n_dofs ({})", z.len(), n_dofs),
+            });
+        }
         let plan = self.reduction_plan();
         self.executor.apply(plan, r, z)
     }
 
     fn reduction_plan(&self) -> ReductionPlan {
         let threads = rayon::current_num_threads().max(1);
-        self.scheduler
-            .reduction_plan(self.reduction_strategy, threads)
+        self.scheduler.reduction_plan(
+            self.reduction_strategy,
+            threads,
+            self.executor.n_subdomains(),
+            self.executor.n_dofs(),
+        )
     }
 }
 
@@ -155,11 +165,11 @@ impl<S: LocalSolver> Clone for SchwarzPreconditioner<S> {
 
 impl<S: LocalSolver> Operator for SchwarzPreconditioner<S> {
     fn nrows(&self) -> usize {
-        self.executor.n_dofs
+        self.executor.n_dofs()
     }
 
     fn ncols(&self) -> usize {
-        self.executor.n_dofs
+        self.executor.n_dofs()
     }
 
     fn apply(&self, r: &[f64], z: &mut [f64]) -> Result<(), SolveError> {

@@ -1,49 +1,16 @@
-//! Persistent solver that caches the preconditioner for reuse across multiple
-//! right-hand sides.
-//!
-//! # Motivation
-//!
-//! Building the Schwarz preconditioner is the most expensive step in a
-//! fixed-effects solve: it scans observations to build subdomains, assembles
-//! local operators, and computes approximate Cholesky factorizations. For a
-//! single right-hand side (RHS) this cost is unavoidable, but econometric
-//! workflows frequently solve the same design matrix with many different
-//! response vectors (e.g., multiple dependent variables, bootstrap replications,
-//! or iteratively reweighted least squares). [`Solver`] lets callers pay the
-//! preconditioner cost once and amortize it across all subsequent solves.
-//!
-//! # Usage
-//!
-//! ```no_run
-//! use within::{Solver, SolverParams, Preconditioner};
-//! use ndarray::Array2;
-//!
-//! let categories = Array2::<u32>::zeros((1000, 2));
-//! let params = SolverParams::default();
-//! let precond = Preconditioner::default();
-//!
-//! // Build once — expensive
-//! let solver = Solver::new(categories.view(), None, &params, Some(&precond)).unwrap();
-//!
-//! // Solve many — cheap (reuses preconditioner)
-//! let y1 = vec![1.0; 1000];
-//! let y2 = vec![2.0; 1000];
-//! let r1 = solver.solve(&y1).unwrap();
-//! let r2 = solver.solve(&y2).unwrap();
-//! ```
+//! Persistent solver that caches the preconditioner across multiple solves on the same design.
 
 use std::time::Instant;
 
 use ndarray::ArrayView2;
 use rayon::prelude::*;
-use schwarz_precond::{lsmr, mlsmr, Operator as _};
+use schwarz_precond::{lsmr as lsmr_solve, mlsmr, Operator as _};
 
-use crate::operator::DesignOperator;
-
-use crate::config::{Preconditioner, SolverParams};
+use crate::config::{LsmrOptions, PreconditionerConfig};
 use crate::domain::Design;
 use crate::observation::{validate_weights, ArrayStore, Store};
-use crate::operator::preconditioner::{build_preconditioner, FePreconditioner};
+use crate::operator::schwarz::{build_preconditioner, Preconditioner};
+use crate::operator::DesignOperator;
 use crate::orchestrate::{BatchSolveResult, SolveResult};
 use crate::{BuildError, SolveError};
 
@@ -51,68 +18,184 @@ fn norm(v: &[f64]) -> f64 {
     v.iter().map(|x| x * x).sum::<f64>().sqrt()
 }
 
+// ---------------------------------------------------------------------------
+// Solver::new inputs (polymorphic via traits)
+// ---------------------------------------------------------------------------
+
+/// Fallible conversion into a [`Design`] for [`Solver::new`].
+///
+/// Implemented for:
+/// - `ArrayView2<'a, u32>` — categories matrix; an `ArrayStore`-backed [`Design`] is built
+/// - `Design<S>` — pass-through for an already-built design
+///
+/// Implemented as a custom trait rather than `Into` because the raw-view path
+/// is fallible and `From`/`Into` are not.
+pub trait IntoDesign<'a> {
+    /// Storage backend the resulting [`Design`] uses.
+    type Store: Store;
+    /// Build the [`Design`], validating inputs along the way.
+    fn into_design(self) -> Result<Design<Self::Store>, BuildError>;
+}
+
+impl<'a> IntoDesign<'a> for ArrayView2<'a, u32> {
+    type Store = ArrayStore<'a>;
+    fn into_design(self) -> Result<Design<ArrayStore<'a>>, BuildError> {
+        Design::from_store(ArrayStore::new(self)?)
+    }
+}
+
+impl<S: Store> IntoDesign<'_> for Design<S> {
+    type Store = S;
+    fn into_design(self) -> Result<Design<S>, BuildError> {
+        Ok(self)
+    }
+}
+
+/// Preconditioner input for [`Solver::new`].
+///
+/// Constructed implicitly via `From`/`Into` from any of:
+/// - bare `None` — build the library default Schwarz preconditioner
+/// - `&PreconditionerConfig` or `Some(&PreconditionerConfig)` — build from a tuned config
+/// - `PreconditionerConfig` (owned) — same as above
+/// - [`Preconditioner`] (owned or `&`) — reuse a previously built (or deserialized) preconditioner
+///
+/// `None` resolves unambiguously because there is exactly one `From<Option<X>>`
+/// impl (with `X = &PreconditionerConfig`).
+pub enum PreconditionerInput {
+    /// Library default: an additive Schwarz preconditioner with default tuning.
+    Default,
+    /// Build from this config (`PreconditionerConfig::Off` ⇒ unpreconditioned).
+    Config(PreconditionerConfig),
+    /// Reuse this pre-built preconditioner (e.g. deserialized or pulled off a previous solver).
+    Prebuilt(Preconditioner),
+}
+
+impl From<PreconditionerConfig> for PreconditionerInput {
+    fn from(c: PreconditionerConfig) -> Self {
+        Self::Config(c)
+    }
+}
+
+impl From<&PreconditionerConfig> for PreconditionerInput {
+    fn from(c: &PreconditionerConfig) -> Self {
+        Self::Config(c.clone())
+    }
+}
+
+impl From<Option<&PreconditionerConfig>> for PreconditionerInput {
+    fn from(opt: Option<&PreconditionerConfig>) -> Self {
+        opt.map_or(Self::Default, |c| Self::Config(c.clone()))
+    }
+}
+
+impl From<Preconditioner> for PreconditionerInput {
+    fn from(p: Preconditioner) -> Self {
+        Self::Prebuilt(p)
+    }
+}
+
+impl From<&Preconditioner> for PreconditionerInput {
+    /// Reuse a preconditioner by reference. Cloning is O(1) (see
+    /// [`Preconditioner`] docs) so passing `&precond` is essentially free.
+    fn from(p: &Preconditioner) -> Self {
+        Self::Prebuilt(p.clone())
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Solver
+// ---------------------------------------------------------------------------
+
 /// Persistent solver that owns its preconditioner for reuse across multiple solves.
 ///
-/// Build once with [`Solver::new`] or [`Solver::from_design`], then call
-/// [`Solver::solve`] or [`Solver::solve_batch`] repeatedly with different RHS
-/// vectors. The expensive preconditioner factorization happens only at
-/// construction time.
+/// Build once with [`Solver::new`], then call [`Solver::solve`] or
+/// [`Solver::solve_batch`] repeatedly with different RHS vectors. The expensive
+/// preconditioner factorization happens only at construction time; LSMR tuning
+/// ([`LsmrOptions`]) is supplied per call.
 pub struct Solver<S: Store> {
     design: Design<S>,
     weights: Option<Vec<f64>>,
-    preconditioner: Option<FePreconditioner>,
-    tol: f64,
-    maxiter: usize,
-    local_size: Option<usize>,
+    preconditioner: Option<Preconditioner>,
+}
+
+impl<S: Store> std::fmt::Debug for Solver<S> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Solver")
+            .field("n_obs", &self.design.n_obs)
+            .field("n_dofs", &self.design.n_dofs)
+            .field("has_weights", &self.weights.is_some())
+            .field("has_preconditioner", &self.preconditioner.is_some())
+            .finish()
+    }
 }
 
 impl<S: Store> Solver<S> {
-    /// Build from an existing [`Design`] and optional observation weights.
+    /// Construct a solver.
     ///
-    /// `weights = None` denotes unit weights (length must match `design.n_rows`
-    /// when `Some`).
-    pub fn from_design(
-        design: Design<S>,
-        weights: Option<Vec<f64>>,
-        params: &SolverParams,
-        preconditioner: Option<&Preconditioner>,
+    /// `design` accepts raw categories (`ArrayView2<u32>`) or a pre-built
+    /// [`Design`]. `preconditioner` accepts:
+    /// - `None` — build the library default Schwarz preconditioner
+    /// - `&PreconditionerConfig` / `Some(&PreconditionerConfig)` — build from a tuned config
+    /// - `PreconditionerConfig::Off` — solve unpreconditioned
+    /// - [`Preconditioner`] or `&Preconditioner` — reuse a previously built (or deserialized) preconditioner
+    ///
+    /// `weights` accepts any `Option<impl Into<Vec<f64>>>` — pass `None` for
+    /// unweighted, or an owned `Vec<f64>` / `&[f64]`. The slice form is cloned
+    /// once at construction.
+    ///
+    /// LSMR tuning ([`LsmrOptions`]) is supplied per call to [`Solver::solve`] /
+    /// [`Solver::solve_batch`], not at construction; preconditioner factorization
+    /// state is the only expensive thing built here.
+    pub fn new<'a>(
+        design: impl IntoDesign<'a, Store = S>,
+        weights: Option<impl Into<Vec<f64>>>,
+        preconditioner: impl Into<PreconditionerInput>,
     ) -> Result<Self, BuildError> {
-        validate_weights(weights.as_deref(), design.n_rows)?;
-        let built_precond = match preconditioner {
-            Some(config) => Some(build_preconditioner(&design, weights.as_deref(), config)?),
-            None => None,
+        let design = design.into_design()?;
+        let weights = weights.map(Into::into);
+        validate_weights(weights.as_deref(), design.n_obs)?;
+
+        let preconditioner = match preconditioner.into() {
+            PreconditionerInput::Default => {
+                build_preconditioner(&design, weights.as_deref(), None)?
+            }
+            PreconditionerInput::Config(c) => {
+                build_preconditioner(&design, weights.as_deref(), Some(&c))?
+            }
+            PreconditionerInput::Prebuilt(p) => {
+                if p.nrows() != design.n_dofs || p.ncols() != design.n_dofs {
+                    return Err(BuildError::PreconditionerDimensionMismatch {
+                        expected: design.n_dofs,
+                        actual_rows: p.nrows(),
+                        actual_cols: p.ncols(),
+                    });
+                }
+                Some(p)
+            }
         };
 
         Ok(Self {
             design,
             weights,
-            preconditioner: built_precond,
-            tol: params.tol,
-            maxiter: params.maxiter,
-            local_size: params.local_size,
+            preconditioner,
         })
     }
 
-    /// Build from a design with a pre-built preconditioner (e.g. deserialized).
-    pub fn from_design_with_preconditioner(
-        design: Design<S>,
-        weights: Option<Vec<f64>>,
-        params: &SolverParams,
-        preconditioner: FePreconditioner,
-    ) -> Result<Self, BuildError> {
-        validate_weights(weights.as_deref(), design.n_rows)?;
-        Ok(Self {
-            design,
-            weights,
-            preconditioner: Some(preconditioner),
-            tol: params.tol,
-            maxiter: params.maxiter,
-            local_size: params.local_size,
-        })
-    }
+    /// Solve for a single RHS vector with the given LSMR tuning.
+    pub fn solve(&self, y: &[f64], lsmr: &LsmrOptions) -> Result<SolveResult, SolveError> {
+        // Guard the silent-truncation hole: weighted_rhs zips y with sqrt-weights,
+        // which would otherwise discard trailing values when y.len() > n_rows.
+        if y.len() != self.design.n_obs {
+            return Err(SolveError::InvalidInput {
+                context: "Solver::solve",
+                message: format!(
+                    "response vector length ({}) does not match number of observations ({})",
+                    y.len(),
+                    self.design.n_obs
+                ),
+            });
+        }
 
-    /// Solve for a single RHS vector.
-    pub fn solve(&self, y: &[f64]) -> Result<SolveResult, SolveError> {
         let t_start = Instant::now();
         let t_setup_start = Instant::now();
 
@@ -123,8 +206,8 @@ impl<S: Store> Solver<S> {
         let time_setup = t_solve_start.duration_since(t_setup_start).as_secs_f64();
 
         let r = match self.preconditioner.as_ref() {
-            Some(p) => mlsmr(&rect_op, &b, p, self.tol, self.maxiter, self.local_size)?,
-            None => lsmr(&rect_op, &b, self.tol, self.maxiter, self.local_size)?,
+            Some(p) => mlsmr(&rect_op, &b, p, lsmr.tol, lsmr.maxiter, lsmr.local_size)?,
+            None => lsmr_solve(&rect_op, &b, lsmr.tol, lsmr.maxiter, lsmr.local_size)?,
         };
 
         let time_solve = t_solve_start.elapsed().as_secs_f64();
@@ -132,7 +215,7 @@ impl<S: Store> Solver<S> {
         // demeaned = y - D x. The bare unweighted `D x` matvec uses an
         // unweighted DesignOperator over the same design.
         let bare_op = DesignOperator::new(&self.design, None);
-        let mut demeaned = vec![0.0; self.design.n_rows];
+        let mut demeaned = vec![0.0; self.design.n_obs];
         bare_op.apply(&r.x, &mut demeaned)?;
         for (d, &yi) in demeaned.iter_mut().zip(y.iter()) {
             *d = yi - *d;
@@ -147,14 +230,14 @@ impl<S: Store> Solver<S> {
         let weighted_demeaned = rect_op.weighted_rhs(&demeaned);
         let mut residual_dof = vec![0.0; self.design.n_dofs];
         rect_op.apply_adjoint(&weighted_demeaned, &mut residual_dof)?;
-        let final_residual = norm(&residual_dof) / rhs_norm;
+        let residual = norm(&residual_dof) / rhs_norm;
 
         Ok(SolveResult {
             x: r.x,
             demeaned,
             converged: r.converged,
             iterations: r.iterations,
-            final_residual,
+            residual,
             time_total: t_start.elapsed().as_secs_f64(),
             time_setup,
             time_solve,
@@ -162,18 +245,22 @@ impl<S: Store> Solver<S> {
     }
 
     /// Solve for multiple RHS vectors in parallel.
-    pub fn solve_batch(&self, ys: &[&[f64]]) -> Result<BatchSolveResult, SolveError> {
+    pub fn solve_batch(
+        &self,
+        ys: &[&[f64]],
+        lsmr: &LsmrOptions,
+    ) -> Result<BatchSolveResult, SolveError> {
         let t_start = Instant::now();
         let n_rhs = ys.len();
 
         let results: Vec<Result<SolveResult, SolveError>> =
-            ys.par_iter().map(|y| self.solve(y)).collect();
+            ys.par_iter().map(|y| self.solve(y, lsmr)).collect();
 
         let mut x = Vec::with_capacity(self.design.n_dofs * n_rhs);
-        let mut demeaned = Vec::with_capacity(self.design.n_rows * n_rhs);
+        let mut demeaned = Vec::with_capacity(self.design.n_obs * n_rhs);
         let mut converged = Vec::with_capacity(n_rhs);
         let mut iterations = Vec::with_capacity(n_rhs);
-        let mut final_residual = Vec::with_capacity(n_rhs);
+        let mut residual = Vec::with_capacity(n_rhs);
         let mut time_solve = Vec::with_capacity(n_rhs);
 
         for r in results {
@@ -182,23 +269,25 @@ impl<S: Store> Solver<S> {
             demeaned.extend_from_slice(&r.demeaned);
             converged.push(r.converged);
             iterations.push(r.iterations);
-            final_residual.push(r.final_residual);
+            residual.push(r.residual);
             time_solve.push(r.time_solve);
         }
 
-        Ok(BatchSolveResult::new(
+        Ok(BatchSolveResult {
             x,
             demeaned,
             converged,
             iterations,
-            final_residual,
+            residual,
             time_solve,
-            t_start.elapsed().as_secs_f64(),
-        ))
+            time_total: t_start.elapsed().as_secs_f64(),
+            n_dofs: self.design.n_dofs,
+            n_obs: self.design.n_obs,
+        })
     }
 
-    /// Access the preconditioner (for serialization).
-    pub fn preconditioner(&self) -> Option<&FePreconditioner> {
+    /// Access the preconditioner (for serialization or reuse across solvers).
+    pub fn preconditioner(&self) -> Option<&Preconditioner> {
         self.preconditioner.as_ref()
     }
 
@@ -209,35 +298,6 @@ impl<S: Store> Solver<S> {
 
     /// Number of observations.
     pub fn n_obs(&self) -> usize {
-        self.design.n_rows
-    }
-}
-
-// Convenience constructors for ArrayStore
-impl<'a> Solver<ArrayStore<'a>> {
-    /// Build a solver from raw category data (zero-copy).
-    pub fn new(
-        categories: ArrayView2<'a, u32>,
-        weights: Option<&[f64]>,
-        params: &SolverParams,
-        preconditioner: Option<&Preconditioner>,
-    ) -> Result<Self, BuildError> {
-        let store = ArrayStore::new(categories)?;
-        let design = Design::from_store(store)?;
-        let weights = weights.map(|w| w.to_vec());
-        Self::from_design(design, weights, params, preconditioner)
-    }
-
-    /// Build a solver with a pre-built preconditioner (e.g. deserialized).
-    pub fn with_preconditioner(
-        categories: ArrayView2<'a, u32>,
-        weights: Option<&[f64]>,
-        params: &SolverParams,
-        preconditioner: FePreconditioner,
-    ) -> Result<Self, BuildError> {
-        let store = ArrayStore::new(categories)?;
-        let design = Design::from_store(store)?;
-        let weights = weights.map(|w| w.to_vec());
-        Self::from_design_with_preconditioner(design, weights, params, preconditioner)
+        self.design.n_obs
     }
 }

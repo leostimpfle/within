@@ -1,52 +1,9 @@
-//! LSMR for rectangular least-squares.
+//! LSMR for rectangular least-squares (`min ‖b − A x‖₂`).
 //!
-//! Solves `min ‖b − A x‖₂`. Two entry points:
-//!
+//! Two entry points:
 //! - [`lsmr`] — standard Golub-Kahan bidiagonalization, no preconditioner.
-//! - [`mlsmr`] — preconditioned with `M ≈ AᵀA`, using the Modified
-//!   Golub-Kahan variant. Requires only **one** `M⁻¹` application per
-//!   iteration — no square-root factorization of `M` is needed.
-//!
-//! # Modified Golub-Kahan Bidiagonalization
-//!
-//! The standard preconditioned Golub-Kahan process requires two triangular
-//! solves per iteration (`L⁻¹` and `L⁻ᵀ` where `M = LᵀL`). The modified
-//! version introduces an auxiliary vector `p̃ = M ṽ` and exploits the
-//! identity `‖ṽ‖_M = √⟨ṽ, p̃⟩` to merge both solves into a single
-//! `M⁻¹` application:
-//!
-//! 1. Forward matvec: `A ṽ_k`
-//! 2. Adjoint matvec: `Aᵀ u_{k+1}`
-//! 3. Preconditioner solve: `M⁻¹ p̃` (the only place `M` appears)
-//! 4. M-norm via dot product: `α = √⟨ṽ, p̃⟩`
-//!
-//! # Architecture
-//!
-//! Mirrors Algorithm 2.8 of Fong & Saunders:
-//!
-//! - [`Bidiagonalization`] — trait emitting one [`BidiagStep`] per call.
-//!   Two impls: [`GolubKahan`] (no preconditioner) and
-//!   [`ModifiedGolubKahan`] (preconditioned). The choice of bidiagonalization
-//!   is the only place `M` appears; the rest of the solver is generic.
-//! - [`Givens`] — a single rotation `(c, s, r)` constructed from `(a, b)`.
-//!   Built twice per iteration: P̂_k eliminates `β_{k+1}`, P̄_k
-//!   eliminates `θ_{k+1}`.
-//! - [`LsmrRecurrenceState`] — applies P̂_k and P̄_k to advance the
-//!   transformed-RHS scalars (`φ̄`, `ζ̄`); emits a [`RotationStep`] of
-//!   natural rotation outputs `(ρ, ρ̄, θ_new, θ̄, ζ)`.
-//! - [`SolutionState`] — the `(x, h, h̄)` vector recurrence that assembles
-//!   `x` without storing the full `V_k` basis.
-//! - [`ConvergenceState`] — Fong & Saunders' two stops plus the running
-//!   `‖A‖_F²` estimate.
-//!
-//! # References
-//!
-//! - Fong & Saunders (2011). "LSMR: An Iterative Algorithm for Sparse
-//!   Least-Squares Problems." *SIAM J. Sci. Comput.* 33(5).
-//! - Arridge, Betcke, Harhanen (2014). "Iterated preconditioned LSQR
-//!   method for inverse problems on unstructured grids." *Inverse Problems* 30(7).
-//! - Hamarik, Huang, Kaltenbacher, Kangro (2024). "Flexible Modified LSMR
-//!   for Least Squares Problems." arXiv:2408.16652.
+//! - [`mlsmr`] — Modified Golub-Kahan variant preconditioned with `M ≈ AᵀA`;
+//!   requires a single `M⁻¹` application per iteration.
 
 mod bidiag;
 mod recurrence;
@@ -152,8 +109,17 @@ pub fn mlsmr<A: Operator + ?Sized, M: Operator + ?Sized>(
     local_size: Option<usize>,
 ) -> Result<LsmrResult, SolveError> {
     validate_lsmr_inputs(operator, b, tol)?;
-    validate_lsmr_preconditioner(operator, preconditioner)?;
     let n = operator.ncols();
+    if preconditioner.nrows() != n || preconditioner.ncols() != n {
+        return Err(SolveError::InvalidInput {
+            context: "lsmr",
+            message: format!(
+                "preconditioner shape {}x{} must match operator column count {n}",
+                preconditioner.nrows(),
+                preconditioner.ncols(),
+            ),
+        });
+    }
 
     let b_norm = vec_norm(b);
     if b_norm == 0.0 {
@@ -210,8 +176,11 @@ fn lsmr_from_bidiag<B: Bidiagonalization>(
         // Convergence wins over breakdown when both fire on the same step:
         // the user-specified tolerance is the contract, breakdown is an
         // internal property of the bidiagonalization.
-        let stop = convergence.check(&recurrence);
-        if let Some(stop_reason) = lsmr_stop_reason(stop) {
+        if let Some(stop_reason) = match convergence.check(&recurrence) {
+            Stop::Continue => None,
+            Stop::ResidualTolerance => Some(LsmrStopReason::ResidualTolerance),
+            Stop::NormalEquationTolerance => Some(LsmrStopReason::NormalEquationTolerance),
+        } {
             return Ok(LsmrResult {
                 x: solution.into_x(),
                 converged: true,
@@ -269,30 +238,4 @@ fn validate_lsmr_inputs<A: Operator + ?Sized>(
         });
     }
     Ok(())
-}
-
-fn validate_lsmr_preconditioner<A: Operator + ?Sized, M: Operator + ?Sized>(
-    operator: &A,
-    preconditioner: &M,
-) -> Result<(), SolveError> {
-    let n = operator.ncols();
-    if preconditioner.nrows() != n || preconditioner.ncols() != n {
-        return Err(SolveError::InvalidInput {
-            context: "lsmr",
-            message: format!(
-                "preconditioner shape {}x{} must match operator column count {n}",
-                preconditioner.nrows(),
-                preconditioner.ncols(),
-            ),
-        });
-    }
-    Ok(())
-}
-
-fn lsmr_stop_reason(stop: Stop) -> Option<LsmrStopReason> {
-    match stop {
-        Stop::Continue => None,
-        Stop::ResidualTolerance => Some(LsmrStopReason::ResidualTolerance),
-        Stop::NormalEquationTolerance => Some(LsmrStopReason::NormalEquationTolerance),
-    }
 }

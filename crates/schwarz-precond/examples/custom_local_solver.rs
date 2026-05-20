@@ -6,8 +6,8 @@
 use faer::{MatRef, Side};
 
 use schwarz_precond::{
-    mlsmr, LocalSolveError, LocalSolver, Operator, SchwarzPreconditioner, SolveError, SparseMatrix,
-    SubdomainCore, SubdomainEntry,
+    mlsmr, CsrMatrix, LocalSolveError, LocalSolver, Operator, ReductionStrategy,
+    SchwarzPreconditioner, SolveError, SubdomainCore, SubdomainEntry,
 };
 // ---------------------------------------------------------------------------
 // Tridiagonal operator
@@ -41,10 +41,10 @@ impl Operator for TridiagOperator {
     }
 }
 // ---------------------------------------------------------------------------
-// Build the same tridiag as a SparseMatrix (CSR) for submatrix extraction
+// Build the same tridiag as a CsrMatrix (CSR) for submatrix extraction
 // ---------------------------------------------------------------------------
 
-fn build_tridiag_sparse(n: usize) -> SparseMatrix {
+fn build_tridiag_sparse(n: usize) -> CsrMatrix {
     let mut indptr = Vec::with_capacity(n + 1);
     let mut indices = Vec::new();
     let mut data = Vec::new();
@@ -64,7 +64,7 @@ fn build_tridiag_sparse(n: usize) -> SparseMatrix {
         indptr.push(indices.len() as u32);
     }
 
-    SparseMatrix::new(indptr, indices, data, n)
+    CsrMatrix::new(indptr, indices, data, n).expect("valid CSR for tridiagonal example")
 }
 
 // ---------------------------------------------------------------------------
@@ -79,7 +79,7 @@ struct DenseCholeskyLocalSolver {
 
 impl DenseCholeskyLocalSolver {
     /// Build from a sparse local submatrix.
-    fn from_sparse(sub: &SparseMatrix) -> Self {
+    fn from_sparse(sub: &CsrMatrix) -> Self {
         let m = sub.n();
 
         // Expand sparse submatrix to dense row-major
@@ -162,7 +162,7 @@ impl LocalSolver for DenseCholeskyLocalSolver {
 // ---------------------------------------------------------------------------
 
 fn build_entries(
-    global_sparse: &SparseMatrix,
+    global_sparse: &CsrMatrix,
     n: usize,
 ) -> Vec<SubdomainEntry<DenseCholeskyLocalSolver>> {
     let mut entries = Vec::new();
@@ -196,8 +196,8 @@ fn main() {
     let a = TridiagOperator { n };
     let a_sparse = build_tridiag_sparse(n);
 
-    let precond = SchwarzPreconditioner::new(build_entries(&a_sparse, n), n)
-        .expect("valid additive schwarz preconditioner");
+    let precond =
+        SchwarzPreconditioner::new(build_entries(&a_sparse, n), ReductionStrategy::default());
     let result = mlsmr(&a, &rhs, &precond, 1e-10, 200, None).expect("preconditioned lsmr");
     println!(
         "Dense Cholesky Schwarz LSMR: converged={}, iterations={:>3}, residual={:.3e}",

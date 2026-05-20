@@ -1,9 +1,6 @@
 use ndarray::Array2;
 use proptest::prelude::*;
-use schwarz_precond::Operator;
-use within::observation::ArrayStore;
-use within::operator::DesignOperator;
-use within::{solve, Design, FePreconditioner, Preconditioner, SolverParams};
+use within::{solve, LsmrOptions, Preconditioner, PreconditionerConfig};
 
 /// Generate a random fixed-effects problem as (categories Array2<u32>, y Vec<f64>).
 fn random_fe_problem_strategy() -> impl Strategy<Value = (Array2<u32>, Vec<f64>)> {
@@ -35,12 +32,12 @@ fn random_fe_problem_strategy() -> impl Strategy<Value = (Array2<u32>, Vec<f64>)
     })
 }
 
-fn default_params() -> SolverParams {
-    SolverParams::default()
+fn default_params() -> LsmrOptions {
+    LsmrOptions::default()
 }
 
-fn additive_precond() -> Preconditioner {
-    Preconditioner::default()
+fn additive_precond() -> PreconditionerConfig {
+    PreconditionerConfig::default()
 }
 
 proptest! {
@@ -48,14 +45,13 @@ proptest! {
 
 #[test]
     fn prop_preconditioner_serde_roundtrip((cats, _y) in random_fe_problem_strategy()) {
-        let params = default_params();
         let precond = additive_precond();
 
-        let solver = within::Solver::new(cats.view(), None, &params, Some(&precond)).unwrap();
+        let solver = within::Solver::new(cats.view(), None::<Vec<f64>>, Some(&precond)).unwrap();
         let fe_precond = solver.preconditioner().unwrap();
 
         let bytes = postcard::to_stdvec(fe_precond).unwrap();
-        let deserialized: FePreconditioner = postcard::from_bytes(&bytes).unwrap();
+        let deserialized: Preconditioner = postcard::from_bytes(&bytes).unwrap();
 
         let n = fe_precond.nrows();
         let x: Vec<f64> = (0..n).map(|i| (i as f64 * 0.5).sin()).collect();
@@ -71,30 +67,21 @@ proptest! {
     }
 
     #[test]
-    fn prop_solver_convergence((cats, _y) in random_fe_problem_strategy()) {
-        // Create y = D * x_true so we know the answer
-        let store = ArrayStore::new(cats.view()).unwrap();
-        let design = Design::from_store(store).unwrap();
-        let n_dofs = design.n_dofs;
-        let n_obs = design.n_rows;
-
-        let x_true: Vec<f64> = (0..n_dofs).map(|i| (i as f64 * 0.4).sin()).collect();
-        let mut y = vec![0.0; n_obs];
-        DesignOperator::new(&design, None)
-            .apply(&x_true, &mut y)
-            .expect("apply succeeds");
-
-        // Use slightly relaxed tolerance — randomly generated problems can be
-        // borderline at 1e-8 (e.g. residual 1.02e-8 after 13 iters).
-        let params = SolverParams {
+    fn prop_solver_convergence((cats, y) in random_fe_problem_strategy()) {
+        // LSMR converges on the least-squares system min ||y - Dx||^2 for any
+        // y, so we use the random y directly from the strategy.
+        let params = LsmrOptions {
             tol: 1e-7,
             ..default_params()
         };
         let precond = additive_precond();
         let result = solve(cats.view(), &y, None, &params, Some(&precond)).unwrap();
 
-        prop_assert!(result.converged, "Solver did not converge after {} iterations (residual: {:.2e}, n_obs: {}, n_dofs: {})",
-            result.iterations, result.final_residual, n_obs, n_dofs);
+        prop_assert!(
+            result.converged,
+            "Solver did not converge after {} iterations (residual: {:.2e}, n_obs: {})",
+            result.iterations, result.residual, y.len(),
+        );
     }
 
     #[test]
