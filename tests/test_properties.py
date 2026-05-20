@@ -7,7 +7,7 @@ from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 
 from within import Solver, solve
-from within import AdditiveSchwarz, ReductionStrategy
+from within.config import AdditiveSchwarz, ReductionStrategy
 
 
 @st.composite
@@ -77,7 +77,7 @@ class TestProperties:
         """Pickle roundtrip of preconditioner preserves apply()."""
         categories, y = data
         solver = Solver(categories)
-        precond = solver.preconditioner()
+        precond = solver.preconditioner
         if precond is None:
             return
 

@@ -9,7 +9,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from within import LSMR, Preconditioner, Solver, solve
+from within import LsmrOptions, PreconditionerConfig, Solver, solve
 
 
 def as_solver_categories(cats):
@@ -23,14 +23,14 @@ def as_solver_categories(cats):
 
 class TestNanInfPropagation:
     def test_nan_in_y_rejected(self):
-        """NaN in y should be rejected at LSMR input validation."""
+        """NaN in y should be rejected at LsmrOptions input validation."""
         cats = as_solver_categories([np.array([0, 1, 0]), np.array([0, 0, 1])])
         y = np.array([1.0, np.nan, 3.0])
         with pytest.raises(ValueError, match="finite"):
             solve(cats, y)
 
     def test_inf_in_y_rejected(self):
-        """Inf in y should be rejected at LSMR input validation."""
+        """Inf in y should be rejected at LsmrOptions input validation."""
         cats = as_solver_categories([np.array([0, 1, 0]), np.array([0, 0, 1])])
         y = np.array([1.0, np.inf, 3.0])
         with pytest.raises(ValueError, match="finite"):
@@ -73,7 +73,9 @@ class TestWeightEdgeCases:
         y = np.ones(5)
         w = np.zeros(5)
         try:
-            result = solve(cats, y, weights=w, preconditioner=Preconditioner.Additive)
+            result = solve(
+                cats, y, weights=w, preconditioner=PreconditionerConfig.Additive
+            )
             assert not result.converged
         except Exception:
             pass  # raising is also acceptable
@@ -148,7 +150,7 @@ class TestDegenerateY:
         """All observations in one group per factor leaves no variation to explain."""
         cats = np.zeros((5, 2), dtype=np.uint32, order="F")
         y = np.array([1.0, 2.0, 3.0, 4.0, 5.0])
-        result = solve(cats, y, preconditioner=Preconditioner.Off)
+        result = solve(cats, y, preconditioner=PreconditionerConfig.Off)
         assert np.all(np.isfinite(result.x))
 
 
@@ -165,7 +167,7 @@ class TestSolverConfigLimits:
             [rng.integers(0, 50, size=1000), rng.integers(0, 50, size=1000)]
         )
         y = rng.standard_normal(1000)
-        result = solve(cats, y, LSMR(maxiter=1, tol=1e-15))
+        result = solve(cats, y, LsmrOptions(maxiter=1, tol=1e-15))
         assert not result.converged
         assert np.all(np.isfinite(result.x))
 
@@ -176,7 +178,7 @@ class TestSolverConfigLimits:
             [rng.integers(0, 50, size=1000), rng.integers(0, 50, size=1000)]
         )
         y = rng.standard_normal(1000)
-        result = solve(cats, y, LSMR(maxiter=2, tol=1e-15))
+        result = solve(cats, y, LsmrOptions(maxiter=2, tol=1e-15))
         assert not result.converged
         assert np.all(np.isfinite(result.x))
 
@@ -186,7 +188,7 @@ class TestSolverConfigLimits:
             [np.array([0, 1, 0, 1, 2]), np.array([0, 0, 1, 1, 0])]
         )
         y = np.array([1.0, 2.0, 3.0, 4.0, 5.0])
-        result = solve(cats, y, LSMR(tol=1e-14))
+        result = solve(cats, y, LsmrOptions(tol=1e-14))
         assert np.all(np.isfinite(result.x))
 
     def test_tol_1_converges_immediately(self):
@@ -196,7 +198,7 @@ class TestSolverConfigLimits:
             [rng.integers(0, 20, size=200), rng.integers(0, 20, size=200)]
         )
         y = rng.standard_normal(200)
-        result = solve(cats, y, LSMR(tol=1.0))
+        result = solve(cats, y, LsmrOptions(tol=1.0))
         assert result.converged
         assert result.iterations <= 5
 
@@ -207,7 +209,7 @@ class TestSolverConfigLimits:
         )
         y = np.array([1.0, 2.0, 3.0, 4.0, 5.0])
         try:
-            result = solve(cats, y, LSMR(tol=0.0))
+            result = solve(cats, y, LsmrOptions(tol=0.0))
             assert np.all(np.isfinite(result.x))
         except Exception:
             pass  # raising is also acceptable
@@ -217,7 +219,7 @@ class TestSolverConfigLimits:
         cats = as_solver_categories([np.array([0, 1, 0]), np.array([0, 0, 1])])
         y = np.array([1.0, 2.0, 3.0])
         try:
-            result = solve(cats, y, LSMR(tol=float("nan")))
+            result = solve(cats, y, LsmrOptions(tol=float("nan")))
             # If it ran, result should be finite or non-converged
             assert isinstance(result.converged, bool)
         except Exception:
@@ -235,7 +237,7 @@ class TestMinimalProblemSizes:
         cats = np.array([[0, 0]], dtype=np.uint32, order="F")
         y = np.array([5.0])
         try:
-            result = solve(cats, y, preconditioner=Preconditioner.Off)
+            result = solve(cats, y, preconditioner=PreconditionerConfig.Off)
             assert np.all(np.isfinite(result.x))
         except Exception:
             pass  # singular system raising is acceptable
@@ -245,7 +247,7 @@ class TestMinimalProblemSizes:
         cats = np.array([[0, 0], [1, 1]], dtype=np.uint32, order="F")
         y = np.array([1.0, 2.0])
         try:
-            result = solve(cats, y, preconditioner=Preconditioner.Off)
+            result = solve(cats, y, preconditioner=PreconditionerConfig.Off)
             assert np.all(np.isfinite(result.x))
         except Exception:
             pass  # acceptable
@@ -319,19 +321,19 @@ class TestNonContiguousInputs:
 
 
 # ---------------------------------------------------------------------------
-# Preconditioner.Off (no preconditioner)
+# PreconditionerConfig.Off (no preconditioner)
 # ---------------------------------------------------------------------------
 
 
 class TestNoPreconditioner:
     def test_preconditioner_off_converges_on_easy_problem(self):
-        """Unpreconditioned LSMR should still converge on a simple problem."""
+        """Unpreconditioned LsmrOptions should still converge on a simple problem."""
         rng = np.random.default_rng(99)
         cats = as_solver_categories(
             [rng.integers(0, 10, size=200), rng.integers(0, 10, size=200)]
         )
         y = rng.standard_normal(200)
-        result = solve(cats, y, preconditioner=Preconditioner.Off)
+        result = solve(cats, y, preconditioner=PreconditionerConfig.Off)
         assert result.converged
         assert np.all(np.isfinite(result.x))
 
@@ -341,13 +343,13 @@ class TestNoPreconditioner:
             [np.array([0, 1, 0, 1, 2]), np.array([0, 0, 1, 1, 0])]
         )
         y = np.array([1.0, 2.0, 3.0, 4.0, 5.0])
-        result = solve(cats, y, preconditioner=Preconditioner.Off)
+        result = solve(cats, y, preconditioner=PreconditionerConfig.Off)
         assert np.all(np.isfinite(result.x))
 
     def test_solver_preconditioner_none_returns_none(self):
-        """Solver built with Preconditioner.Off should return None from preconditioner()."""
+        """Solver built with PreconditionerConfig.Off should return None from preconditioner()."""
         cats = as_solver_categories(
             [np.array([0, 1, 0, 1, 2]), np.array([0, 0, 1, 1, 0])]
         )
-        solver = Solver(cats, preconditioner=Preconditioner.Off)
-        assert solver.preconditioner() is None
+        solver = Solver(cats, preconditioner=PreconditionerConfig.Off)
+        assert solver.preconditioner is None
