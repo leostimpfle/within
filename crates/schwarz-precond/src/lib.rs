@@ -2,84 +2,12 @@
 //!
 //! Provides a one-level additive Schwarz preconditioner generic over local
 //! solvers, plus a Modified LSMR iterative solver for rectangular
-//! least-squares problems.
+//! least-squares problems. The preconditioner approximates `(AᵀA)^{-1}` by
+//! solving overlapping subproblems and stitching them together with a
+//! partition-of-unity weighting; each local solve runs in parallel.
 //!
-//! # Why domain decomposition?
-//!
-//! Domain decomposition splits s global problem
-//! `A x = b` into overlapping *subdomains*, solving each
-//! one cheaply, and stitching the local solutions back together.
-//!
-//! The result is a preconditioner `M^{-1}` that approximates `(AᵀA)^{-1}`
-//! well enough for an iterative solver to converge in far fewer iterations
-//! than it would unpreconditioned. Because the local solves are
-//! independent in the additive variant, they parallelize naturally.
-//!
-//! ## The additive Schwarz formula
-//!
-//! For `N` overlapping subdomains the one-level additive Schwarz
-//! preconditioner is:
-//!
-//! ```text
-//! M⁻¹ = Σᵢ Rᵢᵀ D̃ᵢ Aᵢ⁻¹ D̃ᵢ Rᵢ
-//! ```
-//!
-//! where each operator plays a specific role:
-//!
-//! | Symbol | Meaning |
-//! |--------|---------|
-//! | `Rᵢ` | **Restriction** — gathers global DOFs belonging to subdomain *i* into a local vector |
-//! | `D̃ᵢ` | **Partition-of-unity weight** — scales each DOF so that overlapping contributions sum to the identity (`Σ D̃ᵢ² = I`) |
-//! | `Aᵢ⁻¹` | **Local solve** — inverts the local system (exact or approximate) |
-//! | `Rᵢᵀ` | **Prolongation** — scatters the local correction back to the global vector |
-//!
-//! The two-sided weighting `Rᵢᵀ D̃ᵢ · · · D̃ᵢ Rᵢ` ensures that where
-//! subdomains overlap, their contributions blend smoothly rather than
-//! double-counting. Concretely, if a DOF belongs to *c* subdomains its
-//! weight in each is `1/√c`, so the squared weights sum to one.
-//!
-//! # Module structure
-//!
-//! ```text
-//! schwarz-precond
-//! ├── domain          SubdomainCore, PartitionWeights
-//! ├── local_solve     LocalSolver trait, SubdomainEntry
-//! ├── schwarz         Additive Schwarz preconditioner (parallel local solves)
-//! ├── lsmr            Modified LSMR for rectangular least-squares
-//! ├── sparse_matrix   SparseMatrix (internal CSR representation)
-//! └── error           Typed errors for build and runtime failures
-//! ```
-//!
-//! # Trait relationships
-//!
-//! The crate is built around two core traits that compose to form the
-//! preconditioner:
-//!
-//! - **[`Operator`]** — A linear map `R^n -> R^n` with `apply` and
-//!   `apply_adjoint`. Both the system matrix `A` and the preconditioner
-//!   `M^{-1}` implement this trait, so solvers are generic over both.
-//!   All operators must be `Send + Sync` to enable Rayon parallelism.
-//!
-//! - **[`LocalSolver`]** — The `Aᵢ⁻¹` abstraction. Given a local
-//!   right-hand side, produce the local solution. Implementations range
-//!   from exact Cholesky to approximate incomplete factorizations.
-//!   The solver declares its DOF count and scratch buffer requirements,
-//!   which are validated at construction time. The `solve_local` method
-//!   receives an `allow_inner_parallelism` hint so implementations with
-//!   worthwhile nested-parallel regions can opt in without a separate
-//!   policy trait.
-//!
-//! These compose inside [`SubdomainEntry`], which bundles a
-//! [`SubdomainCore`] (restriction indices + partition-of-unity weights)
-//! with a `LocalSolver`. The preconditioner owns a collection of entries
-//! and orchestrates the restrict-solve-prolongate loop.
-//!
-//! See [`examples/`](https://github.com/kristof-mattei/domain-decomp-chol/tree/main/crates/schwarz-precond/examples)
-//! directory for complete runnable examples.
-//!
-//! # References
-//!
-//! - Toselli & Widlund (2005). *Domain Decomposition Methods — Algorithms and Theory*. Springer.
+//! See `examples/` for runnable usage. Reference: Toselli & Widlund (2005).
+//! *Domain Decomposition Methods — Algorithms and Theory*. Springer.
 
 #![deny(missing_docs)]
 #![warn(clippy::all)]
@@ -114,17 +42,18 @@ pub trait Operator: Send + Sync {
 // Modules
 // ============================================================================
 
+mod csr_matrix;
 /// Domain decomposition primitives: subdomain cores and partition weights.
 pub mod domain;
-mod error;
+/// Typed errors for build and runtime failures.
+pub mod error;
 mod local_solve;
 mod lsmr;
 mod schwarz;
-mod sparse_matrix;
 
+pub use csr_matrix::CsrMatrix;
 pub use domain::{PartitionWeights, SubdomainCore};
 pub use error::{BuildError, LocalSolveError, SolveError};
 pub use local_solve::{LocalSolver, SubdomainEntry};
 pub use lsmr::{lsmr, mlsmr, LsmrResult, LsmrStopReason};
 pub use schwarz::{ReductionStrategy, SchwarzPreconditioner};
-pub use sparse_matrix::SparseMatrix;

@@ -9,8 +9,8 @@ import numpy as np
 from numpy.typing import NDArray
 from enum import IntEnum
 
-class Preconditioner(IntEnum):
-    """Preconditioner selection for the LSMR solver.
+class PreconditionerConfig(IntEnum):
+    """Preconditioner selection shortcut for the LSMR solver.
 
     Use the enum variants for defaults, or pass an ``AdditiveSchwarz``
     instance for fine-grained control.
@@ -36,7 +36,7 @@ class ReductionStrategy(IntEnum):
     AtomicScatter = 1
     ParallelReduction = 2
 
-class LSMR:
+class LsmrOptions:
     """Modified LSMR solver configuration.
 
     Uses Modified Golub-Kahan bidiagonalization to solve the rectangular
@@ -135,9 +135,11 @@ class BatchSolveResult:
 def solve(
     categories: NDArray[np.uint32],
     y: NDArray[np.float64],
-    config: LSMR | None = None,
+    options: LsmrOptions | None = None,
     weights: NDArray[np.float64] | None = None,
-    preconditioner: AdditiveSchwarz | Preconditioner | None = None,
+    preconditioner: (
+        PreconditionerConfig | AdditiveSchwarz | Preconditioner | None
+    ) = None,
 ) -> SolveResult:
     """Solve fixed-effects normal equations for a single response vector.
 
@@ -151,14 +153,16 @@ def solve(
             for one factor. Should be F-contiguous (column-major) for best
             performance; a ``UserWarning`` is emitted for C-contiguous arrays.
         y: Response vector, shape ``(n_obs,)``, dtype ``float64``.
-        config: LSMR solver configuration. Pass ``LSMR(...)`` to override
-            defaults. Default: ``LSMR(tol=1e-8, maxiter=1000)``.
+        options: LSMR solver tuning. Pass ``LsmrOptions(...)`` to override
+            defaults. Default: ``LsmrOptions(tol=1e-8, maxiter=1000)``.
         weights: Observation weights, shape ``(n_obs,)``, dtype ``float64``.
             Default: unit weights (unweighted).
-        preconditioner: Controls preconditioning. ``None`` (default) uses
-            additive Schwarz. ``Preconditioner.Off`` disables it.
-            Pass ``AdditiveSchwarz(...)`` for fine-grained control over local
-            solvers.
+        preconditioner: Controls preconditioning. Four input forms are accepted:
+            ``None`` (default) builds the additive Schwarz preconditioner with
+            default settings. ``PreconditionerConfig.Off`` disables it.
+            ``AdditiveSchwarz(...)`` overrides the local-solver / reduction
+            settings. A previously-built ``Preconditioner`` instance reuses an
+            existing factorisation.
 
     Returns:
         A ``SolveResult`` with coefficients, demeaned response, convergence
@@ -183,9 +187,11 @@ def solve(
 def solve_batch(
     categories: NDArray[np.uint32],
     Y: NDArray[np.float64],
-    config: LSMR | None = None,
+    options: LsmrOptions | None = None,
     weights: NDArray[np.float64] | None = None,
-    preconditioner: AdditiveSchwarz | Preconditioner | None = None,
+    preconditioner: (
+        PreconditionerConfig | AdditiveSchwarz | Preconditioner | None
+    ) = None,
 ) -> BatchSolveResult:
     """Solve fixed-effects normal equations for multiple response vectors.
 
@@ -196,9 +202,10 @@ def solve_batch(
         categories: Factor assignments, shape ``(n_obs, n_factors)``, dtype ``uint32``.
         Y: Response matrix, shape ``(n_obs, k)``, dtype ``float64``. Each column
             is a separate response vector.
-        config: LSMR solver configuration. Default: ``LSMR(tol=1e-8, maxiter=1000)``.
+        options: LSMR solver tuning. Default: ``LsmrOptions(tol=1e-8, maxiter=1000)``.
         weights: Observation weights. Default: unit weights.
-        preconditioner: Preconditioner configuration. Default: additive Schwarz.
+        preconditioner: Preconditioner configuration; see :func:`solve` for the
+            accepted forms.
 
     Returns:
         A ``BatchSolveResult`` with stacked coefficients and per-RHS metadata.
@@ -208,23 +215,25 @@ def solve_batch(
     """
     ...
 
-class FePreconditioner:
+class Preconditioner:
     """Pre-built fixed-effects preconditioner.
 
     Built once per design and reused across solves via the persistent
-    :class:`Solver`. Pickleable for offline construction.
+    :class:`Solver`. Pickleable for offline construction; can also be
+    deserialised manually via ``Preconditioner(bytes_payload)`` (the same
+    payload produced by ``__reduce__`` / ``pickle.dumps``).
     """
 
-    def n_subdomains(self) -> int:
-        """Number of Schwarz subdomains."""
+    def __init__(self, data: bytes) -> None: ...
+    def apply(self, x: NDArray[np.float64]) -> NDArray[np.float64]:
+        """Apply the preconditioner: ``y = M⁻¹ x``."""
         ...
-    def subdomain_inner_parallel_work(self) -> list[int]:
-        """Estimated inner-parallel work per subdomain."""
-        ...
+    @property
+    def nrows(self) -> int: ...
+    @property
+    def ncols(self) -> int: ...
     def __repr__(self) -> str: ...
     def __reduce__(self) -> tuple: ...
-    @staticmethod
-    def __setstate__(state: bytes) -> "FePreconditioner": ...
 
 class Solver:
     """Persistent solver with cached preconditioner.
@@ -237,18 +246,27 @@ class Solver:
         self,
         categories: NDArray[np.uint32],
         weights: NDArray[np.float64] | None = None,
-        config: LSMR | None = None,
-        preconditioner: AdditiveSchwarz | Preconditioner | None = None,
+        preconditioner: (
+            PreconditionerConfig | AdditiveSchwarz | Preconditioner | None
+        ) = None,
     ) -> None: ...
-    def solve(self, y: NDArray[np.float64]) -> SolveResult:
-        """Solve for a single response vector."""
+    def solve(
+        self,
+        y: NDArray[np.float64],
+        options: LsmrOptions | None = None,
+    ) -> SolveResult:
+        """Solve for a single response vector with the given LSMR tuning."""
         ...
-    def solve_batch(self, Y: NDArray[np.float64]) -> BatchSolveResult:
+    def solve_batch(
+        self,
+        Y: NDArray[np.float64],
+        options: LsmrOptions | None = None,
+    ) -> BatchSolveResult:
         """Solve for multiple response vectors in parallel."""
         ...
     @property
-    def preconditioner(self) -> FePreconditioner | None:
-        """Access the cached preconditioner (for serialization)."""
+    def preconditioner(self) -> Preconditioner | None:
+        """Access the cached preconditioner (for serialization or reuse)."""
         ...
     @property
     def n_dofs(self) -> int: ...
@@ -263,8 +281,8 @@ class ApproxCholConfig:
     """Configuration for approximate Cholesky factorization."""
 
     seed: int
-    split: int
-    def __init__(self, seed: int = 0, split: int = 1) -> None: ...
+    split_merge: int | None
+    def __init__(self, seed: int = 0, split_merge: int | None = None) -> None: ...
 
 class ApproxSchurConfig:
     """Configuration for approximate Schur complement via clique-tree sampling."""
@@ -273,8 +291,15 @@ class ApproxSchurConfig:
     split: int
     def __init__(self, seed: int = 0, split: int = 1) -> None: ...
 
-class SchurComplement:
-    """Local solver: Schur reduction + approximate Cholesky."""
+class LocalSolverConfig:
+    """Local solver: Schur reduction + approximate Cholesky.
+
+    Note: the Python-level constructor exposed via ``within.config`` uses an
+    explicit default for ``approx_schur`` (the library-default approximate
+    config). The native PyO3 constructor accepts ``None`` as the *explicit*
+    "exact Schur" signal — see ``python/within/config.py`` for the wrapper
+    that injects the default.
+    """
 
     approx_chol: ApproxCholConfig | None
     approx_schur: ApproxSchurConfig | None
@@ -289,10 +314,10 @@ class SchurComplement:
 class AdditiveSchwarz:
     """Additive Schwarz preconditioner with configurable local solver."""
 
-    local_solver: SchurComplement | None
+    local_solver: LocalSolverConfig | None
     reduction: ReductionStrategy
     def __init__(
         self,
-        local_solver: SchurComplement | None = None,
+        local_solver: LocalSolverConfig | None = None,
         reduction: ReductionStrategy = ReductionStrategy.Auto,
     ) -> None: ...

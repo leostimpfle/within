@@ -1,12 +1,6 @@
 use ndarray::Array2;
 use proptest::prelude::*;
-use schwarz_precond::Operator as _;
-use within::observation::ArrayStore;
-use within::operator::DesignOperator;
-use within::{solve, Design, Preconditioner, Solver, SolverParams};
-
-#[path = "common/orchestrate_helpers.rs"]
-mod common;
+use within::{solve, LsmrOptions, PreconditionerConfig, Solver};
 
 // ---------------------------------------------------------------------------
 // Shared strategies
@@ -85,8 +79,8 @@ fn single_factor_strategy() -> impl Strategy<Value = (Array2<u32>, Vec<f64>)> {
     })
 }
 
-fn additive_precond() -> Preconditioner {
-    Preconditioner::default()
+fn additive_precond() -> PreconditionerConfig {
+    PreconditionerConfig::default()
 }
 
 // ---------------------------------------------------------------------------
@@ -100,43 +94,30 @@ proptest! {
     /// This exercises the partition-of-unity construction over C(4,2)=6 domains.
     #[test]
     fn prop_4_factor_convergence((cats, y) in random_4_factor_problem_strategy()) {
-        let params = SolverParams {
+        let params = LsmrOptions {
             tol: 1e-7,
-            ..SolverParams::default()
+            ..LsmrOptions::default()
         };
         let precond = additive_precond();
-        // Build the design with a unit-solution RHS so the problem is feasible
-        let store = ArrayStore::new(cats.view()).unwrap();
-        let design = Design::from_store(store).unwrap();
-        let y_feasible: Vec<f64> = {
-            let x_true = vec![1.0; design.n_dofs];
-            let mut y_out = vec![0.0; design.n_rows];
-            DesignOperator::new(&design, None)
-                .apply(&x_true, &mut y_out)
-                .expect("apply succeeds");
-            y_out
-        };
-        // Use y_feasible so convergence is guaranteed on a consistent system
-        let _ = y; // provided by strategy but we use the feasible version
-        let result = solve(cats.view(), &y_feasible, None, &params, Some(&precond)).unwrap();
+        // LSMR converges on the least-squares system min ||y - Dx||^2 for any y.
+        let result = solve(cats.view(), &y, None, &params, Some(&precond)).unwrap();
         prop_assert!(
             result.converged,
-            "4-factor solve did not converge (n_obs={}, n_dofs={}, residual={:.2e})",
-            design.n_rows,
-            design.n_dofs,
-            result.final_residual
+            "4-factor solve did not converge (n_obs={}, residual={:.2e})",
+            y.len(),
+            result.residual
         );
     }
 
-    /// `solve()` and `Solver::from_design().solve()` must produce bit-identical
-    /// results given the same design and RHS. `solve()` internally builds via
-    /// `Solver::new` (ArrayStore path); `Solver::from_design` uses FactorMajorStore.
+    /// `solve()` and `Solver::new().solve(, &params)` must produce bit-identical
+    /// results given the same design and RHS. Both use the ArrayStore path
+    /// (raw category view); the wrappers differ only in timing accounting.
     /// Both should reach the same fixed point.
     #[test]
     fn prop_solve_vs_solver_identical((cats, y) in random_fe_problem_strategy()) {
-        let params = SolverParams {
+        let params = LsmrOptions {
             tol: 1e-7,
-            ..SolverParams::default()
+            ..LsmrOptions::default()
         };
         let precond = additive_precond();
 
@@ -144,8 +125,8 @@ proptest! {
         let result_a = solve(cats.view(), &y, None, &params, Some(&precond)).unwrap();
 
         // Path B: Solver::new() — identical to solve() but without timing wrapper
-        let solver_b = Solver::new(cats.view(), None, &params, Some(&precond)).unwrap();
-        let result_b = solver_b.solve(&y).unwrap();
+        let solver_b = Solver::new(cats.view(), None::<Vec<f64>>, Some(&precond)).unwrap();
+        let result_b = solver_b.solve(&y, &params).unwrap();
 
         prop_assert_eq!(
             result_a.x.len(),
@@ -155,7 +136,7 @@ proptest! {
         for (i, (a, b)) in result_a.x.iter().zip(result_b.x.iter()).enumerate() {
             prop_assert!(
                 (a - b).abs() < 1e-12,
-                "x[{}] mismatch: solve()={} vs Solver::new().solve()={}",
+                "x[{}] mismatch: solve()={} vs Solver::new().solve(, &params)={}",
                 i, a, b
             );
         }
@@ -165,9 +146,9 @@ proptest! {
     /// After a converged solve, `demeaned[i]` must equal `y[i] - sum_q x[dof(i,q)]`.
     #[test]
     fn prop_demeaned_identity_all_paths((cats, y) in random_fe_problem_strategy()) {
-        let params = SolverParams {
+        let params = LsmrOptions {
             tol: 1e-7,
-            ..SolverParams::default()
+            ..LsmrOptions::default()
         };
         let precond = additive_precond();
         let result = solve(cats.view(), &y, None, &params, Some(&precond)).unwrap();
@@ -204,35 +185,24 @@ proptest! {
         }
     }
 
-    /// Single-factor problems have a diagonal Gramian.  Unpreconditioned LSMR
+    /// Single-factor problems have a diagonal Gramian. Unpreconditioned LSMR
     /// on a diagonal system converges in at most n_levels iterations (one per
-    /// distinct singular value); in practice far fewer are needed.  The key
-    /// property is that LSMR converges and produces a finite solution.
+    /// distinct singular value); in practice far fewer are needed.
     #[test]
-    fn prop_single_factor_converges((cats, _y) in single_factor_strategy()) {
-        // Build a consistent RHS: y = D * 1 so the system is exactly solvable.
-        let store = ArrayStore::new(cats.view()).unwrap();
-        let design = Design::from_store(store).unwrap();
-        let n_levels = design.n_dofs;
-        let x_true = vec![1.0; n_levels];
-        let mut y_feasible = vec![0.0; design.n_rows];
-        DesignOperator::new(&design, None)
-            .apply(&x_true, &mut y_feasible)
-            .expect("apply succeeds");
-
-        // No preconditioner.
-        let params = SolverParams {
+    fn prop_single_factor_converges((cats, y) in single_factor_strategy()) {
+        let n_levels = *cats.column(0).iter().max().unwrap() as usize + 1;
+        let params = LsmrOptions {
             tol: 1e-8,
             maxiter: n_levels + 10,
-            ..SolverParams::default()
+            ..LsmrOptions::default()
         };
-        let result = solve(cats.view(), &y_feasible, None, &params, None).unwrap();
+        let result = solve(cats.view(), &y, None, &params, None).unwrap();
 
         prop_assert!(
             result.converged,
             "single-factor LSMR did not converge in {} iterations (residual={:.2e}, n_levels={})",
             result.iterations,
-            result.final_residual,
+            result.residual,
             n_levels
         );
         prop_assert!(result.x.iter().all(|v| v.is_finite()), "non-finite x");

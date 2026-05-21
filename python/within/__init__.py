@@ -31,39 +31,38 @@ For repeated solves on the same panel structure, use the persistent
     r1 = solver.solve(y1)
     r2 = solver.solve(y2)
 
-Key exports:
+Two-tier public API:
 
-- :func:`solve` / :func:`solve_batch` -- one-shot solve functions
-- :class:`Solver` -- persistent solver with reusable preconditioner
-- :class:`LSMR` -- LSMR solver configuration
-- :class:`Preconditioner` -- quick preconditioner selection enum
-- :class:`AdditiveSchwarz` -- fine-grained preconditioner configuration
+- The top-level ``within`` namespace exposes the call-site essentials
+  (``solve``, ``Solver``, ``LsmrOptions``, ``PreconditionerConfig``,
+  ``Preconditioner``).
+- :mod:`within.config` re-exports the advanced configuration objects
+  (``AdditiveSchwarz``, ``LocalSolverConfig``, ``ApproxCholConfig``,
+  ``ApproxSchurConfig``, ``ReductionStrategy``).
 
 For Rust-level internals, build the API docs with ``cargo doc --open``.
 """
 
 from within._within import (
-    Preconditioner,
-    SolveResult,
     BatchSolveResult,
-    LSMR,
-    FePreconditioner,
+    LsmrOptions,
+    Preconditioner,
+    PreconditionerConfig,
+    SolveResult,
     Solver,
     solve,
     solve_batch,
-    AdditiveSchwarz,
-    ReductionStrategy,
 )
+from within import config  # noqa: F401 — expose submodule on `within.config`
 
 __all__ = [
-    "Preconditioner",
-    "SolveResult",
     "BatchSolveResult",
-    "LSMR",
-    "FePreconditioner",
+    "LsmrOptions",
+    "Preconditioner",
+    "PreconditionerConfig",
+    "SolveResult",
     "Solver",
     "solve",
     "solve_batch",
-    "AdditiveSchwarz",
-    "ReductionStrategy",
+    "config",
 ]

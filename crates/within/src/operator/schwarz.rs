@@ -1,81 +1,36 @@
-//! Schwarz preconditioner: FE-specific construction helpers.
-//!
-//! This module bridges the fixed-effects domain types ([`Design`],
-//! [`Subdomain`], `CrossTab`) to the generic `schwarz-precond` crate API.
-//! The generic crate knows nothing about panel data — it operates on abstract
-//! [`SubdomainEntry`] values containing a local solver and a set of global DOF
-//! indices. This module handles the translation.
-//!
-//! # Local solver
-//!
-//! Each subdomain needs a local solver that can approximately invert the
-//! restricted Gramian on that subdomain. The solver eliminates one factor
-//! block via exact diagonal inversion, then factors the reduced Schur
-//! complement (see `schur_complement`).
-//!
-//! # Builder pattern
-//!
-//! Construction flows through a layered builder:
-//!
-//! 1. **Domain acquisition** — `(Subdomain, CrossTab)` pairs come from
-//!    [`build_local_domains`](crate::domain) via a single observation scan.
-//! 2. **Entry construction** — each `(Subdomain, CrossTab)` pair is
-//!    converted into a `SubdomainEntry<BlockElimSolver>` in parallel via
-//!    `build_entry`, which dispatches on the config
-//! 3. **Schwarz assembly** — entries are passed to the generic
-//!    `SchwarzPreconditioner` constructor from `schwarz-precond`.
+//! Schwarz preconditioner: bridges FE domain types to the generic
+//! `schwarz-precond` API, plus the opaque public [`Preconditioner`] handle.
 
-use approx_chol::low_level::Builder;
-use approx_chol::CsrRef;
 use rayon::prelude::*;
-use schwarz_precond::{SchwarzPreconditioner, SubdomainEntry};
+use schwarz_precond::{Operator, SchwarzPreconditioner, SubdomainEntry};
 use serde::{Deserialize, Serialize};
 
-use super::gramian::CrossTab;
-use super::local_solver::{BlockElimSolver, ReducedFactor};
-use super::schur_complement::{
-    ApproxSchurComplement, EliminationInfo, ExactSchurComplement, SchurComplement, SchurResult,
-};
-use crate::config::{ApproxCholConfig, ApproxSchurConfig, LocalSolverConfig};
-use crate::domain::Subdomain;
+use crate::block_elim::BlockElimSolver;
+use crate::config::{LocalSolverConfig, PreconditionerConfig};
+use crate::domain::CrossTab;
+use crate::domain::{Design, Subdomain};
+use crate::observation::{validate_weights, Store};
 use crate::BuildError;
 
 /// Concrete additive Schwarz type used in the parent crate.
 #[derive(Clone, Serialize, Deserialize)]
-pub struct FeSchwarz(SchwarzPreconditioner<BlockElimSolver>);
+pub(crate) struct FeSchwarz(SchwarzPreconditioner<BlockElimSolver>);
+
+impl std::fmt::Debug for FeSchwarz {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("FeSchwarz")
+            .field("n_subdomains", &self.0.subdomains().len())
+            .finish()
+    }
+}
 
 impl FeSchwarz {
     pub(crate) fn new(inner: SchwarzPreconditioner<BlockElimSolver>) -> Self {
         Self(inner)
     }
-
-    /// Subdomain entries with their local solvers.
-    pub fn subdomains(&self) -> &[SubdomainEntry<BlockElimSolver>] {
-        self.0.subdomains()
-    }
-
-    /// Current reduction strategy (may be `Auto`).
-    pub fn reduction_strategy(&self) -> schwarz_precond::ReductionStrategy {
-        self.0.reduction_strategy()
-    }
-
-    /// Resolved reduction strategy (`Auto` replaced by the detected choice).
-    pub fn resolved_reduction_strategy(&self) -> schwarz_precond::ReductionStrategy {
-        self.0.resolved_reduction_strategy()
-    }
-
-    /// Apply the preconditioner, returning an error on local-solver failure.
-    pub fn apply(&self, r: &[f64], z: &mut [f64]) -> Result<(), schwarz_precond::SolveError> {
-        self.0.apply(r, z)
-    }
-
-    #[cfg(test)]
-    pub fn with_reduction_strategy(&self, strategy: schwarz_precond::ReductionStrategy) -> Self {
-        Self(self.0.with_reduction_strategy(strategy))
-    }
 }
 
-impl schwarz_precond::Operator for FeSchwarz {
+impl Operator for FeSchwarz {
     fn nrows(&self) -> usize {
         self.0.nrows()
     }
@@ -100,15 +55,13 @@ impl schwarz_precond::Operator for FeSchwarz {
 /// Build additive Schwarz with an explicit reduction strategy.
 pub(crate) fn build_additive_with_strategy(
     domains: Vec<(Subdomain, CrossTab)>,
-    n_dofs: usize,
     config: &LocalSolverConfig,
     strategy: schwarz_precond::ReductionStrategy,
 ) -> Result<FeSchwarz, BuildError> {
     let entries = build_entries_from_pairs(domains, config)?;
-    Ok(FeSchwarz::new(
-        SchwarzPreconditioner::with_strategy(entries, n_dofs, strategy)
-            .map_err(BuildError::Preconditioner)?,
-    ))
+    Ok(FeSchwarz::new(SchwarzPreconditioner::new(
+        entries, strategy,
+    )))
 }
 
 fn build_entries_from_pairs(
@@ -131,94 +84,129 @@ pub(crate) fn build_entry(
     cross_tab: CrossTab,
     config: &LocalSolverConfig,
 ) -> Result<SubdomainEntry<BlockElimSolver>, BuildError> {
-    let schur_config = ReducedSchurConfig {
-        approx_chol: config.approx_chol,
-        approx_schur: config.approx_schur,
-        dense_threshold: config.dense_threshold,
-    };
-    let reduced = build_reduced_schur_factor(&cross_tab, &schur_config)?;
-    let solver = BlockElimSolver::new(
-        cross_tab,
-        reduced.elimination.inv_diag_elim,
-        reduced.factor,
-        reduced.elimination.eliminate_q,
-    );
+    let solver = BlockElimSolver::build(cross_tab, config)?;
     SubdomainEntry::try_new(domain.core, solver).map_err(BuildError::Preconditioner)
 }
 
-pub(crate) struct ReducedSchurBuild {
-    pub(crate) factor: ReducedFactor,
-    pub(crate) elimination: EliminationInfo,
+// ---------------------------------------------------------------------------
+// Opaque public preconditioner handle
+// ---------------------------------------------------------------------------
+
+/// Opaque handle to a pre-built fixed-effects preconditioner.
+///
+/// # Cheap clone
+///
+/// Cloning a `Preconditioner` is O(1): it bumps `Arc` refcounts on the inner
+/// subdomain vector (`Arc<Vec<SubdomainEntry<_>>>`) and the scratch
+/// `BufferPool` shared by `schwarz_precond::SchwarzPreconditioner`. No
+/// factorization state is deep-copied (see that crate's `Clone` impl). This
+/// is what makes `From<&Preconditioner> for PreconditionerInput` honest —
+/// passing `&precond` to [`Solver::new`] does not duplicate the factorization.
+///
+/// # State invariants
+///
+/// Factorization state is immutable after build: the per-subdomain solvers
+/// and their backing storage never change once a `Preconditioner` exists.
+/// The one piece of interior mutability is a scratch `BufferPool:
+/// Arc<Mutex<Vec<SchwarzBuffers>>>` inside the underlying Schwarz executor,
+/// used by `apply` for take/put of temporary buffers; it is fully
+/// encapsulated and not observable to callers.
+///
+/// # For future maintainers
+///
+/// This contract holds for the current [`Variant::Additive`] variant. Any
+/// new `Variant` added below MUST preserve both invariants:
+/// 1. `Clone` must be O(1) — wrap any heavy per-variant state in an
+///    `Arc` rather than deep-copying it.
+/// 2. Factorization state must be immutable after build (interior
+///    mutability is allowed only for opaque scratch like `BufferPool`).
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct Preconditioner {
+    inner: Variant,
 }
 
-fn dense_fast_path_enabled(n_keep: usize, threshold: usize) -> bool {
-    threshold > 0 && n_keep <= threshold
+#[derive(Clone, Debug, Serialize, Deserialize)]
+enum Variant {
+    Additive(FeSchwarz),
 }
 
-fn compute_schur(
-    cross_tab: &CrossTab,
-    approx_schur: Option<ApproxSchurConfig>,
-) -> Result<SchurResult, BuildError> {
-    match approx_schur {
-        None => ExactSchurComplement.compute(cross_tab),
-        Some(cfg) => ApproxSchurComplement::new(cfg).compute(cross_tab),
-    }
-}
-
-fn build_sparse_reduced_factor(
-    matrix: &schwarz_precond::SparseMatrix,
-    approx_chol: ApproxCholConfig,
-) -> Result<ReducedFactor, BuildError> {
-    let schur_builder = Builder::new(approx_chol.to_approx_chol());
-    let csr = CsrRef::new(
-        matrix.indptr(),
-        matrix.indices(),
-        matrix.data(),
-        matrix.n() as u32,
-    )
-    .map_err(|e| BuildError::LocalSolverBuild(format!("invalid Schur complement CSR: {e}")))?;
-    schur_builder
-        .build(csr)
-        .map(ReducedFactor::approx)
-        .map_err(|e| {
-            BuildError::LocalSolverBuild(format!("failed Schur complement factorization: {e}"))
-        })
-}
-
-/// Configuration for building a reduced Schur factor.
-pub(crate) struct ReducedSchurConfig {
-    pub approx_chol: ApproxCholConfig,
-    pub approx_schur: Option<ApproxSchurConfig>,
-    pub dense_threshold: usize,
-}
-
-pub(crate) fn build_reduced_schur_factor(
-    cross_tab: &CrossTab,
-    config: &ReducedSchurConfig,
-) -> Result<ReducedSchurBuild, BuildError> {
-    let n_keep = cross_tab.n_q().min(cross_tab.n_r());
-    let prefer_dense = dense_fast_path_enabled(n_keep, config.dense_threshold);
-
-    // Below the dense threshold the reduced system is tiny — always use exact
-    // Schur complement (cheap at this size) and dense Cholesky factorization.
-    if prefer_dense {
-        let dense = ExactSchurComplement.compute_dense_anchored(cross_tab)?;
-        if let Some(factor) =
-            ReducedFactor::try_dense_laplacian_minor(dense.anchored_minor, dense.n)
-        {
-            return Ok(ReducedSchurBuild {
-                factor,
-                elimination: dense.elimination,
-            });
+impl Preconditioner {
+    pub(crate) fn additive(inner: FeSchwarz) -> Self {
+        Self {
+            inner: Variant::Additive(inner),
         }
     }
 
-    // General path (exact or approximate): sparse Schur assembly.
-    let schur = compute_schur(cross_tab, config.approx_schur)?;
+    /// Number of rows of the underlying linear operator.
+    pub fn nrows(&self) -> usize {
+        <Self as schwarz_precond::Operator>::nrows(self)
+    }
 
-    let factor = build_sparse_reduced_factor(&schur.matrix, config.approx_chol)?;
-    Ok(ReducedSchurBuild {
-        factor,
-        elimination: schur.elimination,
-    })
+    /// Number of columns of the underlying linear operator.
+    pub fn ncols(&self) -> usize {
+        <Self as schwarz_precond::Operator>::ncols(self)
+    }
+
+    /// Apply the preconditioner: writes `M^{-1} x` into `y`.
+    pub fn apply(&self, x: &[f64], y: &mut [f64]) -> Result<(), schwarz_precond::SolveError> {
+        <Self as schwarz_precond::Operator>::apply(self, x, y)
+    }
+}
+
+impl Operator for Preconditioner {
+    fn nrows(&self) -> usize {
+        match &self.inner {
+            Variant::Additive(p) => p.nrows(),
+        }
+    }
+
+    fn ncols(&self) -> usize {
+        match &self.inner {
+            Variant::Additive(p) => p.ncols(),
+        }
+    }
+
+    fn apply(&self, x: &[f64], y: &mut [f64]) -> Result<(), schwarz_precond::SolveError> {
+        match &self.inner {
+            Variant::Additive(p) => p.apply(x, y),
+        }
+    }
+
+    fn apply_adjoint(&self, x: &[f64], y: &mut [f64]) -> Result<(), schwarz_precond::SolveError> {
+        match &self.inner {
+            Variant::Additive(p) => p.apply_adjoint(x, y),
+        }
+    }
+}
+
+/// Build a [`Preconditioner`] from a design and optional observation weights.
+pub(crate) fn build_preconditioner<S: Store>(
+    design: &Design<S>,
+    weights: Option<&[f64]>,
+    config: Option<&PreconditionerConfig>,
+) -> Result<Option<Preconditioner>, BuildError> {
+    use crate::domain::build_local_domains;
+
+    validate_weights(weights, design.n_obs)?;
+
+    let default_cfg = PreconditionerConfig::default();
+    let resolved = config.unwrap_or(&default_cfg);
+    match resolved {
+        PreconditionerConfig::Off => Ok(None),
+        PreconditionerConfig::Additive {
+            local_solver,
+            reduction,
+        } => {
+            let domains = build_local_domains(design, weights);
+            if domains.is_empty() {
+                // Single-factor designs (and other configurations with no
+                // factor-pair subdomains) have no useful additive Schwarz
+                // preconditioner. Fall back to unpreconditioned LSMR.
+                return Ok(None);
+            }
+            let p = build_additive_with_strategy(domains, local_solver, *reduction)?;
+            Ok(Some(Preconditioner::additive(p)))
+        }
+    }
 }

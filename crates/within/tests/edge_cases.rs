@@ -2,13 +2,13 @@ use ndarray::array;
 use rand::rngs::SmallRng;
 use rand::{Rng, SeedableRng};
 use within::observation::FactorMajorStore;
-use within::{solve, Design, Preconditioner, Solver, SolverParams};
+use within::{solve, Design, LsmrOptions, PreconditionerConfig, Solver};
 
 #[path = "common/orchestrate_helpers.rs"]
 mod common;
 
-fn additive_precond() -> Preconditioner {
-    Preconditioner::default()
+fn additive_precond() -> PreconditionerConfig {
+    PreconditionerConfig::default()
 }
 
 // ---------------------------------------------------------------------------
@@ -22,7 +22,7 @@ fn additive_precond() -> Preconditioner {
 fn test_single_observation() {
     let cats = array![[0u32, 0]];
     let y = vec![5.0f64];
-    let params = SolverParams::default();
+    let params = LsmrOptions::default();
 
     let result = solve(cats.view(), &y, None, &params, None).expect("single-obs solve");
     assert!(
@@ -47,7 +47,7 @@ fn test_trivial_factor_all_same_level() {
     // 5 observations; factor 0 is constant, factor 1 cycles through 0, 1, 2.
     let cats = array![[0u32, 0], [0u32, 1], [0u32, 2], [0u32, 0], [0u32, 1]];
     let y = vec![1.0, 2.0, 3.0, 4.0, 5.0];
-    let params = SolverParams::default();
+    let params = LsmrOptions::default();
     let precond = additive_precond();
 
     let result =
@@ -85,7 +85,7 @@ fn test_zero_weight_error_with_preconditioner() {
         cats.view(),
         &y,
         Some(&weights),
-        &SolverParams::default(),
+        &LsmrOptions::default(),
         Some(&precond),
     );
     assert!(
@@ -107,8 +107,8 @@ fn test_zero_weight_no_preconditioner_returns_zero() {
         cats.view(),
         &y,
         Some(&weights),
-        &SolverParams::default(),
-        None,
+        &LsmrOptions::default(),
+        Some(&PreconditionerConfig::Off),
     )
     .expect("zero weights with no preconditioner should succeed");
 
@@ -142,13 +142,13 @@ fn test_maxiter_1_partial_result() {
 
     let y: Vec<f64> = (0..n_obs).map(|i| (i as f64 * 0.17).sin()).collect();
 
-    let params = SolverParams {
+    let params = LsmrOptions {
         tol: 1e-15,
         maxiter: 1,
-        ..SolverParams::default()
+        ..LsmrOptions::default()
     };
-    let solver = Solver::from_design(design, None, &params, None).expect("solver build");
-    let result = solver.solve(&y).expect("solve with maxiter=1");
+    let solver = Solver::new(design, None::<Vec<f64>>, None).expect("solver build");
+    let result = solver.solve(&y, &params).expect("solve with maxiter=1");
 
     // Convergence is not expected (tolerance is unreachable in 1 iteration),
     // but all values must be finite.
@@ -186,20 +186,20 @@ fn test_large_design_convergence() {
 
     let store = FactorMajorStore::new(cats, n_obs).expect("valid large store");
     let design = Design::from_store(store).expect("valid large design");
-    let y = common::make_y_from_unit_solution(&design);
+    let y = common::make_deterministic_y(&design);
 
-    let params = SolverParams {
+    let params = LsmrOptions {
         tol: 1e-7,
-        ..SolverParams::default()
+        ..LsmrOptions::default()
     };
     let precond = additive_precond();
-    let solver = Solver::from_design(design, None, &params, Some(&precond)).expect("solver build");
-    let result = solver.solve(&y).expect("large design solve");
+    let solver = Solver::new(design, None::<Vec<f64>>, Some(&precond)).expect("solver build");
+    let result = solver.solve(&y, &params).expect("large design solve");
 
     assert!(
         result.converged,
         "large design did not converge (n_obs={n_obs}, residual={:.2e})",
-        result.final_residual
+        result.residual
     );
     common::assert_solution_finite(&result);
 }
@@ -213,11 +213,11 @@ fn test_large_design_convergence() {
 #[test]
 fn test_zero_rhs_zero_solution() {
     let design = common::make_test_design();
-    let y = vec![0.0f64; design.n_rows];
+    let y = vec![0.0f64; design.n_obs()];
 
-    let params = SolverParams::default();
-    let solver = Solver::from_design(design, None, &params, None).expect("solver build");
-    let result = solver.solve(&y).expect("zero RHS solve");
+    let params = LsmrOptions::default();
+    let solver = Solver::new(design, None::<Vec<f64>>, None).expect("solver build");
+    let result = solver.solve(&y, &params).expect("zero RHS solve");
 
     assert!(result.converged, "zero RHS should trivially converge");
     assert_eq!(result.iterations, 0, "zero RHS should need 0 iterations");
@@ -239,7 +239,7 @@ fn test_uniform_weights_matches_unweighted() {
     let y = vec![1.0, 2.0, 3.0, 4.0, 5.0f64];
     let uniform_weights = vec![2.0f64; 5]; // constant — equivalent to unit weights
 
-    let params = SolverParams::default();
+    let params = LsmrOptions::default();
     let precond = additive_precond();
 
     let r_unit = solve(cats.view(), &y, None, &params, Some(&precond)).expect("unweighted solve");
@@ -273,14 +273,14 @@ fn test_uniform_weights_matches_unweighted() {
 #[test]
 fn test_repeated_solve_is_deterministic() {
     let design = common::make_test_design();
-    let y = common::make_y_from_unit_solution(&design);
+    let y = common::make_deterministic_y(&design);
 
-    let params = SolverParams::default();
+    let params = LsmrOptions::default();
     let precond = additive_precond();
-    let solver = Solver::from_design(design, None, &params, Some(&precond)).expect("solver build");
+    let solver = Solver::new(design, None::<Vec<f64>>, Some(&precond)).expect("solver build");
 
-    let r1 = solver.solve(&y).expect("first solve");
-    let r2 = solver.solve(&y).expect("second solve");
+    let r1 = solver.solve(&y, &params).expect("first solve");
+    let r2 = solver.solve(&y, &params).expect("second solve");
 
     assert_eq!(r1.x.len(), r2.x.len());
     for (i, (a, b)) in r1.x.iter().zip(r2.x.iter()).enumerate() {

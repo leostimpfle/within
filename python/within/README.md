@@ -53,8 +53,8 @@ print(np.round(beta_hat, 4))  # [ 0.9982 -2.006   0.5005]
 
 | Function | Description |
 |---|---|
-| `solve(categories, y, config?, weights?, preconditioner?)` | Solve a single right-hand side. Returns `SolveResult`. |
-| `solve_batch(categories, Y, config?, weights?, preconditioner?)` | Solve multiple RHS vectors in parallel. `Y` has shape `(n_obs, k)`. Returns `BatchSolveResult`. |
+| `solve(categories, y, options?, weights?, preconditioner?)` | Solve a single right-hand side. Returns `SolveResult`. |
+| `solve_batch(categories, Y, options?, weights?, preconditioner?)` | Solve multiple RHS vectors in parallel. `Y` has shape `(n_obs, k)`. Returns `BatchSolveResult`. |
 
 `categories` is a 2-D `uint32` array of shape `(n_obs, n_factors)`. A `UserWarning` is emitted when a C-contiguous array is passed — use `np.asfortranarray(categories)` for best performance.
 
@@ -69,30 +69,32 @@ solver = Solver(fe)
 r = solver.solve(y)                            # reuses preconditioner
 r = solver.solve_batch(np.column_stack([y, X]))
 
-precond = solver.preconditioner()              # picklable
+precond = solver.preconditioner                # picklable property
 solver2 = Solver(fe, preconditioner=precond)   # skip re-factorization
 ```
 
 | Property / Method | Description |
 |---|---|
-| `Solver(categories, config?, weights?, preconditioner?)` | Build solver. Factorizes the preconditioner at construction. |
-| `.solve(y)` | Solve a single RHS. Returns `SolveResult`. |
-| `.solve_batch(Y)` | Solve multiple RHS columns in parallel. Returns `BatchSolveResult`. |
-| `.preconditioner()` | Return the built `FePreconditioner` (picklable), or `None`. |
+| `Solver(categories, weights?, preconditioner?)` | Build solver. Factorizes the preconditioner at construction. |
+| `.solve(y, options?)` | Solve a single RHS with the given LSMR tuning. Returns `SolveResult`. |
+| `.solve_batch(Y, options?)` | Solve multiple RHS columns in parallel. Returns `BatchSolveResult`. |
+| `.preconditioner` | Return the built `Preconditioner` (picklable), or `None`. Reuse via `Solver(..., preconditioner=p)`. |
 
 
 ### Solver configuration
 
 | Class | Description |
 |---|---|
-| `LSMR(tol=1e-8, maxiter=1000, local_size=None)` | Modified LSMR. `local_size` enables windowed reorthogonalization. |
+| `LsmrOptions(tol=1e-8, maxiter=1000, local_size=None)` | Modified LSMR. `local_size` enables windowed reorthogonalization. |
 
 ### Preconditioners
 
 | Class | Description |
 |---|---|
-| `AdditiveSchwarz(local_solver?)` | Additive one-level Schwarz. |
-| `Preconditioner.Off` | Disable preconditioning. |
+| `AdditiveSchwarz(local_solver?)` | Additive one-level Schwarz (import from `within.config`). |
+| `PreconditionerConfig.Off` | Disable preconditioning. |
+| `PreconditionerConfig.Additive` | Additive Schwarz shortcut (equivalent to `None`). |
+| `Preconditioner` (built) | Reuse a previously-built preconditioner across solvers. |
 
 Pass `None` (the default) to use additive Schwarz with the default local solver.
 
@@ -100,9 +102,8 @@ Pass `None` (the default) to use additive Schwarz with the default local solver.
 
 | Class | Description |
 |---|---|
-| `SchurComplement(approx_chol?, approx_schur?, dense_threshold=24)` | Schur complement reduction with approximate Cholesky on the reduced system. Default local solver. |
-| `FullSddm(approx_chol?)` | Full bipartite SDDM factorized via approximate Cholesky. |
-| `ApproxCholConfig(seed=0, split=1)` | Approximate Cholesky parameters. |
+| `LocalSolverConfig(approx_chol?, approx_schur?, dense_threshold=24)` | Schur complement reduction with approximate Cholesky on the reduced system. Default local solver. Import from `within.config`. `approx_schur=None` requests an exact Schur (slower, used for validation). |
+| `ApproxCholConfig(seed=0, split_merge=None)` | Approximate Cholesky parameters. |
 | `ApproxSchurConfig(seed=0, split=1)` | Approximate Schur complement sampling parameters. |
 
 ### Result types

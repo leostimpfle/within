@@ -1,45 +1,14 @@
-//! Internal sparse matrix in Compressed Sparse Row (CSR) format.
+//! Square `f64`/`u32` CSR matrix with adaptive-parallelism `matvec` and a
+//! principal-submatrix extraction used on the subdomain build path.
 //!
-//! # Why a custom sparse matrix?
-//!
-//! The Rust ecosystem offers several sparse matrix crates (`sprs`, `nalgebra-sparse`,
-//! `faer`). This crate provides its own [`SparseMatrix`] for three reasons:
-//!
-//! 1. **Minimal surface area** — Only square CSR matrices with `f64` values and
-//!    `u32` indices are needed. A purpose-built type avoids generic parameters
-//!    and keeps the API lean.
-//!
-//! 2. **Controlled parallelism** — The matrix-vector product (`matvec`) switches
-//!    between sequential and Rayon-parallel row processing based on matrix size,
-//!    with a tuned chunk size. This threshold is important because subdomain
-//!    matrices are often small (hundreds of rows) while the global Gramian can
-//!    be large (millions of rows).
-//!
-//! 3. **Submatrix extraction** — [`SparseMatrix::extract_submatrix`] pulls out
-//!    a principal submatrix `A[S, S]` for a subset `S` of row/column indices,
-//!    remapping to local indices. This operation sits on the critical path of
-//!    subdomain construction and benefits from an adaptive dense-vs-HashMap
-//!    index lookup chosen at extraction time.
-//!
-//! # CSR layout
-//!
-//! A square `n x n` matrix with `nnz` non-zero entries is stored as:
-//!
-//! - `indptr: Vec<u32>` — Row pointers of length `n + 1`. Row `i` spans
-//!   `indices[indptr[i]..indptr[i+1]]`.
-//! - `indices: Vec<u32>` — Column indices of length `nnz`, sorted ascending
-//!   within each row.
-//! - `data: Vec<f64>` — Values of length `nnz`, parallel to `indices`.
-//!
-//! # Interoperability
-//!
-//! A `From<faer::sparse::SparseRowMatRef<u32, f64>>` conversion is provided
-//! for interoperability with the `faer` linear algebra crate, which the
-//! `within` solver uses for approximate Cholesky factorizations.
+//! Constructable from `faer::sparse::SparseRowMatRef<u32, f64>` for interop with
+//! the approximate Cholesky factor produced by the `within` solver.
 
 use std::collections::HashMap;
 
 use rayon::prelude::*;
+
+use crate::error::BuildError;
 
 // ---------------------------------------------------------------------------
 // IndexLookup: adaptive global-to-local index mapping
@@ -103,7 +72,7 @@ impl IndexLookup {
 ///
 /// # CSR Invariants
 ///
-/// A well-formed `SparseMatrix` satisfies:
+/// A well-formed `CsrMatrix` satisfies:
 /// - `indptr.len() == n + 1`
 /// - `indptr[0] == 0` and `indptr` is non-decreasing
 /// - `indices.len() == data.len() == indptr[n] as usize` (the number of non-zeros)
@@ -111,15 +80,16 @@ impl IndexLookup {
 /// - Within each row, column indices are sorted ascending with no duplicates
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Clone)]
-pub struct SparseMatrix {
+pub struct CsrMatrix {
     indptr: Vec<u32>,
     indices: Vec<u32>,
     data: Vec<f64>,
     n: usize,
 }
 
-impl SparseMatrix {
-    /// Create a new `SparseMatrix` from raw CSR components.
+impl CsrMatrix {
+    /// Create a new `CsrMatrix` from raw CSR components, validating the
+    /// documented invariants.
     ///
     /// # Arguments
     ///
@@ -127,13 +97,68 @@ impl SparseMatrix {
     /// * `indices` — Column indices (length `nnz`), sorted ascending per row.
     /// * `data` — Non-zero values (length `nnz`), parallel to `indices`.
     /// * `n` — Matrix dimension (square: `n` rows x `n` columns).
-    pub fn new(indptr: Vec<u32>, indices: Vec<u32>, data: Vec<f64>, n: usize) -> Self {
-        Self {
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BuildError::InvalidCsr`] when any documented invariant is
+    /// violated: shape mismatch between `indptr`/`indices`/`data`, out-of-bounds
+    /// column indices, non-monotonic `indptr`, or unsorted/duplicate column
+    /// indices within a row.
+    pub fn new(
+        indptr: Vec<u32>,
+        indices: Vec<u32>,
+        data: Vec<f64>,
+        n: usize,
+    ) -> Result<Self, BuildError> {
+        if indptr.len() != n + 1 {
+            return Err(BuildError::InvalidCsr {
+                reason: "indptr length must equal n + 1",
+            });
+        }
+        if indptr[0] != 0 {
+            return Err(BuildError::InvalidCsr {
+                reason: "indptr[0] must be 0",
+            });
+        }
+        if indices.len() != data.len() {
+            return Err(BuildError::InvalidCsr {
+                reason: "indices and data must have equal length",
+            });
+        }
+        let nnz = indptr[n] as usize;
+        if indices.len() != nnz {
+            return Err(BuildError::InvalidCsr {
+                reason: "indices/data length must equal indptr[n]",
+            });
+        }
+        for row in 0..n {
+            let start = indptr[row] as usize;
+            let end = indptr[row + 1] as usize;
+            if end < start {
+                return Err(BuildError::InvalidCsr {
+                    reason: "indptr is not non-decreasing",
+                });
+            }
+            let row_cols = &indices[start..end];
+            for (k, &col) in row_cols.iter().enumerate() {
+                if (col as usize) >= n {
+                    return Err(BuildError::InvalidCsr {
+                        reason: "column index out of bounds",
+                    });
+                }
+                if k > 0 && col <= row_cols[k - 1] {
+                    return Err(BuildError::InvalidCsr {
+                        reason: "row column indices must be strictly ascending",
+                    });
+                }
+            }
+        }
+        Ok(Self {
             indptr,
             indices,
             data,
             n,
-        }
+        })
     }
 
     /// Row pointer array (length `n + 1`).
@@ -238,15 +263,15 @@ impl SparseMatrix {
 
     /// Extract principal submatrix G[subset, subset] with global->local index remapping.
     ///
-    /// Returns a new SparseMatrix of size `subset.len()` x `subset.len()`.
+    /// Returns a new CsrMatrix of size `subset.len()` x `subset.len()`.
     /// `subset` must contain valid row/column indices into `self`.
     ///
     /// Adaptively picks a dense `Vec` or `HashMap` for the global-to-local map
     /// depending on the ratio of `max(subset)` to `subset.len()`.
-    pub fn extract_submatrix(&self, subset: &[usize]) -> SparseMatrix {
+    pub fn extract_submatrix(&self, subset: &[usize]) -> CsrMatrix {
         let m = subset.len();
         if m == 0 {
-            return SparseMatrix {
+            return CsrMatrix {
                 indptr: vec![0],
                 indices: Vec::new(),
                 data: Vec::new(),
@@ -279,7 +304,7 @@ impl SparseMatrix {
                 .push(u32::try_from(new_indices.len()).expect("submatrix nnz exceeds u32::MAX"));
         }
 
-        SparseMatrix {
+        CsrMatrix {
             indptr: new_indptr,
             indices: new_indices,
             data: new_data,
@@ -292,8 +317,8 @@ impl SparseMatrix {
 // Sparse interop: faer
 // ---------------------------------------------------------------------------
 
-impl From<faer::sparse::SparseRowMatRef<'_, u32, f64>> for SparseMatrix {
-    /// Convert a `faer` sparse row-major matrix view into an owned `SparseMatrix`.
+impl From<faer::sparse::SparseRowMatRef<'_, u32, f64>> for CsrMatrix {
+    /// Convert a `faer` sparse row-major matrix view into an owned `CsrMatrix`.
     ///
     /// # Panics
     ///
@@ -302,7 +327,7 @@ impl From<faer::sparse::SparseRowMatRef<'_, u32, f64>> for SparseMatrix {
         assert_eq!(
             mat.nrows(),
             mat.ncols(),
-            "SparseMatrix::from(faer): matrix must be square"
+            "CsrMatrix::from(faer): matrix must be square"
         );
         let symbolic = mat.symbolic();
         Self {
@@ -322,8 +347,8 @@ impl From<faer::sparse::SparseRowMatRef<'_, u32, f64>> for SparseMatrix {
 mod tests {
     use super::*;
 
-    fn make_3x3_laplacian() -> SparseMatrix {
-        SparseMatrix {
+    fn make_3x3_laplacian() -> CsrMatrix {
+        CsrMatrix {
             indptr: vec![0, 3, 5, 7],
             indices: vec![0, 1, 2, 0, 1, 0, 2],
             data: vec![2.0, -1.0, -1.0, -1.0, 1.0, -1.0, 1.0],
@@ -384,7 +409,8 @@ mod tests {
     #[test]
     fn test_diagonal_missing_entry() {
         // Matrix with no diagonal for any row
-        let m = SparseMatrix::new(vec![0, 1, 2, 3], vec![1, 0, 0], vec![5.0, 3.0, 7.0], 3);
+        let m = CsrMatrix::new(vec![0, 1, 2, 3], vec![1, 0, 0], vec![5.0, 3.0, 7.0], 3)
+            .expect("valid CSR");
         let d = m.diagonal();
         assert_eq!(d[0], 0.0); // no diagonal
         assert_eq!(d[1], 0.0); // no diagonal
@@ -410,7 +436,7 @@ mod tests {
             data.push((i + 1) as f64);
             indptr[i + 1] = (i + 1) as u32;
         }
-        let m = SparseMatrix::new(indptr, indices, data, n);
+        let m = CsrMatrix::new(indptr, indices, data, n).expect("valid CSR");
         // Extract subset [0, 50, 99] — max_idx=99, m=3, 100 > 4*3=12 → HashMap
         let sub = m.extract_submatrix(&[0, 50, 99]);
         assert_eq!(sub.n(), 3);
@@ -418,5 +444,31 @@ mod tests {
         assert!((d[0] - 1.0).abs() < 1e-14);
         assert!((d[1] - 51.0).abs() < 1e-14);
         assert!((d[2] - 100.0).abs() < 1e-14);
+    }
+
+    #[test]
+    fn test_new_rejects_invalid_csr() {
+        let assert_invalid = |result: Result<CsrMatrix, BuildError>| match result {
+            Err(BuildError::InvalidCsr { .. }) => {}
+            Err(other) => panic!("expected InvalidCsr, got {other:?}"),
+            Ok(_) => panic!("expected InvalidCsr, got Ok"),
+        };
+
+        // Out-of-bounds column: indices[0] = 5 with n = 3.
+        assert_invalid(CsrMatrix::new(vec![0, 1, 1, 1], vec![5], vec![1.0], 3));
+
+        // Unsorted (and duplicated) columns within a row.
+        assert_invalid(CsrMatrix::new(
+            vec![0, 2, 2, 2],
+            vec![1, 0],
+            vec![1.0, 2.0],
+            3,
+        ));
+
+        // Length mismatch between indices and data.
+        assert_invalid(CsrMatrix::new(vec![0, 1, 1, 1], vec![0], vec![1.0, 2.0], 3));
+
+        // indptr.len() != n + 1.
+        assert_invalid(CsrMatrix::new(vec![0, 1], vec![0], vec![1.0], 3));
     }
 }

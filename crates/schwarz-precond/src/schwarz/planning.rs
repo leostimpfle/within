@@ -11,8 +11,6 @@
 //! - **Parallel reduction**: memory and final-reduction cost grow with
 //!   `P × n_dofs` where P is the number of active workers
 
-use crate::local_solve::{LocalSolver, SubdomainEntry};
-
 /// Strategy for combining per-subdomain results in additive Schwarz apply.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum ReductionStrategy {
@@ -50,13 +48,16 @@ pub(super) struct ReductionPlan {
 }
 
 /// Build-time scheduling metrics + `Auto` resolution logic.
+///
+/// Holds only the metrics that require walking the subdomain entries
+/// (work distribution, scatter overlap). Sizes already known to the
+/// preconditioner (`n_subdomains`, `n_dofs`) are passed at call time
+/// rather than duplicated here.
 #[derive(Debug, Clone, Copy)]
 pub(super) struct AdditiveScheduler {
-    n_subdomains: usize,
-    n_dofs: usize,
-    total_inner_parallel_work: usize,
-    max_inner_parallel_work: usize,
-    total_scatter_dofs: usize,
+    pub(super) total_inner_parallel_work: usize,
+    pub(super) max_inner_parallel_work: usize,
+    pub(super) total_scatter_dofs: usize,
 }
 
 impl AdditiveScheduler {
@@ -66,38 +67,21 @@ impl AdditiveScheduler {
     const AUTO_INNER_REDUCTION_SWEEP_FACTOR: f64 = 6.0;
     const AUTO_OVERLAP_FOR_REDUCTION: f64 = 4.0;
 
-    pub(super) fn from_entries<S: LocalSolver>(
-        entries: &[SubdomainEntry<S>],
-        n_dofs: usize,
-    ) -> Self {
-        let (total_inner_parallel_work, max_inner_parallel_work, total_scatter_dofs) =
-            entries.iter().fold(
-                (0usize, 0usize, 0usize),
-                |(total_work, max_work, total_scatter), entry| {
-                    let work = entry.solver().inner_parallelism_work_estimate();
-                    (
-                        total_work.saturating_add(work),
-                        max_work.max(work),
-                        total_scatter.saturating_add(entry.global_indices().len()),
-                    )
-                },
-            );
-        Self {
-            n_subdomains: entries.len(),
-            n_dofs,
-            total_inner_parallel_work,
-            max_inner_parallel_work,
-            total_scatter_dofs,
-        }
-    }
-
     pub(super) fn reduction_plan(
         self,
         configured: ReductionStrategy,
         threads: usize,
+        n_subdomains: usize,
+        n_dofs: usize,
     ) -> ReductionPlan {
         let allow_inner_parallelism = self.allow_inner_parallelism(threads);
-        let strategy = self.resolve_strategy(configured, threads, allow_inner_parallelism);
+        let strategy = self.resolve_strategy(
+            configured,
+            threads,
+            n_subdomains,
+            n_dofs,
+            allow_inner_parallelism,
+        );
         ReductionPlan {
             strategy,
             allow_inner_parallelism,
@@ -111,8 +95,8 @@ impl AdditiveScheduler {
         self.total_inner_parallel_work as f64 / self.max_inner_parallel_work as f64
     }
 
-    fn scatter_overlap(self) -> f64 {
-        self.total_scatter_dofs as f64 / self.n_dofs.max(1) as f64
+    fn scatter_overlap(self, n_dofs: usize) -> f64 {
+        self.total_scatter_dofs as f64 / n_dofs.max(1) as f64
     }
 
     fn allow_inner_parallelism(self, threads: usize) -> bool {
@@ -127,22 +111,28 @@ impl AdditiveScheduler {
         self,
         configured: ReductionStrategy,
         threads: usize,
+        n_subdomains: usize,
+        n_dofs: usize,
         allow_inner_parallelism: bool,
     ) -> ResolvedReductionStrategy {
         match configured {
             ReductionStrategy::AtomicScatter => ResolvedReductionStrategy::AtomicScatter,
             ReductionStrategy::ParallelReduction => ResolvedReductionStrategy::ParallelReduction,
-            ReductionStrategy::Auto => self.pick_auto_strategy(threads, allow_inner_parallelism),
+            ReductionStrategy::Auto => {
+                self.pick_auto_strategy(threads, n_subdomains, n_dofs, allow_inner_parallelism)
+            }
         }
     }
 
     fn pick_auto_strategy(
         self,
         threads: usize,
+        n_subdomains: usize,
+        n_dofs: usize,
         allow_inner_parallelism: bool,
     ) -> ResolvedReductionStrategy {
-        let overlap = self.scatter_overlap();
-        let reduction_to_scatter = self.reduction_sweep_to_scatter(threads);
+        let overlap = self.scatter_overlap(n_dofs);
+        let reduction_to_scatter = self.reduction_sweep_to_scatter(threads, n_subdomains, n_dofs);
 
         if reduction_to_scatter <= Self::AUTO_REDUCTION_SWEEP_FACTOR {
             return ResolvedReductionStrategy::ParallelReduction;
@@ -161,9 +151,9 @@ impl AdditiveScheduler {
         ResolvedReductionStrategy::AtomicScatter
     }
 
-    fn reduction_sweep_to_scatter(self, threads: usize) -> f64 {
-        let active_buffers = threads.min(self.n_subdomains).max(1);
-        let reduction_sweep = active_buffers.saturating_mul(self.n_dofs);
+    fn reduction_sweep_to_scatter(self, threads: usize, n_subdomains: usize, n_dofs: usize) -> f64 {
+        let active_buffers = threads.min(n_subdomains).max(1);
+        let reduction_sweep = active_buffers.saturating_mul(n_dofs);
         let scatter_work = self.total_scatter_dofs.max(1);
         reduction_sweep as f64 / scatter_work as f64
     }

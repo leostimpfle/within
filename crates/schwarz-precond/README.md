@@ -23,7 +23,8 @@ cargo add schwarz-precond
 
 ```rust
 use schwarz_precond::{
-    mlsmr, LocalSolver, Operator, SchwarzPreconditioner, SubdomainCore, SubdomainEntry,
+    mlsmr, LocalSolver, Operator, ReductionStrategy, SchwarzPreconditioner, SubdomainCore,
+    SubdomainEntry,
 };
 
 // --- Tridiagonal SPD operator: A = tridiag(-1, 3, -1) ---
@@ -74,7 +75,7 @@ fn main() {
         })
         .collect();
 
-    let precond = SchwarzPreconditioner::new(entries, n).expect("valid preconditioner");
+    let precond = SchwarzPreconditioner::new(entries, ReductionStrategy::default());
     let result = mlsmr(&a, &b, &precond, 1e-10, 500, None).expect("lsmr should converge");
 
     println!("converged={} iters={} res={:.3e}",

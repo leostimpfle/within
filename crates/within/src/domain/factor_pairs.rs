@@ -1,48 +1,16 @@
-//! Factor-pair domain construction and partition-of-unity weights.
+//! Factor-pair subdomain construction.
 //!
-//! In the additive Schwarz method, the global problem is split into overlapping
-//! local subproblems that are solved independently and then combined. This
-//! module constructs those subdomains from the structure of the fixed-effects
-//! problem.
+//! Each factor pair `(q, r)` becomes a Schwarz subdomain (one per connected
+//! component of its bipartite cross-tab). Overlap is handled by partition-of-unity
+//! weights — see [`schwarz_precond::domain`] for the math.
 //!
-//! # Factor pairs as subdomains
-//!
-//! The Gramian `G = D^T W D` has a block structure dictated by factor pairs.
-//! For Q factors there are `Q(Q-1)/2` off-diagonal blocks, one per pair
-//! `(q, r)`. Each pair defines a natural subdomain: the DOFs (coefficient
-//! indices) are the union of active levels in factors q and r, and the local
-//! operator is the corresponding principal submatrix of G.
-//!
-//! When a factor pair's bipartite graph (levels of q on one side, levels of r
-//! on the other, edges from co-occurring observations) has multiple connected
-//! components, each component becomes a separate, smaller subdomain. This
-//! decomposition is computed via [`CrossTab::bipartite_connected_components`].
-//!
-//! # Partition of unity
-//!
-//! Because a single level can appear in multiple factor pairs (e.g., level j
-//! of factor q participates in pairs (q,r1), (q,r2), ...), the subdomains
-//! overlap. The two-sided additive Schwarz formula:
-//!
-//! ```text
-//! M^{-1} = sum_i  R_i^T  D_i  A_i^{-1}  D_i  R_i
-//! ```
-//!
-//! requires that the squared partition-of-unity weights sum to 1 at every DOF:
-//! `sum_i (D_i)^2 = I` (restricted to covered DOFs). If a DOF appears in `c`
-//! subdomains, each weight is set to `1/sqrt(c)` so that `c * (1/sqrt(c))^2 = 1`.
-//!
-//! In the common case where every DOF belongs to exactly one subdomain (no
-//! overlap), all weights are 1.0 and the compact [`PartitionWeights::Uniform`]
-//! representation avoids per-DOF storage.
-//!
-//! # Entry point
-//!
-//! [`build_local_domains`] builds subdomains for preconditioner construction.
+//! Entry point: [`build_local_domains`].
 
-use super::{Design, PartitionWeights, Subdomain};
+use schwarz_precond::PartitionWeights;
+
+use super::cross_tab::BipartiteComponent;
+use super::{find_all_active_levels, CrossTab, Design, Subdomain};
 use crate::observation::Store;
-use crate::operator::gramian::{find_all_active_levels, BipartiteComponent, CrossTab};
 
 /// Build local subdomains (with pre-built CrossTabs) for pairs of factors.
 ///
@@ -117,8 +85,9 @@ fn split_into_subdomains(
         .zip(cross_tabs)
         .map(|(comp, comp_ct)| {
             let comp_l2g = component_global_indices(comp, l2g, n_q_full);
-            let core =
-                super::SubdomainCore::uniform(comp_l2g.into_iter().map(|g| g as u32).collect());
+            let core = schwarz_precond::SubdomainCore::uniform(
+                comp_l2g.into_iter().map(|g| g as u32).collect(),
+            );
             (Subdomain { factor_pair, core }, comp_ct)
         })
         .collect()

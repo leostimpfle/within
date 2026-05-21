@@ -1,8 +1,7 @@
 #![allow(dead_code)]
 
-use schwarz_precond::Operator as _;
-use within::operator::DesignOperator;
-use within::{Design, FactorMajorStore, SolveResult};
+use within::observation::FactorMajorStore;
+use within::{Design, SolveResult};
 
 pub fn make_test_design() -> Design<FactorMajorStore> {
     make_design(vec![vec![0, 1, 0, 1, 2], vec![0, 0, 1, 1, 0]]).expect("valid test design")
@@ -16,22 +15,20 @@ pub fn make_design(
     Design::from_store(store)
 }
 
-/// Compute y = D * 1 so that the true solution of `min ||y - Dx||^2` is x = 1.
-pub fn make_y_from_unit_solution(design: &Design<FactorMajorStore>) -> Vec<f64> {
-    let x_true = vec![1.0; design.n_dofs];
-    let mut y = vec![0.0; design.n_rows];
-    DesignOperator::new(design, None)
-        .apply(&x_true, &mut y)
-        .expect("apply succeeds");
-    y
+/// Deterministic, non-trivial RHS sized to the design's observation count.
+/// Used to drive convergence assertions where the exact x is irrelevant.
+pub fn make_deterministic_y(design: &Design<FactorMajorStore>) -> Vec<f64> {
+    (0..design.n_obs())
+        .map(|i| (i as f64 * 0.17 + 1.0).sin())
+        .collect()
 }
 
 pub fn assert_converged_with_small_residual(result: &SolveResult, tol: f64) {
     assert!(result.converged, "solver did not converge");
     assert!(
-        result.final_residual < tol,
+        result.residual < tol,
         "residual too large: {}",
-        result.final_residual
+        result.residual
     );
 }
 

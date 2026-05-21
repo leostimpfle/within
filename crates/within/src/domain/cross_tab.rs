@@ -1,32 +1,11 @@
 //! Cross-tabulation of a factor pair: the bipartite local Gramian.
 //!
-//! For a pair of factors `(q, r)`, the local Gramian has 2×2 block structure:
-//!
-//! ```text
-//! G_local = [ D_q    C  ]
-//!           [ C^T    D_r ]
-//! ```
-//!
-//! where `D_q` and `D_r` are diagonal (weighted level counts) and `C` is the
-//! cross-tabulation matrix (`C[j,k]` = weighted count of observations at level
-//! `j` of factor `q` **and** level `k` of factor `r`).
-//!
-//! [`CrossTab`] stores this decomposed form — `C` as a [`CsrBlock`], its
-//! precomputed transpose `C^T`, and the two diagonals — rather than assembling
-//! the full symmetric CSR. This is more compact and directly supports:
-//!
-//! - **Connected components** ([`CrossTab::bipartite_connected_components`]) —
-//!   DFS on the bipartite graph `C` to split disconnected subdomains
-//! - **Component extraction** ([`CrossTab::extract_component`]) — build a
-//!   sub-CrossTab for a single connected component
-//!
-//! # Compact indexing
-//!
-//! Not all levels of a factor may be active (observed). The cross-tab uses
-//! *compact* indices: only active levels are numbered `0..n_q` and `0..n_r`.
-//! A `local_to_global` vector maps these back to global DOF indices.
+//! [`CrossTab`] holds `C` as a [`CsrBlock`] plus its precomputed transpose and
+//! the two diagonals (rather than assembling the symmetric block matrix), and
+//! supports bipartite connected-components splitting and per-component extraction.
+//! Levels are stored compactly with a `local_to_global` map for active levels only.
 
-use super::super::csr_block::CsrBlock;
+use crate::csr_block::CsrBlock;
 use crate::domain::Design;
 use crate::observation::Store;
 
@@ -74,7 +53,7 @@ impl ActiveLevels {
 /// Scan all observations once and mark which levels are active for each factor.
 ///
 /// Returns `active[f][level]` = true if any observation uses that level of factor f.
-pub fn find_all_active_levels<S: Store>(design: &Design<S>) -> Vec<Vec<bool>> {
+pub(crate) fn find_all_active_levels<S: Store>(design: &Design<S>) -> Vec<Vec<bool>> {
     let n_factors = design.factors.len();
     let n_obs = design.store.n_obs();
     let mut active: Vec<Vec<bool>> = design
@@ -146,25 +125,6 @@ fn build_compact_mapping(
     })
 }
 
-/// Scan factors q and r to find active levels, then delegate to `build_compact_mapping`.
-///
-/// Returns `None` if either factor has no active levels.
-#[cfg(test)]
-fn find_active_levels<S: Store>(design: &Design<S>, q: usize, r: usize) -> Option<ActiveLevels> {
-    let fq = &design.factors[q];
-    let fr = &design.factors[r];
-    let n_obs = design.store.n_obs();
-
-    let mut active_q = vec![false; fq.n_levels];
-    let mut active_r = vec![false; fr.n_levels];
-    for uid in 0..n_obs {
-        active_q[design.store.level(uid, q) as usize] = true;
-        active_r[design.store.level(uid, r) as usize] = true;
-    }
-
-    build_compact_mapping(&active_q, &active_r, fq, fr)
-}
-
 /// A connected component in a bipartite factor-pair graph.
 ///
 /// Indices are compact (0-based into the parent CrossTab's n_q / n_r).
@@ -210,33 +170,6 @@ impl CrossTab {
     /// Total number of DOFs (n_q + n_r).
     pub fn n_local(&self) -> usize {
         self.c.nrows + self.c.ncols
-    }
-
-    /// Build a CrossTab for an entire factor pair, discovering active levels
-    /// from the observation data in a single scan.
-    ///
-    /// Returns `None` if either factor has no active levels (empty pair).
-    /// Also returns `local_to_global`: q-levels first, then r-levels, matching
-    /// the convention used by `ActiveLevels` and `SubdomainCore::global_indices`.
-    #[cfg(test)]
-    pub fn build_for_pair<S: Store>(
-        design: &Design<S>,
-        weights: Option<&[f64]>,
-        q: usize,
-        r: usize,
-    ) -> Option<(Self, Vec<u32>)> {
-        let active = find_active_levels(design, q, r)?;
-
-        let (c, diag_q, diag_r) =
-            accumulate_cross_block(design, weights, q, r, &active.as_compact_pair());
-        let ct = c.transpose();
-        let cross_tab = CrossTab {
-            c,
-            ct,
-            diag_q,
-            diag_r,
-        };
-        Some((cross_tab, active.local_to_global))
     }
 
     /// Build a CrossTab using pre-computed active level flags.
@@ -558,5 +491,8 @@ fn accumulate_sparse_cross_block<S: Store>(
     };
     (c, diag_q, diag_r)
 }
+
+#[cfg(test)]
+mod tests;
 
 // ---------------------------------------------------------------------------

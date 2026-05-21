@@ -10,7 +10,7 @@ from __future__ import annotations
 from within._within import (
     ApproxCholConfig,
     ApproxSchurConfig,
-    SchurComplement,
+    LocalSolverConfig,
 )
 from .._framework import (
     BenchmarkResult,
@@ -50,12 +50,12 @@ def run_fixest_comparison(opts: SuiteOptions) -> list[BenchmarkResult]:
         ],
     )
 
-    exact_schur = SchurComplement(
-        approx_chol=ApproxCholConfig(seed=0, split=8),
+    exact_schur = LocalSolverConfig(
+        approx_chol=ApproxCholConfig(seed=0, split_merge=8),
         approx_schur=None,
     )
-    approx_schur = SchurComplement(
-        approx_chol=ApproxCholConfig(seed=0, split=8),
+    approx_schur = LocalSolverConfig(
+        approx_chol=ApproxCholConfig(seed=0, split_merge=8),
         approx_schur=ApproxSchurConfig(seed=0),
     )
 

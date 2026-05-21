@@ -61,6 +61,208 @@ mod design_tests {
             .expect("apply_adjoint succeeds");
         assert_eq!(x, vec![5.0, 7.0, 3.0, 6.0, 2.0, 3.0, 4.0]);
     }
+
+    fn dot(a: &[f64], b: &[f64]) -> f64 {
+        a.iter().zip(b.iter()).map(|(x, y)| x * y).sum()
+    }
+
+    fn make_single_factor_design() -> Design<FactorMajorStore> {
+        let store = FactorMajorStore::new(vec![vec![0u32, 1, 2, 0, 1]], 5).expect("valid store");
+        Design::from_store(store).expect("valid single-factor design")
+    }
+
+    fn make_large_design() -> Design<FactorMajorStore> {
+        let n_obs = 15_000;
+        let n_levels_a = 50usize;
+        let n_levels_b = 50usize;
+        let fa: Vec<u32> = (0..n_obs).map(|i| (i % n_levels_a) as u32).collect();
+        let fb: Vec<u32> = (0..n_obs).map(|i| (i % n_levels_b) as u32).collect();
+        let store = FactorMajorStore::new(vec![fa, fb], n_obs).expect("valid factor-major store");
+        Design::from_store(store).expect("valid design")
+    }
+
+    /// Verify <D·x, r> == <x, D^T·r> on a large design exercising the parallel
+    /// gather/scatter paths (n_rows > PAR_THRESHOLD = 10_000).
+    #[test]
+    fn test_large_design_adjoint_property() {
+        let dm = make_large_design();
+        let n_dofs = dm.n_dofs;
+        let n_rows = dm.n_obs;
+        let op = DesignOperator::new(&dm, None);
+
+        let x: Vec<f64> = (0..n_dofs).map(|i| (i as f64 * 0.17 + 1.0).sin()).collect();
+        let r: Vec<f64> = (0..n_rows).map(|i| (i as f64 * 0.23 + 2.0).cos()).collect();
+
+        let mut dx = vec![0.0f64; n_rows];
+        op.apply(&x, &mut dx).expect("apply succeeds");
+
+        let mut dtr = vec![0.0f64; n_dofs];
+        op.apply_adjoint(&r, &mut dtr)
+            .expect("apply_adjoint succeeds");
+
+        let lhs = dot(&dx, &r);
+        let rhs = dot(&x, &dtr);
+
+        assert!(
+            (lhs - rhs).abs() < 1e-8,
+            "Adjoint property violated: <D·x, r>={lhs} vs <x, D^T·r>={rhs}"
+        );
+    }
+
+    #[test]
+    fn test_large_design_matvec_correctness() {
+        let dm = make_large_design();
+        let op = DesignOperator::new(&dm, None);
+
+        let mut ej = vec![0.0f64; dm.n_dofs];
+        ej[0] = 1.0;
+        let mut y = vec![0.0f64; dm.n_obs];
+        op.apply(&ej, &mut y).expect("apply succeeds");
+
+        for (i, &yi) in y.iter().enumerate() {
+            let expected = if i % 50 == 0 { 1.0 } else { 0.0 };
+            assert_eq!(
+                yi, expected,
+                "D·e_0 at row {i}: expected {expected}, got {yi}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_large_design_apply_adjoint_correctness() {
+        let dm = make_large_design();
+        let op = DesignOperator::new(&dm, None);
+
+        let ones = vec![1.0f64; dm.n_obs];
+        let mut x = vec![0.0f64; dm.n_dofs];
+        op.apply_adjoint(&ones, &mut x)
+            .expect("apply_adjoint succeeds");
+
+        let expected_count = (dm.n_obs / 50) as f64;
+        for (j, &xj) in x.iter().enumerate() {
+            assert!(
+                (xj - expected_count).abs() < 1e-10,
+                "D^T·1 at DOF {j}: expected {expected_count}, got {xj}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_single_factor_design_adjoint_property() {
+        let dm = make_single_factor_design();
+        let op = DesignOperator::new(&dm, None);
+
+        let x: Vec<f64> = vec![1.0, 2.0, 3.0];
+        let r: Vec<f64> = vec![0.5, 1.5, -0.5, 2.0, -1.0];
+
+        let mut dx = vec![0.0f64; dm.n_obs];
+        op.apply(&x, &mut dx).expect("apply succeeds");
+
+        let mut dtr = vec![0.0f64; dm.n_dofs];
+        op.apply_adjoint(&r, &mut dtr)
+            .expect("apply_adjoint succeeds");
+
+        let lhs = dot(&dx, &r);
+        let rhs = dot(&x, &dtr);
+
+        assert!(
+            (lhs - rhs).abs() < 1e-12,
+            "<D·x, r>={lhs} != <x, D^T·r>={rhs}"
+        );
+    }
+
+    #[test]
+    fn test_single_factor_apply_values() {
+        let dm = make_single_factor_design();
+        let op = DesignOperator::new(&dm, None);
+        let x = vec![10.0, 20.0, 30.0];
+        let mut y = vec![0.0f64; 5];
+        op.apply(&x, &mut y).expect("apply succeeds");
+        assert_eq!(y, vec![10.0, 20.0, 30.0, 10.0, 20.0]);
+    }
+
+    #[test]
+    fn test_single_factor_apply_adjoint_values() {
+        let dm = make_single_factor_design();
+        let op = DesignOperator::new(&dm, None);
+        let r = vec![1.0, 2.0, 3.0, 4.0, 5.0];
+        let mut x = vec![0.0f64; 3];
+        op.apply_adjoint(&r, &mut x)
+            .expect("apply_adjoint succeeds");
+        assert_eq!(x, vec![5.0, 7.0, 3.0]);
+    }
+}
+
+// ===========================================================================
+// weighted adjoint property test
+// ===========================================================================
+
+mod weighted_adjoint_proptests {
+    use crate::domain::Design;
+    use crate::observation::FactorMajorStore;
+    use crate::operator::DesignOperator;
+    use proptest::prelude::*;
+    use schwarz_precond::Operator;
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(10))]
+
+        /// The adjoint property must hold for random weighted designs:
+        /// <D·x, W·r> == <x, D^T·W·r>, with D^T·W·r computed via
+        /// DesignOperator::apply_adjoint(W^{1/2} r) = D^T W^{1/2} (W^{1/2} r) = D^T W r.
+        #[test]
+        fn prop_weighted_adjoint_property(
+            n_obs in 20usize..=200,
+            n_levels_a in 2usize..=15,
+            n_levels_b in 2usize..=15,
+            seed in 0u64..1000,
+        ) {
+            let fa: Vec<u32> = (0..n_obs)
+                .map(|i| ((i * 3 + seed as usize * 7) % n_levels_a) as u32)
+                .collect();
+            let fb: Vec<u32> = (0..n_obs)
+                .map(|i| ((i * 5 + seed as usize * 11) % n_levels_b) as u32)
+                .collect();
+
+            let weights: Vec<f64> = (0..n_obs)
+                .map(|i| 0.5 + (i as f64 * 0.13 + seed as f64 * 0.41).sin().abs())
+                .collect();
+
+            let store = FactorMajorStore::new(vec![fa, fb], n_obs).unwrap();
+            let dm = Design::from_store(store).unwrap();
+
+            let n_dofs = dm.n_dofs;
+            let n_rows = dm.n_obs;
+
+            let x: Vec<f64> = (0..n_dofs)
+                .map(|i| (i as f64 * 0.37 + seed as f64 * 0.13).sin())
+                .collect();
+            let r: Vec<f64> = (0..n_rows)
+                .map(|i| (i as f64 * 0.29 + seed as f64 * 0.07).cos())
+                .collect();
+
+            let op_unweighted = DesignOperator::new(&dm, None);
+            let mut dx = vec![0.0f64; n_rows];
+            op_unweighted.apply(&x, &mut dx).unwrap();
+            let lhs: f64 = dx
+                .iter()
+                .zip(r.iter())
+                .enumerate()
+                .map(|(i, (dxi, ri))| weights[i] * dxi * ri)
+                .sum();
+
+            let op_weighted = DesignOperator::new(&dm, Some(&weights));
+            let wr = op_weighted.weighted_rhs(&r);
+            let mut wdtr = vec![0.0f64; n_dofs];
+            op_weighted.apply_adjoint(&wr, &mut wdtr).unwrap();
+            let rhs: f64 = x.iter().zip(wdtr.iter()).map(|(xi, wi)| xi * wi).sum();
+
+            prop_assert!(
+                (lhs - rhs).abs() < 1e-8,
+                "<D·x, W·r>={lhs} != <x, D^T·W·r>={rhs}"
+            );
+        }
+    }
 }
 
 // ===========================================================================
@@ -68,7 +270,7 @@ mod design_tests {
 // ===========================================================================
 
 mod csr_block_tests {
-    use crate::operator::csr_block::CsrBlock;
+    use crate::csr_block::CsrBlock;
 
     fn sample_block() -> CsrBlock {
         // 3x4 matrix:
@@ -163,254 +365,6 @@ mod csr_block_tests {
 // ===========================================================================
 
 // ===========================================================================
-// schur_complement tests
-// ===========================================================================
-
-mod schur_complement_tests {
-    use crate::operator::csr_block::CsrBlock;
-    use crate::operator::gramian::CrossTab;
-    use crate::operator::schur_complement::{
-        ApproxSchurComplement, ExactSchurComplement, SchurComplement,
-    };
-    use schwarz_precond::SparseMatrix;
-
-    fn make_cross_tab(
-        c_dense: &[f64],
-        n_q: usize,
-        n_r: usize,
-        diag_q: Vec<f64>,
-        diag_r: Vec<f64>,
-    ) -> CrossTab {
-        let c = CsrBlock::from_dense_table(c_dense, n_q, n_r);
-        let ct = c.transpose();
-        CrossTab {
-            c,
-            ct,
-            diag_q,
-            diag_r,
-        }
-    }
-
-    fn sparse_to_dense(matrix: &SparseMatrix) -> Vec<Vec<f64>> {
-        let n = matrix.n();
-        let mut dense = vec![vec![0.0; n]; n];
-        for (i, row) in dense.iter_mut().enumerate().take(n) {
-            let start = matrix.indptr()[i] as usize;
-            let end = matrix.indptr()[i + 1] as usize;
-            for idx in start..end {
-                let j = matrix.indices()[idx] as usize;
-                row[j] = matrix.data()[idx];
-            }
-        }
-        dense
-    }
-
-    fn dense_exact_schur(
-        c_dense: &[f64],
-        n_q: usize,
-        n_r: usize,
-        diag_q: &[f64],
-        diag_r: &[f64],
-        eliminate_q: bool,
-    ) -> Vec<Vec<f64>> {
-        if eliminate_q {
-            let mut s = vec![vec![0.0; n_r]; n_r];
-            for i in 0..n_r {
-                s[i][i] = diag_r[i];
-            }
-            for k in 0..n_q {
-                let inv = if diag_q[k] > 0.0 {
-                    1.0 / diag_q[k]
-                } else {
-                    0.0
-                };
-                for i in 0..n_r {
-                    let cki = c_dense[k * n_r + i];
-                    for j in 0..n_r {
-                        let ckj = c_dense[k * n_r + j];
-                        s[i][j] -= cki * inv * ckj;
-                    }
-                }
-            }
-            s
-        } else {
-            let mut s = vec![vec![0.0; n_q]; n_q];
-            for i in 0..n_q {
-                s[i][i] = diag_q[i];
-            }
-            for k in 0..n_r {
-                let inv = if diag_r[k] > 0.0 {
-                    1.0 / diag_r[k]
-                } else {
-                    0.0
-                };
-                for i in 0..n_q {
-                    let cik = c_dense[i * n_r + k];
-                    for j in 0..n_q {
-                        let cjk = c_dense[j * n_r + k];
-                        s[i][j] -= cik * inv * cjk;
-                    }
-                }
-            }
-            s
-        }
-    }
-
-    fn assert_dense_close(lhs: &[Vec<f64>], rhs: &[Vec<f64>], tol: f64) {
-        assert_eq!(lhs.len(), rhs.len(), "row count mismatch");
-        for i in 0..lhs.len() {
-            assert_eq!(lhs[i].len(), rhs[i].len(), "col count mismatch on row {i}");
-            for j in 0..lhs[i].len() {
-                assert!(
-                    (lhs[i][j] - rhs[i][j]).abs() <= tol,
-                    "mismatch at ({i}, {j}): lhs={}, rhs={}",
-                    lhs[i][j],
-                    rhs[i][j]
-                );
-            }
-        }
-    }
-
-    #[test]
-    fn exact_schur_matches_dense_reference_when_eliminating_q() {
-        // C is 3x2, so q-block is eliminated (n_q >= n_r).
-        let c_dense = vec![1.0, 2.0, 3.0, 0.0, 0.0, 4.0];
-        let diag_q = vec![5.0, 6.0, 8.0];
-        let diag_r = vec![7.0, 9.0];
-        let cross_tab = make_cross_tab(&c_dense, 3, 2, diag_q.clone(), diag_r.clone());
-
-        let result = ExactSchurComplement.compute(&cross_tab).unwrap();
-
-        assert!(result.elimination.eliminate_q);
-        assert_eq!(result.elimination.inv_diag_elim.len(), 3);
-        for (&got, &expected) in result
-            .elimination
-            .inv_diag_elim
-            .iter()
-            .zip([1.0 / 5.0, 1.0 / 6.0, 1.0 / 8.0].iter())
-        {
-            assert!((got - expected).abs() < 1e-12);
-        }
-
-        let expected = dense_exact_schur(&c_dense, 3, 2, &diag_q, &diag_r, true);
-        let got = sparse_to_dense(&result.matrix);
-        assert_dense_close(&got, &expected, 1e-12);
-    }
-
-    #[test]
-    fn exact_schur_rejects_zero_eliminated_diagonal() {
-        // C is 2x3, so r-block is eliminated (n_q < n_r). Last eliminated
-        // diagonal is zero — this should return a SingularDiagonal error.
-        let c_dense = vec![2.0, 0.0, 1.0, 0.0, 3.0, 4.0];
-        let diag_q = vec![8.0, 9.0];
-        let diag_r = vec![5.0, 6.0, 0.0];
-        let cross_tab = make_cross_tab(&c_dense, 2, 3, diag_q, diag_r);
-
-        let result = ExactSchurComplement.compute(&cross_tab);
-        match result {
-            Err(crate::BuildError::SingularDiagonal { index: 2, .. }) => {}
-            Err(e) => panic!("expected SingularDiagonal at index 2, got: {e}"),
-            Ok(_) => panic!("expected SingularDiagonal error, got Ok"),
-        }
-    }
-
-    #[test]
-    fn exact_dense_schur_matches_sparse_exact() {
-        let c_dense = vec![1.0, 2.0, 3.0, 0.0, 0.0, 4.0];
-        let cross_tab = make_cross_tab(&c_dense, 3, 2, vec![5.0, 6.0, 8.0], vec![7.0, 9.0]);
-
-        let sparse = ExactSchurComplement.compute(&cross_tab).unwrap();
-        let dense = ExactSchurComplement.compute_dense(&cross_tab).unwrap();
-
-        assert_eq!(dense.n, sparse.matrix.n());
-        assert_eq!(
-            dense.elimination.eliminate_q,
-            sparse.elimination.eliminate_q
-        );
-        assert_eq!(
-            dense.elimination.inv_diag_elim.len(),
-            sparse.elimination.inv_diag_elim.len()
-        );
-        for (&a, &b) in dense
-            .elimination
-            .inv_diag_elim
-            .iter()
-            .zip(sparse.elimination.inv_diag_elim.iter())
-        {
-            assert!((a - b).abs() < 1e-15);
-        }
-
-        let got_dense: Vec<Vec<f64>> = (0..dense.n)
-            .map(|i| dense.matrix[i * dense.n..(i + 1) * dense.n].to_vec())
-            .collect();
-        let got_sparse = sparse_to_dense(&sparse.matrix);
-        assert_dense_close(&got_dense, &got_sparse, 1e-12);
-    }
-
-    #[test]
-    fn exact_dense_anchored_matches_full_dense_minor() {
-        let c_dense = vec![1.0, 2.0, 3.0, 0.0, 0.0, 4.0];
-        let cross_tab = make_cross_tab(&c_dense, 3, 2, vec![5.0, 6.0, 8.0], vec![7.0, 9.0]);
-
-        let full = ExactSchurComplement.compute_dense(&cross_tab).unwrap();
-        let anchored = ExactSchurComplement
-            .compute_dense_anchored(&cross_tab)
-            .unwrap();
-        assert_eq!(full.n, anchored.n);
-
-        let m = full.n.saturating_sub(1);
-        let mut full_minor = vec![0.0; m * m];
-        for i in 0..m {
-            for j in 0..m {
-                full_minor[i * m + j] = full.matrix[i * full.n + j];
-            }
-        }
-
-        assert_eq!(anchored.anchored_minor.len(), full_minor.len());
-        for (&a, &b) in anchored.anchored_minor.iter().zip(full_minor.iter()) {
-            assert!((a - b).abs() < 1e-12);
-        }
-    }
-
-    #[test]
-    fn approximate_schur_is_seed_deterministic_and_laplacian_like() {
-        // Degree-3 star in eliminated block gives nontrivial sampled edges.
-        let c_dense = vec![1.0, 2.0, 3.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0];
-        let cross_tab = make_cross_tab(&c_dense, 3, 3, vec![10.0, 4.0, 5.0], vec![2.0, 3.0, 4.0]);
-        let approx = ApproxSchurComplement::new(crate::config::ApproxSchurConfig {
-            seed: 12345,
-            ..Default::default()
-        });
-
-        let a = approx.compute(&cross_tab).unwrap();
-        let b = approx.compute(&cross_tab).unwrap();
-
-        assert_eq!(a.elimination.eliminate_q, b.elimination.eliminate_q);
-        assert_eq!(a.elimination.inv_diag_elim, b.elimination.inv_diag_elim);
-        assert_eq!(a.matrix.indptr(), b.matrix.indptr());
-        assert_eq!(a.matrix.indices(), b.matrix.indices());
-        assert_eq!(a.matrix.data(), b.matrix.data());
-
-        let dense = sparse_to_dense(&a.matrix);
-        for (i, row) in dense.iter().enumerate() {
-            let mut row_sum = 0.0;
-            for (j, &value) in row.iter().enumerate() {
-                row_sum += value;
-                assert!(
-                    (value - dense[j][i]).abs() <= 1e-12,
-                    "matrix not symmetric at ({i}, {j})"
-                );
-                if i != j {
-                    assert!(value <= 1e-12, "off-diagonal should be non-positive");
-                }
-            }
-            assert!(row_sum.abs() <= 1e-10, "row {i} sum is not near zero");
-            assert!(row[i] >= -1e-12, "diagonal should be non-negative");
-        }
-    }
-}
-
-// ===========================================================================
 // schwarz tests
 // ===========================================================================
 
@@ -425,15 +379,16 @@ mod schwarz_tests {
     use crate::config::{
         ApproxCholConfig, ApproxSchurConfig, LocalSolverConfig, DEFAULT_DENSE_SCHUR_THRESHOLD,
     };
-    use crate::domain::{build_local_domains, Design, Subdomain, SubdomainCore};
+    use schwarz_precond::SubdomainCore;
+
+    use crate::block_elim::factor::ReducedFactor;
+    use crate::block_elim::BlockElimSolver;
+    use crate::csr_block::CsrBlock;
+    use crate::domain::CrossTab;
+    use crate::domain::{build_local_domains, Design, Subdomain};
     use crate::observation::FactorMajorStore;
-    use crate::operator::csr_block::CsrBlock;
-    use crate::operator::gramian::CrossTab;
-    use crate::operator::local_solver::BlockElimSolver;
-    use crate::operator::schwarz::{
-        build_additive_with_strategy, build_entry, build_reduced_schur_factor, ReducedSchurConfig,
-    };
-    use schwarz_precond::{LocalSolver, ReductionStrategy};
+    use crate::operator::schwarz::{build_additive_with_strategy, build_entry};
+    use schwarz_precond::{LocalSolver, Operator, ReductionStrategy};
 
     const BLOCK_ELIM_NESTED_RAYON_CHILD_ENV: &str = "WITHIN_TEST_BLOCK_ELIM_NESTED_RAYON_CHILD";
 
@@ -576,6 +531,8 @@ mod schwarz_tests {
         };
         let rhs: Vec<f64> = (0..n_dofs).map(|i| ((i % 29) as f64) - 14.0).collect();
 
+        let (_, domain_pairs_atomic) = make_nested_block_elim_domain_pairs(n_keep, elim_ratio, 2);
+
         let pool = rayon::ThreadPoolBuilder::new()
             .num_threads(4)
             .build()
@@ -583,28 +540,16 @@ mod schwarz_tests {
         pool.install(|| {
             let reduction = build_additive_with_strategy(
                 domain_pairs,
-                n_dofs,
                 &config,
                 ReductionStrategy::ParallelReduction,
             )
             .expect("build block-elim additive preconditioner");
-            let atomic = reduction.with_reduction_strategy(ReductionStrategy::AtomicScatter);
-
-            assert_eq!(
-                reduction.resolved_reduction_strategy(),
-                ReductionStrategy::ParallelReduction
-            );
-            assert_eq!(reduction.subdomains().len(), 2);
-            let max_inner_work = reduction
-                .subdomains()
-                .iter()
-                .map(|entry| entry.solver().inner_parallelism_work_estimate())
-                .max()
-                .unwrap_or(0);
-            assert!(
-                max_inner_work > 200_000,
-                "test setup must force nested local-solver parallelism"
-            );
+            let atomic = build_additive_with_strategy(
+                domain_pairs_atomic,
+                &config,
+                ReductionStrategy::AtomicScatter,
+            )
+            .expect("build block-elim atomic preconditioner");
 
             for _ in 0..4 {
                 let mut z_reduction = vec![0.0; n_dofs];
@@ -677,21 +622,20 @@ mod schwarz_tests {
         dense_threshold: usize,
         iters: usize,
     ) -> f64 {
-        let approx_chol = ApproxCholConfig {
-            split_merge: Some(8),
-            seed: 42,
+        let config = LocalSolverConfig {
+            approx_chol: ApproxCholConfig {
+                split_merge: Some(8),
+                seed: 42,
+            },
+            approx_schur,
+            dense_threshold,
         };
         let mut samples = Vec::with_capacity(iters);
         for _ in 0..iters {
             let t0 = Instant::now();
-            let schur_config = ReducedSchurConfig {
-                approx_chol,
-                approx_schur,
-                dense_threshold,
-            };
-            let reduced = build_reduced_schur_factor(cross_tab, &schur_config)
-                .expect("reduced Schur build failed");
-            black_box(reduced.factor);
+            let solver = BlockElimSolver::build(cross_tab.clone(), &config)
+                .expect("block-elim build failed");
+            black_box(solver);
             samples.push(t0.elapsed().as_secs_f64() * 1e6);
         }
         samples.sort_unstable_by(|a, b| a.partial_cmp(b).unwrap_or(Ordering::Equal));
@@ -704,23 +648,15 @@ mod schwarz_tests {
         dense_threshold: usize,
     ) -> BlockElimSolver {
         let cross_tab = synthetic_cross_tab(n_keep, 8);
-        let approx_chol = ApproxCholConfig {
-            split_merge: Some(8),
-            seed: 42,
-        };
-        let schur_config = ReducedSchurConfig {
-            approx_chol,
+        let config = LocalSolverConfig {
+            approx_chol: ApproxCholConfig {
+                split_merge: Some(8),
+                seed: 42,
+            },
             approx_schur,
             dense_threshold,
         };
-        let reduced = build_reduced_schur_factor(&cross_tab, &schur_config)
-            .expect("reduced Schur build failed");
-        BlockElimSolver::new(
-            cross_tab,
-            reduced.elimination.inv_diag_elim,
-            reduced.factor,
-            reduced.elimination.eliminate_q,
-        )
+        BlockElimSolver::build(cross_tab, &config).expect("block-elim build failed")
     }
 
     fn benchmark_local_solve_path(solver: &BlockElimSolver, iters: usize) -> f64 {
@@ -751,10 +687,8 @@ mod schwarz_tests {
         let (design, domain_pairs) = make_test_data();
         let config = LocalSolverConfig::default();
         let strategy = schwarz_precond::ReductionStrategy::default();
-        let schwarz = build_additive_with_strategy(domain_pairs, design.n_dofs, &config, strategy)
+        let schwarz = build_additive_with_strategy(domain_pairs, &config, strategy)
             .expect("build schwarz with explicit domains");
-        assert!(!schwarz.subdomains().is_empty());
-
         let r = vec![1.0; design.n_dofs];
         let mut z = vec![0.0; design.n_dofs];
         schwarz.apply(&r, &mut z).expect("schwarz apply succeeds");
@@ -772,7 +706,10 @@ mod schwarz_tests {
         };
         let entry =
             build_entry(domain, cross_tab, &config).expect("exact Schur entry build failed");
-        assert!(entry.solver().uses_dense_reduced_factor());
+        assert!(matches!(
+            entry.solver().reduced_factor,
+            ReducedFactor::Dense(_)
+        ));
     }
 
     #[test]
@@ -790,7 +727,10 @@ mod schwarz_tests {
         };
         let entry =
             build_entry(domain, cross_tab, &config).expect("approximate Schur entry build failed");
-        assert!(entry.solver().uses_dense_reduced_factor());
+        assert!(matches!(
+            entry.solver().reduced_factor,
+            ReducedFactor::Dense(_)
+        ));
     }
 
     #[test]
@@ -805,7 +745,10 @@ mod schwarz_tests {
         };
         let entry =
             build_entry(domain, cross_tab, &config).expect("exact Schur entry build failed");
-        assert!(!entry.solver().uses_dense_reduced_factor());
+        assert!(!matches!(
+            entry.solver().reduced_factor,
+            ReducedFactor::Dense(_)
+        ));
     }
 
     #[test]
@@ -877,128 +820,5 @@ mod schwarz_tests {
             "\nDefault dense threshold currently: {}",
             DEFAULT_DENSE_SCHUR_THRESHOLD
         );
-    }
-}
-
-// ===========================================================================
-// BlockElimSolver eliminate_q=false tests
-// ===========================================================================
-
-mod block_elim_tests {
-    use schwarz_precond::LocalSolver;
-
-    use crate::config::ApproxCholConfig;
-    use crate::operator::csr_block::CsrBlock;
-    use crate::operator::gramian::CrossTab;
-    use crate::operator::local_solver::BlockElimSolver;
-    use crate::operator::schwarz::{build_reduced_schur_factor, ReducedSchurConfig};
-
-    /// Build a CrossTab with `n_q < n_r` so that `eliminate_q == false`.
-    ///
-    /// Using n_q=2, n_r=5 (so min = n_q, eliminate_q = false).
-    /// C is n_q x n_r = 2x5; each q-row has one or two non-zero entries.
-    fn make_cross_tab_q_lt_r() -> CrossTab {
-        // C (2 x 5): row 0 has entry (0,0)=1, row 1 has entry (1,1)=1.
-        // Diagonal: diag_q = [2.0, 3.0], diag_r = [1.0, 2.0, 1.0, 1.0, 1.0]
-        // These values satisfy D_q[i] >= sum_j C[i,j] etc.
-        let c_dense = vec![
-            // row 0
-            1.0, 0.0, 0.0, 0.0, 0.0, // row 1
-            0.0, 1.0, 0.0, 0.0, 0.0,
-        ];
-        let diag_q = vec![2.0, 3.0];
-        let diag_r = vec![2.0, 3.0, 1.0, 1.0, 1.0];
-        let c = CsrBlock::from_dense_table(&c_dense, 2, 5);
-        let ct = c.transpose();
-        CrossTab {
-            c,
-            ct,
-            diag_q,
-            diag_r,
-        }
-    }
-
-    #[test]
-    fn test_block_elim_solver_eliminate_q_false() {
-        // n_q=2 < n_r=5 → eliminate_q should be false.
-        let cross_tab = make_cross_tab_q_lt_r();
-
-        assert_eq!(cross_tab.n_q(), 2);
-        assert_eq!(cross_tab.n_r(), 5);
-
-        let schur_config = ReducedSchurConfig {
-            approx_chol: ApproxCholConfig::default(),
-            approx_schur: None,
-            dense_threshold: 0, // disable dense fast path to ensure we cover the sparse path
-        };
-        let reduced =
-            build_reduced_schur_factor(&cross_tab, &schur_config).expect("Schur factor build");
-
-        // EliminationInfo carries eliminate_q: false when n_q < n_r.
-        assert!(
-            !reduced.elimination.eliminate_q,
-            "expected eliminate_q=false when n_q={} < n_r={}",
-            cross_tab.n_q(),
-            cross_tab.n_r(),
-        );
-
-        let solver = BlockElimSolver::new(
-            cross_tab,
-            reduced.elimination.inv_diag_elim,
-            reduced.factor,
-            reduced.elimination.eliminate_q,
-        );
-
-        // n_local = n_q + n_r = 2 + 5 = 7
-        assert_eq!(solver.n_local(), 7);
-    }
-
-    #[test]
-    fn test_block_elim_solver_eliminate_q_false_solve_residual() {
-        // Build solver with eliminate_q=false and verify solve gives finite, non-zero output.
-        let cross_tab = make_cross_tab_q_lt_r();
-        let n_q = cross_tab.n_q();
-        let n_r = cross_tab.n_r();
-        let n_local = n_q + n_r; // 7
-
-        let schur_config = ReducedSchurConfig {
-            approx_chol: ApproxCholConfig::default(),
-            approx_schur: None,
-            dense_threshold: 0,
-        };
-        let reduced =
-            build_reduced_schur_factor(&cross_tab, &schur_config).expect("Schur factor build");
-
-        assert!(!reduced.elimination.eliminate_q);
-
-        let solver = BlockElimSolver::new(
-            cross_tab,
-            reduced.elimination.inv_diag_elim,
-            reduced.factor,
-            reduced.elimination.eliminate_q,
-        );
-
-        let scratch_sz = solver.scratch_size();
-
-        // Build a non-trivial rhs. The solver applies negate+subtract_mean internally,
-        // so provide a straightforward input.
-        let mut rhs = vec![0.0; scratch_sz];
-        for (i, v) in rhs[..n_local].iter_mut().enumerate() {
-            *v = (i as f64 + 1.0) * 0.5;
-        }
-        let mut sol = vec![0.0; scratch_sz];
-
-        solver
-            .solve_local(&mut rhs, &mut sol, true)
-            .expect("solve_local should succeed");
-
-        // Solution must be finite.
-        for (i, &v) in sol[..n_local].iter().enumerate() {
-            assert!(v.is_finite(), "sol[{i}] = {v} is not finite");
-        }
-
-        // Solution must be non-trivial (not all-zero).
-        let sol_norm: f64 = sol[..n_local].iter().map(|v| v * v).sum::<f64>().sqrt();
-        assert!(sol_norm > 1e-15, "solution is unexpectedly all-zero");
     }
 }

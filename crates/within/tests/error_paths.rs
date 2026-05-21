@@ -3,7 +3,7 @@ use std::error::Error;
 use ndarray::Array2;
 use schwarz_precond::SolveError;
 use within::observation::FactorMajorStore;
-use within::{solve, BuildError, Design, Preconditioner, Solver, SolverParams, WithinError};
+use within::{solve, BuildError, Design, LsmrOptions, PreconditionerConfig, Solver, WithinError};
 
 #[test]
 fn test_empty_observations_error() {
@@ -33,11 +33,8 @@ fn test_weight_count_mismatch_error() {
     // Weights of wrong length are caught at Solver construction time.
     let store = FactorMajorStore::new(vec![vec![0, 1, 2], vec![0, 1, 0]], 3).expect("store ok");
     let design = Design::from_store(store).expect("valid design");
-    let params = SolverParams::default();
-    let result = Solver::from_design(design, Some(vec![1.0, 2.0]), &params, None);
-    let err = result
-        .err()
-        .expect("expected WeightCountMismatch error, got Ok");
+    let result = Solver::new(design, Some(vec![1.0, 2.0]), None);
+    let err = result.expect_err("expected WeightCountMismatch error, got Ok");
     match err {
         BuildError::WeightCountMismatch { .. } => {}
         other => panic!("Expected WeightCountMismatch, got: {:?}", other),
@@ -48,8 +45,8 @@ fn test_weight_count_mismatch_error() {
 fn test_empty_categories_via_solve() {
     let cats = Array2::<u32>::zeros((0, 2));
     let y: Vec<f64> = vec![];
-    let params = SolverParams::default();
-    let precond = Preconditioner::default();
+    let params = LsmrOptions::default();
+    let precond = PreconditionerConfig::default();
     let result = solve(cats.view(), &y, None, &params, Some(&precond));
     assert!(result.is_err());
     match result.unwrap_err() {
@@ -114,16 +111,12 @@ fn test_build_error_display_local_solver_build() {
 
 #[test]
 fn test_build_error_display_preconditioner() {
-    let inner = schwarz_precond::BuildError::GlobalIndexOutOfBounds {
-        subdomain: 0,
-        local_index: 1,
-        global_index: 5,
-        n_dofs: 3,
+    let inner = schwarz_precond::BuildError::InvalidCsr {
+        reason: "out of bounds",
     };
     let e = BuildError::Preconditioner(inner);
     let s = e.to_string();
-    assert!(s.contains("5"));
-    assert!(s.contains("3"));
+    assert!(s.contains("out of bounds"));
 }
 
 // ---------------------------------------------------------------------------
@@ -173,11 +166,8 @@ fn test_build_error_source_leaf_variants_have_no_source() {
 
 #[test]
 fn test_build_error_source_preconditioner_chains() {
-    let inner = schwarz_precond::BuildError::GlobalIndexOutOfBounds {
-        subdomain: 0,
-        local_index: 1,
-        global_index: 5,
-        n_dofs: 3,
+    let inner = schwarz_precond::BuildError::InvalidCsr {
+        reason: "out of bounds",
     };
     let e = BuildError::Preconditioner(inner);
     assert!(e.source().is_some());
@@ -194,11 +184,8 @@ fn test_within_error_build_leaf_variant_has_no_source() {
 #[test]
 fn test_within_error_build_preconditioner_chains_through_transparent_wrapper() {
     // Transparent: WithinError -> (BuildError::Preconditioner via #[source]) -> schwarz_precond::BuildError
-    let inner = schwarz_precond::BuildError::GlobalIndexOutOfBounds {
-        subdomain: 0,
-        local_index: 1,
-        global_index: 5,
-        n_dofs: 3,
+    let inner = schwarz_precond::BuildError::InvalidCsr {
+        reason: "out of bounds",
     };
     let e = WithinError::Build(BuildError::Preconditioner(inner));
     assert!(e.source().is_some());
@@ -233,4 +220,44 @@ fn test_within_error_from_solve_error() {
         WithinError::Solve(_) => {}
         other => panic!("expected Solve, got: {:?}", other),
     }
+}
+
+#[test]
+fn test_preconditioner_dimension_mismatch_error() {
+    // Build a preconditioner against a larger design, then try to reuse it
+    // with a smaller design — the dim check in Solver::new should fire.
+    let big = Array2::from_shape_vec((4, 2), vec![0u32, 0, 1, 1, 2, 0, 3, 1]).expect("big array");
+    let small = Array2::from_shape_vec((3, 2), vec![0u32, 0, 1, 1, 0, 0]).expect("small array");
+
+    let big_solver = Solver::new(big.view(), None::<Vec<f64>>, None).expect("big solver");
+    let prebuilt = big_solver
+        .preconditioner()
+        .expect("default solver has a preconditioner")
+        .clone();
+
+    let result = Solver::new(small.view(), None::<Vec<f64>>, prebuilt);
+    let err = result.expect_err("expected PreconditionerDimensionMismatch, got Ok");
+    match err {
+        BuildError::PreconditionerDimensionMismatch {
+            expected,
+            actual_rows,
+            actual_cols,
+        } => {
+            assert_ne!(expected, actual_rows);
+            assert_eq!(actual_rows, actual_cols);
+        }
+        other => panic!("Expected PreconditionerDimensionMismatch, got: {:?}", other),
+    }
+}
+
+#[test]
+fn test_build_error_display_preconditioner_dimension_mismatch() {
+    let e = BuildError::PreconditionerDimensionMismatch {
+        expected: 7,
+        actual_rows: 5,
+        actual_cols: 5,
+    };
+    let s = e.to_string();
+    assert!(s.contains("7"));
+    assert!(s.contains("5"));
 }

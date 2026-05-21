@@ -1,5 +1,5 @@
 use faer::sparse::SparseRowMat;
-use schwarz_precond::SparseMatrix;
+use schwarz_precond::CsrMatrix;
 
 /// Build a 4-node path graph Laplacian (0-1-2-3) as a faer sparse CSR matrix.
 ///
@@ -31,7 +31,7 @@ fn path_laplacian_faer() -> SparseRowMat<u32, f64> {
 #[test]
 fn faer_to_sparse_matrix_conversion() {
     let mat = path_laplacian_faer();
-    let sparse: SparseMatrix = mat.as_ref().into();
+    let sparse: CsrMatrix = mat.as_ref().into();
 
     assert_eq!(sparse.n(), 4);
     assert_eq!(sparse.indptr().len(), 5);
@@ -41,7 +41,7 @@ fn faer_to_sparse_matrix_conversion() {
 #[test]
 fn faer_matvec_roundtrip() {
     let mat = path_laplacian_faer();
-    let sparse: SparseMatrix = mat.as_ref().into();
+    let sparse: CsrMatrix = mat.as_ref().into();
 
     // Multiply by [1, 0, 0, 0]:
     //   row 0:  1*1 + 0*(-1)           = 1
@@ -66,5 +66,5 @@ fn faer_non_square_panics() {
         faer::sparse::SymbolicSparseRowMat::<u32>::new_unchecked(3, 4, row_ptrs, None, col_indices)
     };
     let mat = SparseRowMat::new(symbolic, values);
-    let _: SparseMatrix = mat.as_ref().into();
+    let _: CsrMatrix = mat.as_ref().into();
 }

@@ -6,9 +6,9 @@
 use proptest::prelude::*;
 
 use super::CrossTab;
+use crate::domain::find_all_active_levels;
 use crate::domain::Design;
 use crate::observation::FactorMajorStore;
-use crate::operator::gramian::find_all_active_levels;
 
 #[test]
 fn test_cross_tab_sparse_accumulation_path() {
@@ -29,8 +29,10 @@ fn test_cross_tab_sparse_accumulation_path() {
     let store_sparse =
         FactorMajorStore::new(vec![fa.clone(), fb.clone()], n_obs).expect("valid sparse store");
     let design_sparse = Design::from_store(store_sparse).expect("valid sparse design");
-    let (ct_sparse, _) = CrossTab::build_for_pair(&design_sparse, None, 0, 1)
-        .expect("sparse cross tab should build");
+    let active_sparse = find_all_active_levels(&design_sparse);
+    let (ct_sparse, _) =
+        CrossTab::build_for_pair_with_active(&design_sparse, None, 0, 1, &active_sparse)
+            .expect("sparse cross tab should build");
 
     // Dense path reference: collapse levels to a small range so n_q * n_r <= 5M.
     // Map each observation to level % 100 for both factors (100*100 = 10 000 <= 5M).
@@ -39,8 +41,10 @@ fn test_cross_tab_sparse_accumulation_path() {
     let store_dense = FactorMajorStore::new(vec![fa_small.clone(), fb_small.clone()], n_obs)
         .expect("valid dense store");
     let design_dense = Design::from_store(store_dense).expect("valid dense design");
+    let active_dense = find_all_active_levels(&design_dense);
     let (ct_dense, _) =
-        CrossTab::build_for_pair(&design_dense, None, 0, 1).expect("dense cross tab should build");
+        CrossTab::build_for_pair_with_active(&design_dense, None, 0, 1, &active_dense)
+            .expect("dense cross tab should build");
 
     // The sparse CrossTab for the large design should have identical diagonals
     // to what we'd compute by hand (each observation appears exactly once in the
@@ -118,7 +122,9 @@ fn test_extract_component_two_components() {
     let n_obs = 8;
     let store = FactorMajorStore::new(vec![fa, fb], n_obs).expect("valid store");
     let design = Design::from_store(store).expect("valid design");
-    let (ct, _) = CrossTab::build_for_pair(&design, None, 0, 1).expect("cross tab should build");
+    let all_active = find_all_active_levels(&design);
+    let (ct, _) = CrossTab::build_for_pair_with_active(&design, None, 0, 1, &all_active)
+        .expect("cross tab should build");
 
     let components = ct.bipartite_connected_components();
     assert_eq!(components.len(), 2, "should have 2 connected components");
@@ -228,7 +234,8 @@ proptest! {
 
         let store = FactorMajorStore::new(vec![fa, fb], n_obs).expect("valid store");
         let design = Design::from_store(store).expect("valid design");
-        let (ct, _) = CrossTab::build_for_pair(&design, None, 0, 1)
+        let all_active = find_all_active_levels(&design);
+        let (ct, _) = CrossTab::build_for_pair_with_active(&design, None, 0, 1, &all_active)
             .expect("cross tab should build");
 
         let components = ct.bipartite_connected_components();

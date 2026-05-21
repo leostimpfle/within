@@ -6,14 +6,14 @@ import numpy as np
 import pytest
 
 from within import (
-    LSMR,
-    AdditiveSchwarz,
-    FePreconditioner,
-    Preconditioner,
-    Solver,
     BatchSolveResult,
+    LsmrOptions,
+    Preconditioner,
+    PreconditionerConfig,
+    Solver,
     solve,
 )
+from within.config import AdditiveSchwarz
 
 from conftest import generate_synthetic_data
 
@@ -45,7 +45,10 @@ class TestSolveDefaults:
     def test_unpreconditioned(self, problem):
         cats, y = problem
         result = solve(
-            as_solver_categories(cats), y, LSMR(), preconditioner=Preconditioner.Off
+            as_solver_categories(cats),
+            y,
+            LsmrOptions(),
+            preconditioner=PreconditionerConfig.Off,
         )
         assert result.converged
 
@@ -64,8 +67,8 @@ class TestPreconditioners:
         result = solve(
             as_solver_categories(cats),
             y,
-            LSMR(),
-            preconditioner=Preconditioner.Additive,
+            LsmrOptions(),
+            preconditioner=PreconditionerConfig.Additive,
         )
         assert result.converged
 
@@ -75,7 +78,7 @@ class TestPreconditioners:
         result = solve(
             as_solver_categories(cats),
             y,
-            LSMR(),
+            LsmrOptions(),
             preconditioner=AdditiveSchwarz(),
         )
         assert result.converged
@@ -194,9 +197,11 @@ class TestSolver:
         np.testing.assert_array_equal(r1.x, r2.x)
 
     def test_solver_no_preconditioner(self, problem):
-        """Solver with Preconditioner.Off works."""
+        """Solver with PreconditionerConfig.Off works."""
         cats, y = problem
-        solver = Solver(as_solver_categories(cats), preconditioner=Preconditioner.Off)
+        solver = Solver(
+            as_solver_categories(cats), preconditioner=PreconditionerConfig.Off
+        )
         result = solver.solve(y)
         assert result.converged
 
@@ -250,8 +255,8 @@ class TestSolverSerde:
         solver1 = Solver(categories)
         r1 = solver1.solve(y)
 
-        precond = solver1.preconditioner()
-        assert isinstance(precond, FePreconditioner)
+        precond = solver1.preconditioner
+        assert isinstance(precond, Preconditioner)
         assert precond.nrows > 0
 
         # Reuse in new solver
@@ -260,7 +265,7 @@ class TestSolverSerde:
         np.testing.assert_allclose(r2.x, r1.x, atol=1e-10)
 
     def test_preconditioner_pickle(self, problem):
-        """Pickle roundtrip of FePreconditioner."""
+        """Pickle roundtrip of Preconditioner."""
         import pickle
 
         cats, y = problem
@@ -269,7 +274,7 @@ class TestSolverSerde:
         solver1 = Solver(categories)
         r1 = solver1.solve(y)
 
-        precond = solver1.preconditioner()
+        precond = solver1.preconditioner
         data = pickle.dumps(precond)
         precond2 = pickle.loads(data)
 
@@ -279,8 +284,10 @@ class TestSolverSerde:
 
     def test_no_preconditioner_returns_none(self, problem):
         cats, y = problem
-        solver = Solver(as_solver_categories(cats), preconditioner=Preconditioner.Off)
-        assert solver.preconditioner() is None
+        solver = Solver(
+            as_solver_categories(cats), preconditioner=PreconditionerConfig.Off
+        )
+        assert solver.preconditioner is None
 
 
 # ---------------------------------------------------------------------------

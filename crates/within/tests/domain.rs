@@ -1,210 +1,24 @@
-//! Integration tests for the domain layer: Design operations,
-//! adjoint properties, and convergence through the solve API for designs that
-//! exercise partition-of-unity weights and disconnected bipartite structure.
+//! Integration tests for the domain layer: solver convergence through the
+//! public `solve` API for designs that exercise partition-of-unity weights
+//! and disconnected bipartite structure.
 
-use proptest::prelude::*;
-use schwarz_precond::Operator as _;
 use within::observation::FactorMajorStore;
-use within::operator::DesignOperator;
 use within::Design;
 
-fn apply_d(dm: &Design<FactorMajorStore>, x: &[f64], y: &mut [f64]) {
-    DesignOperator::new(dm, None)
-        .apply(x, y)
-        .expect("apply succeeds");
-}
-
-fn apply_dt(dm: &Design<FactorMajorStore>, x: &[f64], y: &mut [f64]) {
-    DesignOperator::new(dm, None)
-        .apply_adjoint(x, y)
-        .expect("apply_adjoint succeeds");
-}
-
-fn apply_wdt(dm: &Design<FactorMajorStore>, weights: Option<&[f64]>, x: &[f64], y: &mut [f64]) {
-    // D^T W x = apply_adjoint(W^{1/2} x) for op = W^{1/2} D.
-    let op = DesignOperator::new(dm, weights);
-    let wx = op.weighted_rhs(x);
-    op.apply_adjoint(&wx, y).expect("apply_adjoint succeeds");
-}
-
 // ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-fn make_design(categories: Vec<Vec<u32>>, n_obs: usize) -> Design<FactorMajorStore> {
-    let store = FactorMajorStore::new(categories, n_obs).expect("valid factor-major store");
-    Design::from_store(store).expect("valid design")
-}
-
-fn dot(a: &[f64], b: &[f64]) -> f64 {
-    a.iter().zip(b.iter()).map(|(x, y)| x * y).sum()
-}
-
-// ---------------------------------------------------------------------------
-// 1. Parallel gather/scatter behavioral test (n_rows > PAR_THRESHOLD = 10,000)
-// ---------------------------------------------------------------------------
-
-/// Build a 15,000-row design with two factors (~50 levels each).
-/// This exercises the parallel code paths in `gather_add` (par_chunks_mut)
-/// and `scatter_add` (Fold strategy: n_rows > 10,000, n_levels < 100,000).
-fn make_large_design() -> Design<FactorMajorStore> {
-    let n_obs = 15_000;
-    let n_levels_a = 50usize;
-    let n_levels_b = 50usize;
-    let fa: Vec<u32> = (0..n_obs).map(|i| (i % n_levels_a) as u32).collect();
-    let fb: Vec<u32> = (0..n_obs).map(|i| (i % n_levels_b) as u32).collect();
-    make_design(vec![fa, fb], n_obs)
-}
-
-#[test]
-fn test_large_design_adjoint_property() {
-    // Verify <D·x, r> == <x, D^T·r> for random-looking deterministic vectors.
-    let dm = make_large_design();
-    let n_dofs = dm.n_dofs;
-    let n_rows = dm.n_rows;
-
-    let x: Vec<f64> = (0..n_dofs).map(|i| (i as f64 * 0.17 + 1.0).sin()).collect();
-    let r: Vec<f64> = (0..n_rows).map(|i| (i as f64 * 0.23 + 2.0).cos()).collect();
-
-    let mut dx = vec![0.0f64; n_rows];
-    apply_d(&dm, &x, &mut dx);
-
-    let mut dtr = vec![0.0f64; n_dofs];
-    apply_dt(&dm, &r, &mut dtr);
-
-    let lhs = dot(&dx, &r);
-    let rhs = dot(&x, &dtr);
-
-    assert!(
-        (lhs - rhs).abs() < 1e-8,
-        "Adjoint property violated: <D·x, r>={lhs} vs <x, D^T·r>={rhs}"
-    );
-}
-
-#[test]
-fn test_large_design_matvec_correctness() {
-    // Sanity: D·e_j should equal the j-th column of D (a vector of 1.0s at
-    // rows whose factor-level assignment corresponds to DOF j).
-    let dm = make_large_design();
-    let n_dofs = dm.n_dofs;
-    let n_rows = dm.n_rows;
-
-    // Pick DOF index 0 (factor 0, level 0): observations i where i % 50 == 0.
-    let mut ej = vec![0.0f64; n_dofs];
-    ej[0] = 1.0;
-    let mut y = vec![0.0f64; n_rows];
-    apply_d(&dm, &ej, &mut y);
-
-    for (i, &yi) in y.iter().enumerate() {
-        let expected = if i % 50 == 0 { 1.0 } else { 0.0 };
-        assert_eq!(
-            yi, expected,
-            "D·e_0 at row {i}: expected {expected}, got {yi}"
-        );
-    }
-}
-
-#[test]
-fn test_large_design_apply_adjoint_correctness() {
-    // D^T·1 should equal the per-level observation count for each factor.
-    let dm = make_large_design();
-    let n_dofs = dm.n_dofs;
-    let n_rows = dm.n_rows;
-
-    let ones = vec![1.0f64; n_rows];
-    let mut x = vec![0.0f64; n_dofs];
-    apply_dt(&dm, &ones, &mut x);
-
-    // Each factor has 50 levels, 15,000 obs cycling → each level appears 300 times.
-    let expected_count = (n_rows / 50) as f64;
-    for (j, &xj) in x.iter().enumerate() {
-        assert!(
-            (xj - expected_count).abs() < 1e-10,
-            "D^T·1 at DOF {j}: expected {expected_count}, got {xj}"
-        );
-    }
-}
-
-// ---------------------------------------------------------------------------
-// 2. Weighted adjoint property (proptest)
-// ---------------------------------------------------------------------------
-
-proptest! {
-    #![proptest_config(ProptestConfig::with_cases(10))]
-
-    /// The adjoint property must hold for random designs:
-    /// <D·x, W·r> == <x, D^T·W·r>, with D^T·W·r computed via
-    /// DesignOperator::apply_adjoint(W^{1/2} r) = D^T W^{1/2} (W^{1/2} r) = D^T W r.
-    #[test]
-    fn prop_weighted_adjoint_property(
-        n_obs in 20usize..=200,
-        n_levels_a in 2usize..=15,
-        n_levels_b in 2usize..=15,
-        seed in 0u64..1000,
-    ) {
-        let fa: Vec<u32> = (0..n_obs)
-            .map(|i| ((i * 3 + seed as usize * 7) % n_levels_a) as u32)
-            .collect();
-        let fb: Vec<u32> = (0..n_obs)
-            .map(|i| ((i * 5 + seed as usize * 11) % n_levels_b) as u32)
-            .collect();
-
-        let weights: Vec<f64> = (0..n_obs)
-            .map(|i| 0.5 + (i as f64 * 0.13 + seed as f64 * 0.41).sin().abs())
-            .collect();
-
-        let store = FactorMajorStore::new(vec![fa, fb], n_obs).unwrap();
-        let dm = Design::from_store(store).unwrap();
-
-        let n_dofs = dm.n_dofs;
-        let n_rows = dm.n_rows;
-
-        let x: Vec<f64> = (0..n_dofs)
-            .map(|i| (i as f64 * 0.37 + seed as f64 * 0.13).sin())
-            .collect();
-        let r: Vec<f64> = (0..n_rows)
-            .map(|i| (i as f64 * 0.29 + seed as f64 * 0.07).cos())
-            .collect();
-
-        // <D·x, W·r>
-        let mut dx = vec![0.0f64; n_rows];
-        apply_d(&dm, &x, &mut dx);
-        let lhs: f64 = dx
-            .iter()
-            .zip(r.iter())
-            .enumerate()
-            .map(|(i, (dxi, ri))| weights[i] * dxi * ri)
-            .sum();
-
-        // <x, D^T·W·r>
-        let mut wdtr = vec![0.0f64; n_dofs];
-        apply_wdt(&dm, Some(&weights), &r, &mut wdtr);
-        let rhs: f64 = x.iter().zip(wdtr.iter()).map(|(xi, wi)| xi * wi).sum();
-
-        prop_assert!(
-            (lhs - rhs).abs() < 1e-8,
-            "<D·x, W·r>={lhs} != <x, D^T·W·r>={rhs}"
-        );
-    }
-}
-
-// ---------------------------------------------------------------------------
-// 3. Three-factor design: overlap creates NonUniform partition weights
+// 1. Three-factor design: overlap creates NonUniform partition weights
 // ---------------------------------------------------------------------------
 // In a 3-factor design, pairs (0,1), (0,2), (1,2) all share DOFs from
 // the respective factors. Factor 0's DOFs appear in both the (0,1) and
 // (0,2) subdomains → NonUniform weights (1/2) must be assigned.
-// We verify this through the public solve API by checking convergence,
-// which validates that the partition of unity is correct.
+// We verify this through the public solve API by checking convergence.
 
 #[test]
 fn test_three_factor_design_solve_converges() {
-    use within::{solve, Preconditioner, SolverParams};
+    use within::{solve, LsmrOptions, PreconditionerConfig};
 
     let n_obs = 60;
     let n_lev = 5usize;
-    // Fully connected: every level of each factor appears with every level
-    // of every other factor → significant subdomain overlap.
     let fa: Vec<u32> = (0..n_obs).map(|i| (i % n_lev) as u32).collect();
     let fb: Vec<u32> = (0..n_obs).map(|i| ((i / n_lev) % n_lev) as u32).collect();
     let fc: Vec<u32> = (0..n_obs).map(|i| ((i * 3) % n_lev) as u32).collect();
@@ -214,12 +28,8 @@ fn test_three_factor_design_solve_converges() {
 
     assert_eq!(dm.n_factors(), 3);
 
-    // Build y = D·1 so the true normal-equation solution is 1.
-    let x_true = vec![1.0f64; dm.n_dofs];
-    let mut y = vec![0.0f64; dm.n_rows];
-    apply_d(&dm, &x_true, &mut y);
+    let y: Vec<f64> = (0..n_obs).map(|i| (i as f64 * 0.31).sin()).collect();
 
-    // Use ndarray array2 as required by the solve() API.
     let n_factors = 3;
     let mut cats = ndarray::Array2::<u32>::zeros((n_obs, n_factors));
     for i in 0..n_obs {
@@ -228,40 +38,33 @@ fn test_three_factor_design_solve_converges() {
         cats[[i, 2]] = ((i * 3) % n_lev) as u32;
     }
 
-    let params = SolverParams {
+    let params = LsmrOptions {
         tol: 1e-8,
         maxiter: 500,
-        ..SolverParams::default()
+        ..LsmrOptions::default()
     };
-    let precond = Preconditioner::default();
+    let precond = PreconditionerConfig::default();
     let result =
         solve(cats.view(), &y, None, &params, Some(&precond)).expect("solve should not error");
 
     assert!(
         result.converged,
         "3-factor solver did not converge (residual: {:.2e})",
-        result.final_residual
+        result.residual
     );
 }
 
-// 4. Disconnected bipartite graph → multiple subdomains per factor pair
 // ---------------------------------------------------------------------------
-// Factor 0: [0, 0, 1, 1]
-// Factor 1: [0, 1, 2, 3]
-// Levels {0} of factor 0 co-occurs only with {0,1} of factor 1, and
-// level {1} of factor 0 co-occurs only with {2,3} of factor 1.
-// This creates two disconnected bipartite components for pair (0,1).
+// 2. Disconnected bipartite graph → multiple subdomains per factor pair
+// ---------------------------------------------------------------------------
 
 /// Verify that a disconnected bipartite design converges under additive Schwarz.
 /// The disconnected structure means `build_local_domains` splits pair (0,1) into
 /// 2 subdomains — correctness is validated indirectly through convergence.
 #[test]
 fn test_disconnected_design_larger_converges() {
-    use within::{solve, Preconditioner, SolverParams};
+    use within::{solve, LsmrOptions, PreconditionerConfig};
 
-    // Extend the disconnected example to more observations so the solve is
-    // non-trivial: component A has factor-0 levels {0,1}, factor-1 levels {0,1,2};
-    // component B has factor-0 levels {2,3}, factor-1 levels {3,4,5}.
     let fa = vec![0u32, 0, 0, 1, 1, 1, 2, 2, 2, 3, 3, 3];
     let fb = vec![0u32, 1, 2, 0, 1, 2, 3, 4, 5, 3, 4, 5];
     let n_obs = fa.len();
@@ -272,33 +75,27 @@ fn test_disconnected_design_larger_converges() {
         cats[[i, 1]] = fb[i];
     }
 
-    let store = FactorMajorStore::new(vec![fa.clone(), fb.clone()], n_obs)
-        .expect("valid disconnected store");
-    let dm = Design::from_store(store).expect("valid disconnected design");
+    let y: Vec<f64> = (0..n_obs).map(|i| (i as f64 * 0.41).cos()).collect();
 
-    let x_true = vec![1.0f64; dm.n_dofs];
-    let mut y = vec![0.0f64; dm.n_rows];
-    apply_d(&dm, &x_true, &mut y);
-
-    let params = SolverParams {
+    let params = LsmrOptions {
         tol: 1e-8,
         maxiter: 500,
-        ..SolverParams::default()
+        ..LsmrOptions::default()
     };
-    let precond = Preconditioner::default();
+    let precond = PreconditionerConfig::default();
     let result =
         solve(cats.view(), &y, None, &params, Some(&precond)).expect("solve should not error");
 
     assert!(
         result.converged,
         "disconnected larger design did not converge (residual: {:.2e})",
-        result.final_residual
+        result.residual
     );
 }
 
 #[test]
 fn test_disconnected_design_solve_converges() {
-    use within::{solve, Preconditioner, SolverParams};
+    use within::{solve, LsmrOptions, PreconditionerConfig};
 
     let n_obs = 4;
     let mut cats = ndarray::Array2::<u32>::zeros((n_obs, 2));
@@ -313,24 +110,24 @@ fn test_disconnected_design_solve_converges() {
 
     let y = vec![1.0, 2.0, 3.0, 4.0];
 
-    let params = SolverParams {
+    let params = LsmrOptions {
         tol: 1e-8,
         maxiter: 500,
-        ..SolverParams::default()
+        ..LsmrOptions::default()
     };
-    let precond = Preconditioner::default();
+    let precond = PreconditionerConfig::default();
     let result =
         solve(cats.view(), &y, None, &params, Some(&precond)).expect("solve should not error");
 
     assert!(
         result.converged,
         "disconnected design solver did not converge (residual: {:.2e})",
-        result.final_residual
+        result.residual
     );
 }
 
 // ---------------------------------------------------------------------------
-// 5. Single-factor design
+// 3. Single-factor design
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -340,35 +137,8 @@ fn test_single_factor_design_construction() {
     let dm = Design::from_store(store).expect("valid single-factor design");
 
     assert_eq!(dm.n_factors(), 1, "expected 1 factor");
-    assert_eq!(dm.n_dofs, 3, "expected 3 DOFs (levels 0,1,2)");
-    assert_eq!(dm.n_rows, 5, "expected 5 rows");
-}
-
-#[test]
-fn test_single_factor_design_adjoint_property() {
-    let categories = vec![vec![0u32, 1, 2, 0, 1]];
-    let store = FactorMajorStore::new(categories, 5).expect("valid store");
-    let dm = Design::from_store(store).expect("valid single-factor design");
-
-    let n_dofs = dm.n_dofs;
-    let n_rows = dm.n_rows;
-
-    let x: Vec<f64> = vec![1.0, 2.0, 3.0];
-    let r: Vec<f64> = vec![0.5, 1.5, -0.5, 2.0, -1.0];
-
-    let mut dx = vec![0.0f64; n_rows];
-    apply_d(&dm, &x, &mut dx);
-
-    let mut dtr = vec![0.0f64; n_dofs];
-    apply_dt(&dm, &r, &mut dtr);
-
-    let lhs = dot(&dx, &r);
-    let rhs = dot(&x, &dtr);
-
-    assert!(
-        (lhs - rhs).abs() < 1e-12,
-        "<D·x, r>={lhs} != <x, D^T·r>={rhs}"
-    );
+    assert_eq!(dm.n_dofs(), 3, "expected 3 DOFs (levels 0,1,2)");
+    assert_eq!(dm.n_obs(), 5, "expected 5 rows");
 }
 
 /// A single-factor design has no factor pairs, so the additive Schwarz
@@ -377,10 +147,8 @@ fn test_single_factor_design_adjoint_property() {
 /// trivial normal equations directly.
 #[test]
 fn test_single_factor_design_solve_without_precond() {
-    use within::{solve, SolverParams};
+    use within::{solve, LsmrOptions};
 
-    // y = [10, 20, 30, 10, 20] with levels [0,1,2,0,1] → normal equations
-    // are diagonal → converges in 1 iteration unpreconditioned.
     let n_obs = 5usize;
     let mut cats = ndarray::Array2::<u32>::zeros((n_obs, 1));
     let levels = [0u32, 1, 2, 0, 1];
@@ -389,44 +157,16 @@ fn test_single_factor_design_solve_without_precond() {
     }
     let y = vec![10.0, 20.0, 30.0, 10.0, 20.0];
 
-    let params = SolverParams {
+    let params = LsmrOptions {
         tol: 1e-8,
         maxiter: 500,
-        ..SolverParams::default()
+        ..LsmrOptions::default()
     };
-    // No preconditioner: the normal equations for a single-factor design are
-    // diagonal and LSMR converges immediately.
     let result = solve(cats.view(), &y, None, &params, None).expect("solve should not error");
 
     assert!(
         result.converged,
         "single-factor unpreconditioned solve did not converge (residual: {:.2e})",
-        result.final_residual
+        result.residual
     );
-}
-
-#[test]
-fn test_single_factor_apply_values() {
-    // D·[a, b, c] with levels [0,1,2,0,1] should give [a, b, c, a, b]
-    let categories = vec![vec![0u32, 1, 2, 0, 1]];
-    let store = FactorMajorStore::new(categories, 5).expect("valid store");
-    let dm = Design::from_store(store).expect("valid single-factor design");
-
-    let x = vec![10.0, 20.0, 30.0];
-    let mut y = vec![0.0f64; 5];
-    apply_d(&dm, &x, &mut y);
-    assert_eq!(y, vec![10.0, 20.0, 30.0, 10.0, 20.0]);
-}
-
-#[test]
-fn test_single_factor_apply_adjoint_values() {
-    // D^T·[1,2,3,4,5] with levels [0,1,2,0,1] should give [1+4, 2+5, 3] = [5, 7, 3]
-    let categories = vec![vec![0u32, 1, 2, 0, 1]];
-    let store = FactorMajorStore::new(categories, 5).expect("valid store");
-    let dm = Design::from_store(store).expect("valid single-factor design");
-
-    let r = vec![1.0, 2.0, 3.0, 4.0, 5.0];
-    let mut x = vec![0.0f64; 3];
-    apply_dt(&dm, &r, &mut x);
-    assert_eq!(x, vec![5.0, 7.0, 3.0]);
 }

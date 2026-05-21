@@ -9,15 +9,12 @@
 //!   operator/preconditioner application (e.g. a local solver diverges) and
 //!   iterative-solver input validation.
 //!
-//! [`LocalSolveError`] is the narrow trait contract returned by
-//! [`LocalSolver::solve_local`](crate::LocalSolver::solve_local). The Schwarz
-//! executor lifts it into [`SolveError::LocalSolveFailed`] at the one apply
-//! site that knows the subdomain index, so there is no `From` chain between
-//! the two.
+//! [`crate::error::LocalSolveError`] is the narrow trait contract returned by
+//! [`crate::LocalSolver::solve_local`]. The Schwarz executor lifts it into
+//! [`SolveError::LocalSolveFailed`] at the one apply site that knows the
+//! subdomain index, so there is no `From` chain between the two.
 
 use thiserror::Error;
-
-use crate::local_solve::{LocalSolver, SubdomainEntry};
 
 /// Construction-time validation errors for the Schwarz building blocks.
 ///
@@ -50,25 +47,17 @@ pub enum BuildError {
         /// Minimum scratch size required by the subdomain core.
         required_min: usize,
     },
-    /// A subdomain references a global DOF outside `[0, n_dofs)`.
-    #[error(
-        "subdomain {subdomain}: global index at local position {local_index} is out of bounds ({global_index} >= {n_dofs})"
-    )]
-    GlobalIndexOutOfBounds {
-        /// Index of the failing subdomain entry in the provided list.
-        subdomain: usize,
-        /// Position inside `global_indices` where the invalid DOF was found.
-        local_index: usize,
-        /// Global DOF index that exceeded the valid range.
-        global_index: u32,
-        /// Total number of global DOFs configured for the preconditioner.
-        n_dofs: usize,
+    /// CSR matrix construction violated a documented invariant.
+    #[error("CSR construction invalid: {reason}")]
+    InvalidCsr {
+        /// Short description of which CSR invariant was violated.
+        reason: &'static str,
     },
 }
 
 /// Runtime error emitted by a local subdomain solver during a solve call.
 ///
-/// Returned by [`LocalSolver::solve_local`](crate::LocalSolver::solve_local).
+/// Returned by [`crate::LocalSolver::solve_local`].
 /// Backend-agnostic by design: backends report a `context` site and a
 /// free-form `message` rather than enumerating their internal error modes
 /// through this generic crate.
@@ -115,23 +104,4 @@ pub enum SolveError {
         /// Validation failure details.
         message: String,
     },
-}
-
-pub(crate) fn validate_entries<S: LocalSolver>(
-    entries: &[SubdomainEntry<S>],
-    n_dofs: usize,
-) -> Result<(), BuildError> {
-    for (subdomain, entry) in entries.iter().enumerate() {
-        for (local_index, &global_index) in entry.global_indices().iter().enumerate() {
-            if (global_index as usize) >= n_dofs {
-                return Err(BuildError::GlobalIndexOutOfBounds {
-                    subdomain,
-                    local_index,
-                    global_index,
-                    n_dofs,
-                });
-            }
-        }
-    }
-    Ok(())
 }

@@ -5,10 +5,11 @@ Two suites:
 - ``graph_backend_comparison`` — AC vs AC2 on large-scale chain / star /
   expander / barbell / grid / sparse topologies (scaling sweep)
 
-The split factor on ``ApproxCholConfig`` controls how many copies each
-star edge is split into before clique-tree sampling. ``split=1`` (AC) is
-the standard sparser approximation; ``split=2`` (AC2) is denser and gives
-a better Schur approximation at the cost of more fill-in.
+The ``split_merge`` parameter on ``ApproxCholConfig`` controls how many
+copies each star edge is split into before clique-tree sampling.
+``split_merge=None`` (AC) is the standard sparser approximation;
+``split_merge=2`` (AC2) is denser and gives a better Schur approximation
+at the cost of more fill-in.
 """
 
 from __future__ import annotations
@@ -16,7 +17,7 @@ from __future__ import annotations
 from within._within import (
     ApproxCholConfig,
     ApproxSchurConfig,
-    SchurComplement,
+    LocalSolverConfig,
 )
 from .._framework import (
     BenchmarkResult,
@@ -31,9 +32,9 @@ from .._framework import (
 from .._table import print_pivot, print_table
 
 
-def _schur(seed: int, split: int) -> SchurComplement:
-    return SchurComplement(
-        approx_chol=ApproxCholConfig(seed=seed, split=split),
+def _schur(seed: int, split_merge: int | None) -> LocalSolverConfig:
+    return LocalSolverConfig(
+        approx_chol=ApproxCholConfig(seed=seed, split_merge=split_merge),
         approx_schur=ApproxSchurConfig(seed=seed),
     )
 
@@ -126,7 +127,7 @@ def run_ac_comparison(opts: SuiteOptions) -> list[BenchmarkResult]:
         SolverConfig(
             "LSMR(AC)",
             benchmark_lsmr(opts),
-            preconditioner=make_additive_schwarz(local_solver=_schur(opts.seed, 1)),
+            preconditioner=make_additive_schwarz(local_solver=_schur(opts.seed, None)),
         ),
         SolverConfig(
             "LSMR(AC2)",
@@ -247,7 +248,7 @@ def run_graph_backend_comparison(opts: SuiteOptions) -> list[BenchmarkResult]:
         SolverConfig(
             "ac",
             benchmark_lsmr(opts, maxiter=maxiter),
-            preconditioner=make_additive_schwarz(local_solver=_schur(opts.seed, 1)),
+            preconditioner=make_additive_schwarz(local_solver=_schur(opts.seed, None)),
         ),
         SolverConfig(
             "ac2",

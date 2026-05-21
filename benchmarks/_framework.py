@@ -21,13 +21,13 @@ from typing import Any, Callable, Literal, TypeVar
 import numpy as np
 from numpy.typing import NDArray
 
-from within import LSMR, solve
+from within import LsmrOptions, solve
 from within._within import (
     AdditiveSchwarz,
     ApproxCholConfig,
     ApproxSchurConfig,
     ReductionStrategy,
-    SchurComplement,
+    LocalSolverConfig,
 )
 
 ScaleProfile = Literal["smoke", "iterate", "full"]
@@ -54,7 +54,7 @@ class SolverConfig:
     """Configuration for a solve via the Rust-backed API."""
 
     label: str
-    config: LSMR
+    config: LsmrOptions
     preconditioner: Any = None
 
 
@@ -176,9 +176,9 @@ def benchmark_solver_tol(tol: float) -> float:
 
 def benchmark_lsmr(
     opts: Any, *, maxiter: int | None = None, local_size: int | None = None
-) -> LSMR:
+) -> LsmrOptions:
     """Construct an LSMR config with benchmark-standard tolerance handling."""
-    return LSMR(
+    return LsmrOptions(
         tol=benchmark_solver_tol(opts.tol),
         maxiter=opts.maxiter if maxiter is None else maxiter,
         local_size=local_size,
@@ -199,7 +199,7 @@ def standard_solver_configs(
     (typically a ``SuiteOptions``).  Pass *maxiter* to override the
     iteration cap.
     """
-    schur = SchurComplement(
+    schur = LocalSolverConfig(
         approx_chol=ApproxCholConfig(seed=opts.seed),
         approx_schur=ApproxSchurConfig(seed=opts.seed),
     )

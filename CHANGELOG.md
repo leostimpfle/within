@@ -11,89 +11,64 @@ Modified LSMR is now the sole iterative solver, replacing CG and GMRES.
 
 ### Added
 
-- Preconditioned modified LSMR on `sqrt(W) D`, avoiding explicit
-  normal-equation formation.
-- `SolverParams.local_size: Option<usize>` — optional windowed modified
-  Gram-Schmidt reorthogonalization for ill-conditioned problems.
-- `LsmrStopReason` and `stop_reason` on the LSMR result.
-- `lsmr`/`mlsmr` reject non-finite input with `SolveError::InvalidInput`
-  (Python: `ValueError`); previously silent NaN propagation.
+- **Modified LSMR:** preconditioned `mlsmr` on `sqrt(W) D` (no normal-equation formation), optional windowed mGS reorthogonalization via `LsmrOptions.local_size`, and rejection of non-finite input with `SolveError::InvalidInput` (was silent NaN propagation).
+- `PreconditionerConfig::Off` variant — explicit identity preconditioner.
+- Python `within.config` submodule: `AdditiveSchwarz`, `LocalSolverConfig`, `ApproxCholConfig`, `ApproxSchurConfig`, `ReductionStrategy`.
+- Python `Solver` / `solve` / `solve_batch` accept a 4-form preconditioner: `None`, `PreconditionerConfig.{Off, Additive}`, `AdditiveSchwarz(...)`, or a pre-built `Preconditioner` (reuse path).
+- Python: all config and result classes are picklable.
+- `From<&Preconditioner> for PreconditionerInput`: `Solver::new(.., &precond)` now works alongside the owned form. Cloning a `Preconditioner` is O(1) (refcount-only), so this is a cheap reuse path.
+- `BuildError::PreconditionerDimensionMismatch { expected, actual_rows, actual_cols }`: `Solver::new` fails fast when a reused preconditioner's shape does not match the design's DOF count, instead of bubbling up an opaque error from inside the iterative solver.
 
 ### Changed
 
-- **BREAKING:** `Preconditioner`, `FePreconditioner`, and
-  `schwarz_precond::SolveError` are now `#[non_exhaustive]`. External
-  `match` sites need a wildcard arm. `SolveError` gains an
-  `InvalidInput { context, message }` variant.
-- **BREAKING:** `LocalSolver::solve_local` now takes an
-  `allow_inner_parallelism: bool` policy hint. Implementations with no
-  nested-parallel region can ignore it (`_allow_inner_parallelism`).
-  `SchwarzPreconditioner` no longer carries the `I: LocalSolveInvoker`
-  type parameter; the `LocalSolveInvoker` trait, `DefaultLocalSolveInvoker`,
-  and `with_strategy_and_invoker` constructor are removed.
+- **BREAKING:** Renamed (Rust + Python): `SolverParams` → `LsmrOptions`, `Preconditioner` config enum → `PreconditionerConfig`, `FePreconditioner` → `Preconditioner`, `SchurComplement` → `LocalSolverConfig`, `SparseMatrix` → `CsrMatrix`.
+- **BREAKING:** `Preconditioner` is an opaque struct (was an enum); `#[non_exhaustive]` removed; `#[serde(transparent)]` pins the wire format (future variants must be append-only).
+- **BREAKING:** `within::{domain, operator, orchestrate, solver}` are `pub(crate)`; public items remain re-exported from the crate root.
+- **BREAKING:** `LocalSolverConfig::default()` uses `split_merge: Some(2)` (was structural zero).
+- **BREAKING:** `Solver::solve` / `solve_batch` reject `y.len() != n_obs` / `Y.shape[0] != n_obs` (was silent truncation in weighted mode).
+- **BREAKING:** `PreconditionerConfig` and `schwarz_precond::SolveError` are `#[non_exhaustive]`; `SolveError` gains `InvalidInput { context, message }`.
+- **BREAKING:** `LocalSolver::solve_local` takes `allow_inner_parallelism: bool`. `SchwarzPreconditioner` drops its `I: LocalSolveInvoker` type parameter.
+- **BREAKING:** `Operator::apply` / `apply_adjoint` return `Result<(), SolveError>`; `ApplyError` removed (variants moved onto `SolveError`). Python `Preconditioner.apply` raises `RuntimeError` instead of returning NaNs (#29).
+- **BREAKING:** Error vocabulary collapsed to per-crate `BuildError` / `SolveError`. `LocalSolveError::ApproxCholSolveFailed` → `BackendFailed`; `LocalSolveError` is `#[non_exhaustive]` (#30).
+- **BREAKING:** `ObservationStore` → `Store`; `WeightedDesign` → `Design`; `WeightedDesignOperator` → `DesignOperator` (#28).
+- **BREAKING:** Observation weights externalized from the store layer. `FactorMajorStore::new` / `ArrayStore::new` drop their weights argument; `Solver::new` and `build_preconditioner` gain weights parameters.
+- **BREAKING:** `Solver::new` reshaped to take `impl IntoDesign` + `impl Into<PreconditionerInput>`, accepting raw categories (`ArrayView2<u32>`) or a pre-built `Design`, and any of `None` / `&PreconditionerConfig` / `Some(&PreconditionerConfig)` / owned `PreconditionerConfig` / owned-or-borrowed `Preconditioner`. `LsmrOptions` moved off the constructor onto `Solver::solve` / `solve_batch` (Rust) and `solver.solve(y, options=...)` / `solver.solve_batch(Y, options=...)` (Python); the persistent `Solver` now owns only problem state (design, weights, preconditioner). The legacy `Solver::from_design`, `Solver::from_design_with_preconditioner`, and `Solver::with_preconditioner` constructors are removed; the free `solve` / `solve_batch` Python kwarg was renamed `config=` → `options=`.
+- **BREAKING:** `Design` is pure data + layout — `matvec_d`, `rmatvec_dt`, `rmatvec_wdt`, `gramian_diagonal`, `uid_weight` removed; use `DesignOperator::new(&design, weights)` instead.
+- `DesignOperator::new` validates `weights.len() == design.n_rows`; weighted `apply` / `apply_adjoint` no longer allocate.
+- `build_preconditioner` returns `BuildError::WeightCountMismatch` for wrong-length weights (was OOB panic in `CrossTab`).
+- Python: `LocalSolverConfig(approx_schur=None)` requests exact Schur; omitting uses the library default approximate.
+- Python: all PyO3 classes report `__module__ == "within._within"` (was `"builtins"`).
 - LSMR vector kernels parallelized via Rayon.
-- **BREAKING:** `ObservationStore` trait renamed to `Store`;
-  `WeightedDesign` to `Design`; `WeightedDesignOperator` to
-  `DesignOperator` (closes #28).
-- **BREAKING:** Observation weights externalized from the store layer.
-  `FactorMajorStore::new` and `ArrayStore::new` drop their weights
-  argument. `Solver::from_design` / `from_design_with_preconditioner` and
-  `build_preconditioner` gain `Option<Vec<f64>>` / `Option<&[f64]>`
-  weights parameters. Python `solve` / `Solver` signatures unchanged.
-- **BREAKING:** `Design` is now pure data + layout. The `matvec_d`,
-  `rmatvec_dt`, `rmatvec_wdt`, `gramian_diagonal`, and `uid_weight`
-  methods are removed — use `DesignOperator::new(&design, weights).apply`
-  / `apply_adjoint` instead.
-- `DesignOperator::new` validates that `weights.len() == design.n_rows`
-  and panics on mismatch; the scratch `Mutex<Vec<f64>>` field is gone and
-  weighted `apply` / `apply_adjoint` no longer allocate. The weighted
-  `apply` fuses the `W^{1/2}` multiply into the last gather pass, so
-  there is no trailing scale loop.
-- `build_preconditioner` now returns `BuildError::WeightCountMismatch`
-  for wrong-length weights instead of panicking on out-of-bounds access
-  inside `CrossTab` assembly.
-- **BREAKING:** Error vocabulary collapsed to per-crate `BuildError` /
-  `SolveError`. `schwarz_precond` absorbs three sub-enums into one
-  `BuildError`. `within::WithinError` splits into `BuildError`, a
-  `SolveError` re-export, and a thin union for `solve()` / `solve_batch()`.
-  `WithinResult` removed. `LocalSolveError::ApproxCholSolveFailed` renamed
-  to `BackendFailed`; `LocalSolveError` is now `#[non_exhaustive]`.
-  `WithinError::{Build, Solve}` are transparent — `Display` and
-  `Error::source` forward to the inner error, so the union no longer
-  appears in the error chain. Internally migrated to `thiserror` (new
-  dependency on `schwarz-precond` and `within`). Closes #30.
+- **BREAKING:** `BatchSolveResult` fields are now `pub` (was `pub(crate)` behind accessor methods); only `x(i)` and `demeaned(i)` slicing methods remain.
+- **BREAKING:** `Design::n_rows` renamed to `n_obs`; new `Design::n_obs()` / `n_dofs()` accessors.
+- **BREAKING:** `Design` fields are `pub(crate)`.
+- **BREAKING:** `DesignOperator` is `pub(crate)`.
+- **BREAKING:** `SolveResult.final_residual` / `BatchSolveResult.final_residual` renamed to `residual` (Rust + Python).
+- **BREAKING:** `CsrMatrix::new` validates CSR invariants, returns `Result<_, BuildError::InvalidCsr>`.
+- **BREAKING:** `SchwarzPreconditioner::new(entries, strategy)` replaces `new(entries, n_dofs)` / `with_strategy(entries, n_dofs, strategy)`; `n_dofs` derived from entries. `resolved_reduction_strategy()` renamed to `reduction_strategy()`; dead `with_reduction_strategy` + configured getter removed. `BuildError::GlobalIndexOutOfBounds` removed.
+- **BREAKING (Python):** `ApproxCholConfig.split: int (1=off)` → `split_merge: int | None (None=off)`, matching Rust. Pickle payload shape changed.
+- **BREAKING:** `Solver::new` accepts `Option<impl Into<Vec<f64>>>` for weights; `WithinError` is `#[non_exhaustive]`.
+- Free `solve()` / `solve_batch()` accept `impl Into<PreconditionerInput>` (same shapes as `Solver::new`).
+- `Solver` and `Preconditioner` implement `Debug`.
+
+### Fixed
+
+- `SchwarzPreconditioner::apply` rejects `r.len() != n_dofs` or `z.len() != n_dofs` with `SolveError::InvalidInput` (was an unchecked out-of-bounds path).
+- `BufferPool` no longer recycles a partially-written atomic-scatter buffer when the preceding apply returned an error — the buffer is dropped so the next caller starts from a freshly-zeroed allocation rather than inheriting stale atomic state.
+- Python `Solver.solve_batch` accepts `Y` as a keyword argument again — the Rust impl exposed it as `y_matrix=` while the stub advertised `Y=`, so `solver.solve_batch(Y=...)` failed at runtime.
+- Python `Solver.solve_batch` now validates `Y.shape[0]` against the solver's `n_obs` up front (parity with the free `solve_batch`); previously an empty batch with the wrong row count silently returned a success.
 
 ### Removed
 
-- **BREAKING:** CG, GMRES, multiplicative Schwarz, iterative refinement,
-  and their support types (`KrylovMethod`, `OperatorRepr`,
-  `Preconditioner::Multiplicative`, `FePreconditioner::Multiplicative`,
-  `SolverParams.max_refinements`, Python `CG`/`GMRES`/
-  `MultiplicativeSchwarz`, `MultiplicativeSchwarzPreconditioner`,
-  `ResidualUpdater`, `OperatorResidualUpdater`, `IdentityOperator`).
-- **BREAKING:** `Gramian`, `GramianOperator`, the previous bare
-  `DesignOperator`, `build_schwarz`, `FeSchwarz`, and
-  `WithinError::Overflow` removed from the `within` public surface. LSMR
-  uses the rectangular weighted design operator directly (see also #28,
-  which later renamed it to `DesignOperator`).
-- **BREAKING:** `schwarz_precond::solve::{cg, gmres}` and the `solve`
-  module removed; use crate-root `lsmr`/`mlsmr`.
-  `schwarz_precond::schwarz::{additive, multiplicative}` flattened into
-  `schwarz_precond::schwarz`; crate-root `SchwarzPreconditioner` re-export
-  unchanged.
-- **BREAKING:** `AdditiveSchwarzDiagnostics` removed from Rust and Python
-  public APIs along with `SchwarzPreconditioner::diagnostics`,
-  `FePreconditioner::additive_schwarz_diagnostics`, and the Python
-  `AdditiveSchwarzDiagnostics` class. Scheduling metrics are now private
-  to the `Auto` heuristic (closes #34).
-- **BREAKING:** `Operator::apply` / `apply_adjoint` now return
-  `Result<(), SolveError>`; the infallible pair and the `try_apply` /
-  `try_apply_adjoint` defaults are gone. `ApplyError` is removed; its
-  variants moved onto `SolveError`. `PyFePreconditioner.apply` raises
-  `RuntimeError` on local-solver failure instead of returning NaNs
-  (closes #29).
-- **BREAKING:** `ObservationWeights` enum removed; `Store::weight` and
-  `Store::is_unweighted` removed from the trait (closes #28).
+- **BREAKING:** Top-level Rust re-exports: `within::Operator` (use `schwarz_precond::Operator`), `within::DEFAULT_DENSE_SCHUR_THRESHOLD`, `within::Subdomain`, `within::domain::{PartitionWeights, SubdomainCore}`.
+- **BREAKING:** `LocalSolverConfig::solver_default()` (the single `default()` now serves both paths).
+- **BREAKING:** CG, GMRES, multiplicative Schwarz, iterative refinement, and support types: `KrylovMethod`, `OperatorRepr`, `Multiplicative` variants, `SolverParams.max_refinements`, Python `CG` / `GMRES` / `MultiplicativeSchwarz`, `ResidualUpdater`, `OperatorResidualUpdater`, `IdentityOperator`.
+- **BREAKING:** `Gramian`, `GramianOperator`, the previous bare `DesignOperator`, `build_schwarz`, `FeSchwarz`, `WithinError::Overflow` from the `within` public surface.
+- **BREAKING (Rust + Python):** `Preconditioner::n_subdomains` and `Preconditioner::subdomain_inner_parallel_work` (and their Python `@property` counterparts) — internal diagnostics, not part of the stable surface.
+- **BREAKING:** `schwarz_precond::solve::{cg, gmres}` and the `solve` module; `schwarz_precond::schwarz::{additive, multiplicative}` flattened into `schwarz_precond::schwarz`.
+- **BREAKING:** `AdditiveSchwarzDiagnostics` and related accessors (#34).
+- **BREAKING:** `ObservationWeights` enum; `Store::weight` and `Store::is_unweighted` (#28).
+- **BREAKING:** `WithinResult` type alias.
 
 ## [0.1.0] - 2026-03-12
 

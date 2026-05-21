@@ -6,14 +6,11 @@ use criterion::{
 };
 use rand::rngs::SmallRng;
 use rand::{Rng, SeedableRng};
-use schwarz_precond::Operator;
 use within::config::{
-    ApproxCholConfig, LocalSolverConfig, Preconditioner, ReductionStrategy, SolverParams,
+    ApproxCholConfig, LocalSolverConfig, LsmrOptions, PreconditionerConfig, ReductionStrategy,
 };
-use within::domain::Design;
 use within::observation::FactorMajorStore;
-use within::operator::DesignOperator;
-use within::Solver;
+use within::{Design, Solver};
 
 // ===========================================================================
 // Shared types and helpers
@@ -76,24 +73,17 @@ fn generate_fixest_like_case(case: Case, seed: u64) -> (Design<FactorMajorStore>
     let store = FactorMajorStore::new(factor_levels, case.n_obs).expect("valid factor-major store");
     let design = Design::from_store(store).expect("valid design");
 
-    let mut x_true = vec![0.0; design.n_dofs];
-    for x in &mut x_true {
-        *x = rng.random_range(-1.0..1.0);
-    }
-
+    // Random y — bench measures iteration time on arbitrary RHS, not ground-truth recovery.
     let mut y = vec![0.0; case.n_obs];
-    DesignOperator::new(&design, None)
-        .apply(&x_true, &mut y)
-        .expect("apply succeeds");
     for yi in &mut y {
-        *yi += 0.1 * rng.random_range(-1.0..1.0);
+        *yi = rng.random_range(-1.0..1.0);
     }
 
     (design, y)
 }
 
 fn one_level_local_solver(ac2: bool) -> LocalSolverConfig {
-    let mut cfg = LocalSolverConfig::solver_default();
+    let mut cfg = LocalSolverConfig::default();
     if ac2 {
         cfg.approx_chol = ApproxCholConfig {
             split_merge: Some(2),
@@ -130,16 +120,19 @@ fn run_smoke(
 }
 
 fn run_lsmr_one_level(design: &Design<FactorMajorStore>, y: &[f64], ac2: bool) {
-    let params = SolverParams {
+    let params = LsmrOptions {
         tol: TOL,
         maxiter: MAXITER,
         ..Default::default()
     };
     let cfg = one_level_local_solver(ac2);
-    let precond = Preconditioner::Additive(cfg, ReductionStrategy::Auto);
+    let precond = PreconditionerConfig::Additive {
+        local_solver: cfg,
+        reduction: ReductionStrategy::Auto,
+    };
     let solver =
-        Solver::from_design(design.clone(), None, &params, Some(&precond)).expect("solver build");
-    let _ = solver.solve(y).expect("solve");
+        Solver::new(design.clone(), None::<Vec<f64>>, Some(&precond)).expect("solver build");
+    let _ = solver.solve(y, &params).expect("solve");
 }
 
 fn smoke_cases() -> [Case; 8] {
@@ -247,52 +240,10 @@ fn bench_fixest_mini(c: &mut Criterion) {
     group.finish();
 }
 
-fn matvec_cases() -> [Case; 4] {
-    [
-        Case {
-            n_obs: 1_000_000,
-            dgp_type: FixestType::Simple,
-            n_fe: 2,
-        },
-        Case {
-            n_obs: 1_000_000,
-            dgp_type: FixestType::Difficult,
-            n_fe: 2,
-        },
-        Case {
-            n_obs: 1_000_000,
-            dgp_type: FixestType::Simple,
-            n_fe: 3,
-        },
-        Case {
-            n_obs: 1_000_000,
-            dgp_type: FixestType::Difficult,
-            n_fe: 3,
-        },
-    ]
-}
-
-fn bench_matvec(c: &mut Criterion) {
-    let mut group = configure_group(c, "design_operator_apply", 50, 200);
-    for case in matvec_cases() {
-        let label = case.label();
-        let (design, _y) = generate_fixest_like_case(case, 42);
-        let n_dofs = design.n_dofs;
-        let n_obs = design.n_rows;
-        let op = DesignOperator::new(&design, None);
-        let x: Vec<f64> = (0..n_dofs).map(|i| (i as f64).sin()).collect();
-        let mut y = vec![0.0; n_obs];
-        group.bench_function(BenchmarkId::new("apply", &label), |b| {
-            b.iter(|| op.apply(&x, &mut y).expect("apply succeeds"))
-        });
-    }
-    group.finish();
-}
-
 criterion_group!(
     name = smoke_benches;
     config = Criterion::default();
     targets = bench_fixest_smoke_lsmr_1l,
 );
-criterion_group!(mini_benches, bench_fixest_mini, bench_matvec);
+criterion_group!(mini_benches, bench_fixest_mini);
 criterion_main!(smoke_benches, mini_benches);

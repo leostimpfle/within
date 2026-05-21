@@ -1,13 +1,12 @@
-//! Additive Schwarz execution engine.
+//! Additive Schwarz execution engine and its scratch-buffer types.
 //!
-//! [`AdditiveExecutor`] owns the subdomain entries and dispatches
-//! `apply` using the reduction plan chosen by the scheduler.
-//! It manages the [`BufferPool`] for zero-allocation steady-state
-//! operation.
+//! [`AdditiveExecutor`] owns the subdomain entries and a [`BufferPool`] that
+//! transitively carries the global sizes. Its `apply` method takes a
+//! reduction plan from the scheduler and dispatches to either the
+//! atomic-scatter or the parallel-reduction backend. Buffers are taken from
+//! / returned to the pool so the steady state allocates nothing.
 //!
-//! Buffers are allocated once and reused across `apply` calls via the
-//! [`BufferPool`]. Two buffer layouts exist, matching the two reduction
-//! strategies:
+//! Two buffer layouts exist, matching the two reduction strategies:
 //!
 //! - [`SchwarzBuffers::Atomic`] — a single shared `Vec<AtomicU64>` accumulator
 //! - [`SchwarzBuffers::Reduction`] — a pool of per-worker
@@ -35,27 +34,43 @@ use super::planning::{ReductionPlan, ResolvedReductionStrategy};
 // Buffer pooling
 // ============================================================================
 
-#[derive(Default, Clone)]
-struct BufferPool {
+pub(super) struct BufferPool {
+    n_dofs: usize,
+    max_scratch_size: usize,
     inner: Arc<Mutex<Vec<SchwarzBuffers>>>,
 }
 
 impl BufferPool {
     const MAX_POOL_SIZE: usize = 4;
 
-    fn take(
-        &self,
-        strategy: ResolvedReductionStrategy,
-        n_dofs: usize,
-        max_scratch_size: usize,
-    ) -> Result<SchwarzBuffers, SolveError> {
+    pub(super) fn new(n_dofs: usize, max_scratch_size: usize) -> Self {
+        Self {
+            n_dofs,
+            max_scratch_size,
+            inner: Arc::default(),
+        }
+    }
+
+    pub(super) fn n_dofs(&self) -> usize {
+        self.n_dofs
+    }
+
+    pub(super) fn max_scratch_size(&self) -> usize {
+        self.max_scratch_size
+    }
+
+    fn take(&self, strategy: ResolvedReductionStrategy) -> Result<SchwarzBuffers, SolveError> {
         let mut pool = self.inner.lock().map_err(|_| SolveError::Synchronization {
             context: "additive.buf_pool.lock.pop",
         })?;
         if let Some(idx) = pool.iter().position(|bufs| bufs.strategy() == strategy) {
             return Ok(pool.swap_remove(idx));
         }
-        Ok(SchwarzBuffers::new(strategy, n_dofs, max_scratch_size))
+        Ok(SchwarzBuffers::new(
+            strategy,
+            self.n_dofs,
+            self.max_scratch_size,
+        ))
     }
 
     fn put(
@@ -63,17 +78,32 @@ impl BufferPool {
         bufs: SchwarzBuffers,
         apply_result: &Result<(), SolveError>,
     ) -> Result<(), SolveError> {
+        // On error, the atomic backend's swap-zero readout pass is skipped,
+        // leaving stale partial-write values in the AtomicU64 vec. Drop the
+        // buffer rather than pooling it for the next caller to inherit dirty
+        // state.
+        if apply_result.is_err() {
+            return Ok(());
+        }
         if let Ok(mut pool) = self.inner.lock() {
             if pool.len() < Self::MAX_POOL_SIZE {
                 pool.push(bufs);
             }
             Ok(())
-        } else if apply_result.is_ok() {
+        } else {
             Err(SolveError::Synchronization {
                 context: "additive.buf_pool.lock.push",
             })
-        } else {
-            Ok(())
+        }
+    }
+}
+
+impl Clone for BufferPool {
+    fn clone(&self) -> Self {
+        Self {
+            n_dofs: self.n_dofs,
+            max_scratch_size: self.max_scratch_size,
+            inner: Arc::clone(&self.inner),
         }
     }
 }
@@ -164,7 +194,7 @@ impl WorkerReductionBuffers {
         let mut buffers = if let Some(buffers) = worker_stack.borrow_mut().pop() {
             buffers
         } else {
-            take_reduction_buffer(&self.shared_pool, self.n_dofs, self.max_scratch_size)
+            self.take_or_alloc()
         };
 
         let result = f(&mut buffers);
@@ -175,6 +205,14 @@ impl WorkerReductionBuffers {
         result
     }
 
+    fn take_or_alloc(&self) -> AdditiveSweepBuffers {
+        self.shared_pool
+            .lock()
+            .ok()
+            .and_then(|mut pool| pool.pop())
+            .unwrap_or_else(|| AdditiveSweepBuffers::new(self.n_dofs, self.max_scratch_size))
+    }
+
     fn finish_round(
         self,
         z: &mut [f64],
@@ -182,9 +220,11 @@ impl WorkerReductionBuffers {
     ) -> Result<Vec<AdditiveSweepBuffers>, SolveError> {
         let mut buffers = self.into_buffers()?;
         if apply_result.is_ok() {
-            reduce_into(z, &buffers);
+            Self::reduce_into(z, &buffers);
         }
-        clear(&mut buffers);
+        for b in &mut buffers {
+            b.global_accum.fill(0.0);
+        }
         Ok(buffers)
     }
 
@@ -200,68 +240,47 @@ impl WorkerReductionBuffers {
         }
         Ok(buffers)
     }
-}
 
-fn reduce_into(z: &mut [f64], buffers: &[AdditiveSweepBuffers]) {
-    if buffers.is_empty() {
-        z.fill(0.0);
-        return;
-    }
+    fn reduce_into(z: &mut [f64], buffers: &[AdditiveSweepBuffers]) {
+        if buffers.is_empty() {
+            z.fill(0.0);
+            return;
+        }
 
-    const REDUCE_CHUNK: usize = 4096;
-    z.par_chunks_mut(REDUCE_CHUNK)
-        .enumerate()
-        .for_each(|(ci, chunk)| {
-            let offset = ci * REDUCE_CHUNK;
-            chunk.fill(0.0);
-            for buffers in buffers {
-                let accum = &buffers.global_accum[offset..offset + chunk.len()];
-                for (zi, &ai) in chunk.iter_mut().zip(accum) {
-                    *zi += ai;
+        const REDUCE_CHUNK: usize = 4096;
+        z.par_chunks_mut(REDUCE_CHUNK)
+            .enumerate()
+            .for_each(|(ci, chunk)| {
+                let offset = ci * REDUCE_CHUNK;
+                chunk.fill(0.0);
+                for buffers in buffers {
+                    let accum = &buffers.global_accum[offset..offset + chunk.len()];
+                    for (zi, &ai) in chunk.iter_mut().zip(accum) {
+                        *zi += ai;
+                    }
                 }
-            }
-        });
-}
-
-fn clear(buffers: &mut [AdditiveSweepBuffers]) {
-    for buffers in buffers {
-        buffers.global_accum.fill(0.0);
+            });
     }
-}
-
-fn take_reduction_buffer(
-    pool: &Mutex<Vec<AdditiveSweepBuffers>>,
-    n: usize,
-    max_ss: usize,
-) -> AdditiveSweepBuffers {
-    pool.lock()
-        .ok()
-        .and_then(|mut pool| pool.pop())
-        .unwrap_or_else(|| AdditiveSweepBuffers::new(n, max_ss))
 }
 
 // ============================================================================
-// Executor
+// Additive executor
 // ============================================================================
 
 pub(super) struct AdditiveExecutor<S: LocalSolver> {
-    pub(super) subdomains: Arc<Vec<SubdomainEntry<S>>>,
-    pub(super) n_dofs: usize,
-    pub(super) max_scratch_size: usize,
+    subdomains: Arc<Vec<SubdomainEntry<S>>>,
     buf_pool: BufferPool,
 }
 
 impl<S: LocalSolver> AdditiveExecutor<S> {
     pub(super) fn new(
-        entries: Vec<SubdomainEntry<S>>,
+        subdomains: Arc<Vec<SubdomainEntry<S>>>,
         n_dofs: usize,
         max_scratch_size: usize,
     ) -> Self {
         Self {
-            subdomains: Arc::new(entries),
-            n_dofs,
-            max_scratch_size,
-            buf_pool: BufferPool::default(),
+            subdomains,
+            buf_pool: BufferPool::new(n_dofs, max_scratch_size),
         }
     }
 
@@ -269,24 +288,24 @@ impl<S: LocalSolver> AdditiveExecutor<S> {
         &self.subdomains
     }
 
-    pub(super) fn with_fresh_buffers(&self) -> Self {
-        Self {
-            subdomains: Arc::clone(&self.subdomains),
-            n_dofs: self.n_dofs,
-            max_scratch_size: self.max_scratch_size,
-            buf_pool: BufferPool::default(),
-        }
+    pub(super) fn n_dofs(&self) -> usize {
+        self.buf_pool.n_dofs()
     }
 
+    pub(super) fn n_subdomains(&self) -> usize {
+        self.subdomains.len()
+    }
+
+    /// Dispatch entry point: take a buffer from the pool, run the backend,
+    /// return the buffer. The pool size is bounded, so the steady state
+    /// allocates nothing.
     pub(super) fn apply(
         &self,
         plan: ReductionPlan,
         r: &[f64],
         z: &mut [f64],
     ) -> Result<(), SolveError> {
-        let mut bufs = self
-            .buf_pool
-            .take(plan.strategy, self.n_dofs, self.max_scratch_size)?;
+        let mut bufs = self.buf_pool.take(plan.strategy)?;
         let apply_result = match &mut bufs {
             SchwarzBuffers::Atomic { accum } => {
                 self.apply_atomic(plan.allow_inner_parallelism, r, z, accum)
@@ -306,8 +325,9 @@ impl<S: LocalSolver> AdditiveExecutor<S> {
         z: &mut [f64],
         accum: &[AtomicU64],
     ) -> Result<(), SolveError> {
+        let max_scratch_size = self.buf_pool.max_scratch_size();
         self.subdomains.par_iter().enumerate().try_for_each_init(
-            || LocalSolveScratch::new(self.max_scratch_size),
+            || LocalSolveScratch::new(max_scratch_size),
             |scratch, (subdomain, entry)| {
                 entry
                     .apply_weighted_into_atomic(
@@ -341,8 +361,11 @@ impl<S: LocalSolver> AdditiveExecutor<S> {
         z: &mut [f64],
         pool: &mut Vec<AdditiveSweepBuffers>,
     ) -> Result<(), SolveError> {
-        let worker_buffers =
-            WorkerReductionBuffers::new(std::mem::take(pool), self.n_dofs, self.max_scratch_size);
+        let worker_buffers = WorkerReductionBuffers::new(
+            std::mem::take(pool),
+            self.buf_pool.n_dofs(),
+            self.buf_pool.max_scratch_size(),
+        );
         let apply_result =
             self.subdomains
                 .par_iter()
@@ -371,9 +394,77 @@ impl<S: LocalSolver> Clone for AdditiveExecutor<S> {
     fn clone(&self) -> Self {
         Self {
             subdomains: Arc::clone(&self.subdomains),
-            n_dofs: self.n_dofs,
-            max_scratch_size: self.max_scratch_size,
             buf_pool: self.buf_pool.clone(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// On `put` with `Err`, the pool must drop the buffer so the next caller
+    /// gets a freshly-zeroed allocation rather than inheriting stale atomic
+    /// state from a partially-completed atomic-scatter pass.
+    #[test]
+    fn buffer_pool_drops_dirty_buffer_on_error() {
+        let pool = BufferPool::new(8, 4);
+
+        let mut bufs = pool
+            .take(ResolvedReductionStrategy::AtomicScatter)
+            .expect("first take");
+        match &mut bufs {
+            SchwarzBuffers::Atomic { accum } => {
+                for slot in accum {
+                    slot.store(0xdead_beef_dead_beef, Ordering::Relaxed);
+                }
+            }
+            _ => panic!("expected atomic buffer"),
+        }
+
+        pool.put(
+            bufs,
+            &Err(SolveError::Synchronization {
+                context: "test.simulated_failure",
+            }),
+        )
+        .expect("put on err path");
+
+        let fresh = pool
+            .take(ResolvedReductionStrategy::AtomicScatter)
+            .expect("second take");
+        match &fresh {
+            SchwarzBuffers::Atomic { accum } => {
+                for (i, slot) in accum.iter().enumerate() {
+                    assert_eq!(
+                        slot.load(Ordering::Relaxed),
+                        0,
+                        "atomic accumulator slot {i} should be freshly zero, not stale dirty bits"
+                    );
+                }
+            }
+            _ => panic!("expected atomic buffer"),
+        }
+    }
+
+    /// Companion: on `put` with `Ok`, the pool retains the buffer and a
+    /// subsequent `take` of the same strategy returns the pooled instance.
+    #[test]
+    fn buffer_pool_retains_clean_buffer_on_success() {
+        let pool = BufferPool::new(8, 4);
+
+        let bufs = pool
+            .take(ResolvedReductionStrategy::AtomicScatter)
+            .expect("first take");
+        pool.put(bufs, &Ok(())).expect("put on ok path");
+
+        let _ = pool
+            .take(ResolvedReductionStrategy::AtomicScatter)
+            .expect("second take");
+        let pool_after = pool.inner.lock().expect("pool lock");
+        assert!(
+            pool_after.is_empty(),
+            "second take should have drained the pooled buffer"
+        );
     }
 }
