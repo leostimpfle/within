@@ -19,8 +19,8 @@ pip install within_py
 `within`'s main user-facing function is `solve`. Provide a 2-D `uint32` array of category codes (one column per fixed-effect factor) and a response vector `y`. The solver finds x in the normal equations **D'D x = D'y**, where D is the sparse categorical design matrix.
 
 ```python
-from within import solve, solve_batch, LSMR, AdditiveSchwarz
 import numpy as np
+from within import solve, solve_batch, LsmrOptions
 
 np.random.seed(1)
 n = 100_000
@@ -34,7 +34,7 @@ y = np.random.randn(n)
 result = solve(fe, y)
 
 # Custom tolerance / iteration cap
-result = solve(fe, y, config=LSMR(tol=1e-10, maxiter=2000))
+result = solve(fe, y, options=LsmrOptions(tol=1e-10, maxiter=2000))
 
 # Weighted solve
 result = solve(fe, y, weights=np.ones(n))
@@ -59,8 +59,8 @@ print(np.round(beta_hat, 4))  # [ 0.9982 -2.006   0.5005]
 
 | Function | Description |
 |---|---|
-| `solve(categories, y, config?, weights?, preconditioner?)` | Solve a single right-hand side. Returns `SolveResult`. |
-| `solve_batch(categories, Y, config?, weights?, preconditioner?)` | Solve multiple RHS vectors in parallel. `Y` has shape `(n_obs, k)`. Returns `BatchSolveResult`. |
+| `solve(categories, y, options?, weights?, preconditioner?)` | Solve a single right-hand side. Returns `SolveResult`. |
+| `solve_batch(categories, Y, options?, weights?, preconditioner?)` | Solve multiple RHS vectors in parallel. `Y` has shape `(n_obs, k)`. Returns `BatchSolveResult`. |
 
 `categories` is a 2-D `uint32` array of shape `(n_obs, n_factors)`. A `UserWarning` is emitted when a C-contiguous array is passed — use `np.asfortranarray(categories)` for best performance.
 
@@ -75,41 +75,44 @@ solver = Solver(fe)
 r = solver.solve(y)                            # reuses preconditioner
 r = solver.solve_batch(np.column_stack([y, X]))
 
-precond = solver.preconditioner()              # picklable
+precond = solver.preconditioner                # picklable property
 solver2 = Solver(fe, preconditioner=precond)   # skip re-factorization
 ```
 
 | Property / Method | Description |
 |---|---|
-| `Solver(categories, config?, weights?, preconditioner?)` | Build solver. Factorizes the preconditioner at construction. |
-| `.solve(y)` | Solve a single RHS. Returns `SolveResult`. |
-| `.solve_batch(Y)` | Solve multiple RHS columns in parallel. Returns `BatchSolveResult`. |
-| `.preconditioner()` | Return the built `FePreconditioner` (picklable), or `None`. |
+| `Solver(categories, weights?, preconditioner?)` | Build solver. Factorizes the preconditioner at construction. |
+| `.solve(y, options?)` | Solve a single RHS with the given LSMR tuning. Returns `SolveResult`. |
+| `.solve_batch(Y, options?)` | Solve multiple RHS columns in parallel. Returns `BatchSolveResult`. |
+| `.preconditioner` | Return the built `Preconditioner` (picklable), or `None`. Reuse via `Solver(fe, preconditioner=p)`. |
 
 
 ### Solver configuration
 
 | Class | Description |
 |---|---|
-| `LSMR(tol=1e-8, maxiter=1000, local_size=None)` | Modified LSMR. `local_size` enables windowed reorthogonalization. |
+| `LsmrOptions(tol=1e-8, maxiter=1000, local_size=None)` | Modified LSMR. `local_size` enables windowed reorthogonalization. |
 
-### Preconditioners
+### Preconditioner (4-form Union)
+
+The `preconditioner` argument accepts any of:
+
+| Form | Meaning |
+|---|---|
+| `None` (default) | Library default — Additive Schwarz with sensible defaults. |
+| `PreconditionerConfig.Off` | Explicit identity — solve unpreconditioned. |
+| `PreconditionerConfig.Additive` | Additive Schwarz shortcut, equivalent to `None`. |
+| `AdditiveSchwarz(local_solver?, reduction?)` | Tuned Schwarz config — import from `within.config`. |
+| `Preconditioner` instance | Reuse a previously-built preconditioner across solvers. |
+
+### Local solver configuration (advanced — `within.config`)
 
 | Class | Description |
 |---|---|
-| `AdditiveSchwarz(local_solver?)` | Additive one-level Schwarz. |
-| `Preconditioner.Off` | Disable preconditioning. |
-
-Pass `None` (the default) to use additive Schwarz with the default local solver.
-
-### Local solver configuration (advanced)
-
-| Class | Description |
-|---|---|
-| `SchurComplement(approx_chol?, approx_schur?, dense_threshold=24)` | Schur complement reduction with approximate Cholesky on the reduced system. Default local solver. |
-| `FullSddm(approx_chol?)` | Full bipartite SDDM factorized via approximate Cholesky. |
+| `LocalSolverConfig(approx_chol?, approx_schur?, dense_threshold=24)` | Schur reduction + approximate Cholesky. Omit `approx_schur` for the library-default approximate variant; pass `approx_schur=None` to request an exact Schur (slower, used for validation). |
 | `ApproxCholConfig(seed=0, split=1)` | Approximate Cholesky parameters. |
 | `ApproxSchurConfig(seed=0, split=1)` | Approximate Schur complement sampling parameters. |
+| `ReductionStrategy` enum | `Auto` (default), `AtomicScatter`, `ParallelReduction`. |
 
 ### Result types
 
@@ -121,19 +124,23 @@ Pass `None` (the default) to use additive Schwarz with the default local solver.
 
 ```rust
 use ndarray::Array2;
-use within::{solve, SolverParams, Preconditioner, LocalSolverConfig, ReductionStrategy};
+use within::{solve, LsmrOptions, PreconditionerConfig};
+use within::config::{LocalSolverConfig, ReductionStrategy};
 
 let categories = /* Array2<u32> of shape (n_obs, n_factors) */;
 let y: &[f64] = /* response vector */;
 
-// Default: LSMR + additive Schwarz
-let r = solve(categories.view(), &y, None, &SolverParams::default(), None)?;
+// Default: LSMR + additive Schwarz (None → library default)
+let r = solve(categories.view(), &y, None, &LsmrOptions::default(), None)?;
 assert!(r.converged);
 
-// Tighter tolerance with explicit additive preconditioner
-let params = SolverParams { tol: 1e-10, ..SolverParams::default() };
-let precond = Preconditioner::Additive(LocalSolverConfig::default(), ReductionStrategy::Auto);
-let r = solve(categories.view(), &y, None, &params, Some(&precond))?;
+// Tighter tolerance with an explicit additive preconditioner
+let lsmr = LsmrOptions { tol: 1e-10, ..LsmrOptions::default() };
+let precond = PreconditionerConfig::Additive {
+    local_solver: LocalSolverConfig::default(),
+    reduction: ReductionStrategy::default(),
+};
+let r = solve(categories.view(), &y, None, &lsmr, Some(&precond))?;
 ```
 
 Persistent solver — build once, solve many:
@@ -141,27 +148,30 @@ Persistent solver — build once, solve many:
 ```rust
 use within::Solver;
 
-let solver = Solver::new(categories.view(), None, &SolverParams::default(), None)?;
-let r1 = solver.solve(&y)?;
-let r2 = solver.solve(&another_y)?;  // reuses preconditioner
+let solver = Solver::new(categories.view(), None, None)?;
+let r1 = solver.solve(&y, &LsmrOptions::default())?;
+let r2 = solver.solve(&another_y, &LsmrOptions::default())?;  // reuses preconditioner
 ```
+
+Two-channel preconditioner signaling: `Option<&PreconditionerConfig>` where
+`None` is the library default and `Some(PreconditionerConfig::Off)` is the
+explicit identity preconditioner.
 
 | Type | Variants / Fields |
 |---|---|
-| `SolverParams` | `tol: f64`, `maxiter: usize`, `local_size: Option<usize>` |
-| `Preconditioner` | `Additive(LocalSolverConfig, ReductionStrategy)` |
+| `LsmrOptions` | `{ tol: f64, maxiter: usize, local_size: Option<usize> }` |
+| `PreconditionerConfig` | `Off` \| `Additive { local_solver: LocalSolverConfig, reduction: ReductionStrategy }` (`#[non_exhaustive]`) |
 | `LocalSolverConfig` | `{ approx_chol, approx_schur, dense_threshold }` |
+| `Preconditioner` | Opaque built handle — reuse via `Solver::new(.., precond)` (owned or `&`) |
 
-### Lower-level types
+### Lower-level access
 
-The crate exposes its internals for advanced use:
-
-| Module | Key types |
-|---|---|
-| `observation` | `FactorMajorStore`, `ArrayStore`, `ObservationStore` trait |
-| `domain` | `WeightedDesign`, `FixedEffectsDesign`, `Subdomain` |
-| `operator` | `DesignOperator`, `WeightedDesignOperator`, `build_schwarz`, `FeSchwarz` |
-| `solver` | `Solver<S: ObservationStore>` — generic persistent solver |
+| Module | Visibility | Key types |
+|---|---|---|
+| `within::config` | public | `LsmrOptions`, `PreconditionerConfig`, `LocalSolverConfig`, `ApproxCholConfig`, `ApproxSchurConfig`, `ReductionStrategy` |
+| `within::observation` | public | `Store` trait, `FactorMajorStore`, `ArrayStore`, `FactorMeta` |
+| `within::error` | public | `WithinError`, `BuildError`, `SolveError` |
+| `domain` / `operator` / `solver` / `orchestrate` | `pub(crate)` | implementation layers — public items are re-exported at the crate root |
 
 ### Feature flags
 

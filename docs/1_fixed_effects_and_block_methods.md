@@ -4,7 +4,7 @@ This is Part 1 of the algorithm documentation for the `within` solver. It introd
 
 **Series overview**:
 - **Part 1: Fixed Effects and Block Iterative Methods** (this document)
-- [Part 2: Preconditioned Krylov Solvers and Schwarz Decomposition](2_solver_architecture.md)
+- [Part 2: Preconditioned LSMR and Schwarz Decomposition](2_solver_architecture.md)
 - [Part 3: Local Solvers and Approximate Cholesky](3_local_solvers.md)
 
 ---
