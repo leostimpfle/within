@@ -20,7 +20,7 @@ pip install within_py
 
 ```python
 import numpy as np
-from within import solve, solve_batch, LsmrOptions
+from within import solve, solve_batch, LsmrOptions, PreconditionerConfig
 
 np.random.seed(1)
 n = 100_000
@@ -38,6 +38,9 @@ result = solve(fe, y, options=LsmrOptions(tol=1e-10, maxiter=2000))
 
 # Weighted solve
 result = solve(fe, y, weights=np.ones(n))
+
+# Opt into diagonal/Jacobi preconditioning
+result = solve(fe, y, preconditioner=PreconditionerConfig.Diagonal)
 ```
 
 ### FWL regression example
@@ -93,7 +96,7 @@ solver2 = Solver(fe, preconditioner=precond)   # skip re-factorization
 |---|---|
 | `LsmrOptions(tol=1e-8, maxiter=1000, local_size=None)` | Modified LSMR. `local_size` enables windowed reorthogonalization. |
 
-### Preconditioner (4-form Union)
+### Preconditioner (5-form Union)
 
 The `preconditioner` argument accepts any of:
 
@@ -102,6 +105,7 @@ The `preconditioner` argument accepts any of:
 | `None` (default) | Library default — Additive Schwarz with sensible defaults. |
 | `PreconditionerConfig.Off` | Explicit identity — solve unpreconditioned. |
 | `PreconditionerConfig.Additive` | Additive Schwarz shortcut, equivalent to `None`. |
+| `PreconditionerConfig.Diagonal` | Diagonal/Jacobi preconditioner using `diag(D^T W D)^{-1}`. |
 | `AdditiveSchwarz(local_solver?, reduction?)` | Tuned Schwarz config — import from `within.config`. |
 | `Preconditioner` instance | Reuse a previously-built preconditioner across solvers. |
 
@@ -141,6 +145,10 @@ let precond = PreconditionerConfig::Additive {
     reduction: ReductionStrategy::default(),
 };
 let r = solve(categories.view(), &y, None, &lsmr, Some(&precond))?;
+
+// Opt into diagonal/Jacobi preconditioning
+let diagonal = PreconditionerConfig::Diagonal;
+let r = solve(categories.view(), &y, None, &lsmr, Some(&diagonal))?;
 ```
 
 Persistent solver — build once, solve many:
@@ -160,7 +168,7 @@ explicit identity preconditioner.
 | Type | Variants / Fields |
 |---|---|
 | `LsmrOptions` | `{ tol: f64, maxiter: usize, local_size: Option<usize> }` |
-| `PreconditionerConfig` | `Off` \| `Additive { local_solver: LocalSolverConfig, reduction: ReductionStrategy }` (`#[non_exhaustive]`) |
+| `PreconditionerConfig` | `Off` \| `Additive { local_solver: LocalSolverConfig, reduction: ReductionStrategy }` \| `Diagonal` (`#[non_exhaustive]`) |
 | `LocalSolverConfig` | `{ approx_chol, approx_schur, dense_threshold }` |
 | `Preconditioner` | Opaque built handle — reuse via `Solver::new(.., precond)` (owned or `&`) |
 

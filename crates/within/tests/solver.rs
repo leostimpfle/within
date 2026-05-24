@@ -69,6 +69,39 @@ fn test_solver_no_preconditioner() {
 }
 
 #[test]
+fn test_solver_diagonal_preconditioner() {
+    let (categories, y) = categories_and_y();
+    let params = default_params();
+    let precond = PreconditionerConfig::Diagonal;
+
+    let solver =
+        Solver::new(categories.view(), None::<Vec<f64>>, Some(&precond)).expect("solver build");
+    assert!(
+        solver.preconditioner().is_some(),
+        "diagonal preconditioner should be cached"
+    );
+    let result = solver.solve(&y, &params).expect("solver solve");
+
+    assert!(result.converged);
+    common::assert_solution_finite(&result);
+}
+
+#[test]
+fn test_diagonal_preconditioner_single_factor_is_cached() {
+    let categories = array![[0u32], [1], [0], [2], [1]];
+    let precond = PreconditionerConfig::Diagonal;
+
+    let solver =
+        Solver::new(categories.view(), None::<Vec<f64>>, Some(&precond)).expect("solver build");
+
+    let cached = solver
+        .preconditioner()
+        .expect("single-factor diagonal preconditioner should be cached");
+    assert_eq!(cached.nrows(), 3);
+    assert_eq!(cached.ncols(), 3);
+}
+
+#[test]
 fn test_solver_batch() {
     let (categories, _) = categories_and_y();
     let y1 = vec![1.0, 2.0, 3.0, 4.0, 5.0];
@@ -141,6 +174,30 @@ fn test_serde_roundtrip() {
     for (a, b) in r1.x.iter().zip(r2.x.iter()) {
         assert!((a - b).abs() < 1e-12, "serde roundtrip x mismatch");
     }
+}
+
+#[test]
+fn test_diagonal_serde_roundtrip() {
+    let (categories, _) = categories_and_y();
+    let precond = PreconditionerConfig::Diagonal;
+    let solver =
+        Solver::new(categories.view(), None::<Vec<f64>>, Some(&precond)).expect("solver build");
+    let precond_ref = solver
+        .preconditioner()
+        .expect("should have diagonal preconditioner");
+    let bytes = postcard::to_stdvec(precond_ref).expect("serialize");
+    assert!(!bytes.is_empty());
+
+    let deserialized: Preconditioner = postcard::from_bytes(&bytes).expect("deserialize");
+    assert_eq!(deserialized.nrows(), precond_ref.nrows());
+    assert_eq!(deserialized.ncols(), precond_ref.ncols());
+
+    let x: Vec<f64> = (0..precond_ref.ncols()).map(|i| i as f64 + 0.25).collect();
+    let mut y1 = vec![0.0; precond_ref.nrows()];
+    let mut y2 = vec![0.0; deserialized.nrows()];
+    precond_ref.apply(&x, &mut y1).expect("apply original");
+    deserialized.apply(&x, &mut y2).expect("apply deserialized");
+    assert_eq!(y1, y2);
 }
 
 #[test]

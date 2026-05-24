@@ -5,7 +5,7 @@ import pickle
 import numpy as np
 import pytest
 
-from within import LsmrOptions, Preconditioner, Solver, solve
+from within import LsmrOptions, Preconditioner, PreconditionerConfig, Solver, solve
 from within._within import (
     AdditiveSchwarz,
     ApproxCholConfig,
@@ -110,3 +110,23 @@ class TestFePreconditioner:
         r1 = precond.apply(x)
         r2 = precond.apply(x)
         np.testing.assert_array_equal(r1, r2)
+
+    def test_preconditioner_repr_diagonal(self):
+        categories = as_solver_categories(
+            [np.array([0, 1, 0, 1, 2, 2]), np.array([0, 0, 1, 1, 0, 1])]
+        )
+        solver = Solver(categories, preconditioner=PreconditionerConfig.Diagonal)
+        precond = solver.preconditioner
+
+        assert precond is not None
+        assert "Diagonal" in repr(precond)
+
+    def test_single_factor_diagonal_preconditioner_is_cached(self):
+        categories = np.asfortranarray(
+            np.array([[0], [1], [0], [2], [1]], dtype=np.uint32)
+        )
+        solver = Solver(categories, preconditioner=PreconditionerConfig.Diagonal)
+        precond = solver.preconditioner
+
+        assert precond is not None
+        assert precond.nrows == precond.ncols == 3

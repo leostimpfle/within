@@ -137,6 +137,7 @@ impl<S: Store> Solver<S> {
     /// - `None` — build the library default Schwarz preconditioner
     /// - `&PreconditionerConfig` / `Some(&PreconditionerConfig)` — build from a tuned config
     /// - `PreconditionerConfig::Off` — solve unpreconditioned
+    /// - `PreconditionerConfig::Diagonal` — use diagonal/Jacobi preconditioning
     /// - [`Preconditioner`] or `&Preconditioner` — reuse a previously built (or deserialized) preconditioner
     ///
     /// `weights` accepts any `Option<impl Into<Vec<f64>>>` — pass `None` for

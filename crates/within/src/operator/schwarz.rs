@@ -1,6 +1,8 @@
 //! Schwarz preconditioner: bridges FE domain types to the generic
 //! `schwarz-precond` API, plus the opaque public [`Preconditioner`] handle.
 
+use std::sync::Arc;
+
 use rayon::prelude::*;
 use schwarz_precond::{Operator, SchwarzPreconditioner, SubdomainEntry};
 use serde::{Deserialize, Serialize};
@@ -45,6 +47,58 @@ impl Operator for FeSchwarz {
 
     fn apply_adjoint(&self, x: &[f64], y: &mut [f64]) -> Result<(), schwarz_precond::SolveError> {
         self.0.apply_adjoint(x, y)
+    }
+}
+
+/// Diagonal/Jacobi preconditioner for the fixed-effects Gramian.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct DiagonalPreconditioner {
+    inv_diag: Arc<[f64]>,
+}
+
+impl DiagonalPreconditioner {
+    fn new(inv_diag: Vec<f64>) -> Self {
+        Self {
+            inv_diag: Arc::from(inv_diag),
+        }
+    }
+
+    fn apply_scaling(&self, x: &[f64], y: &mut [f64]) -> Result<(), schwarz_precond::SolveError> {
+        let n = self.inv_diag.len();
+        if x.len() != n {
+            return Err(schwarz_precond::SolveError::InvalidInput {
+                context: "DiagonalPreconditioner::apply",
+                message: format!("x.len() ({}) != n_dofs ({})", x.len(), n),
+            });
+        }
+        if y.len() != n {
+            return Err(schwarz_precond::SolveError::InvalidInput {
+                context: "DiagonalPreconditioner::apply",
+                message: format!("y.len() ({}) != n_dofs ({})", y.len(), n),
+            });
+        }
+        for ((yi, &xi), &di) in y.iter_mut().zip(x.iter()).zip(self.inv_diag.iter()) {
+            *yi = di * xi;
+        }
+        Ok(())
+    }
+}
+
+impl Operator for DiagonalPreconditioner {
+    fn nrows(&self) -> usize {
+        self.inv_diag.len()
+    }
+
+    fn ncols(&self) -> usize {
+        self.inv_diag.len()
+    }
+
+    fn apply(&self, x: &[f64], y: &mut [f64]) -> Result<(), schwarz_precond::SolveError> {
+        self.apply_scaling(x, y)
+    }
+
+    fn apply_adjoint(&self, x: &[f64], y: &mut [f64]) -> Result<(), schwarz_precond::SolveError> {
+        self.apply_scaling(x, y)
     }
 }
 
@@ -114,8 +168,8 @@ pub(crate) fn build_entry(
 ///
 /// # For future maintainers
 ///
-/// This contract holds for the current [`Variant::Additive`] variant. Any
-/// new `Variant` added below MUST preserve both invariants:
+/// This contract holds for all current variants. Any new `Variant` added
+/// below MUST preserve both invariants:
 /// 1. `Clone` must be O(1) — wrap any heavy per-variant state in an
 ///    `Arc` rather than deep-copying it.
 /// 2. Factorization state must be immutable after build (interior
@@ -128,13 +182,30 @@ pub struct Preconditioner {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 enum Variant {
+    // Keep Additive first: postcard encodes enum discriminants by declaration order,
+    // and the v2 fixture depends on Additive remaining discriminant 0.
     Additive(FeSchwarz),
+    Diagonal(DiagonalPreconditioner),
 }
 
 impl Preconditioner {
     pub(crate) fn additive(inner: FeSchwarz) -> Self {
         Self {
             inner: Variant::Additive(inner),
+        }
+    }
+
+    fn diagonal(inner: DiagonalPreconditioner) -> Self {
+        Self {
+            inner: Variant::Diagonal(inner),
+        }
+    }
+
+    /// Stable display name for the concrete preconditioner variant.
+    pub fn variant_name(&self) -> &'static str {
+        match &self.inner {
+            Variant::Additive(_) => "Additive",
+            Variant::Diagonal(_) => "Diagonal",
         }
     }
 
@@ -158,26 +229,67 @@ impl Operator for Preconditioner {
     fn nrows(&self) -> usize {
         match &self.inner {
             Variant::Additive(p) => p.nrows(),
+            Variant::Diagonal(p) => p.nrows(),
         }
     }
 
     fn ncols(&self) -> usize {
         match &self.inner {
             Variant::Additive(p) => p.ncols(),
+            Variant::Diagonal(p) => p.ncols(),
         }
     }
 
     fn apply(&self, x: &[f64], y: &mut [f64]) -> Result<(), schwarz_precond::SolveError> {
         match &self.inner {
             Variant::Additive(p) => p.apply(x, y),
+            Variant::Diagonal(p) => p.apply(x, y),
         }
     }
 
     fn apply_adjoint(&self, x: &[f64], y: &mut [f64]) -> Result<(), schwarz_precond::SolveError> {
         match &self.inner {
             Variant::Additive(p) => p.apply_adjoint(x, y),
+            Variant::Diagonal(p) => p.apply_adjoint(x, y),
         }
     }
+}
+
+fn build_diagonal<S: Store>(
+    design: &Design<S>,
+    weights: Option<&[f64]>,
+) -> Result<DiagonalPreconditioner, BuildError> {
+    let mut diag = vec![0.0; design.n_dofs];
+
+    for (factor_idx, factor) in design.factors.iter().enumerate() {
+        let slice = &mut diag[factor.offset..factor.offset + factor.n_levels];
+        match design.store.factor_column(factor_idx) {
+            Some(levels) => {
+                for (uid, &level) in levels.iter().enumerate() {
+                    slice[level as usize] += weights.map_or(1.0, |w| w[uid]);
+                }
+            }
+            None => {
+                for uid in 0..design.n_obs {
+                    let level = design.store.level(uid, factor_idx) as usize;
+                    slice[level] += weights.map_or(1.0, |w| w[uid]);
+                }
+            }
+        }
+    }
+
+    let mut inv_diag = Vec::with_capacity(diag.len());
+    for (index, d) in diag.into_iter().enumerate() {
+        if !d.is_finite() || d <= 0.0 {
+            return Err(BuildError::SingularDiagonal {
+                block: "diagonal",
+                index,
+            });
+        }
+        inv_diag.push(1.0 / d);
+    }
+
+    Ok(DiagonalPreconditioner::new(inv_diag))
 }
 
 /// Build a [`Preconditioner`] from a design and optional observation weights.
@@ -207,6 +319,10 @@ pub(crate) fn build_preconditioner<S: Store>(
             }
             let p = build_additive_with_strategy(domains, local_solver, *reduction)?;
             Ok(Some(Preconditioner::additive(p)))
+        }
+        PreconditionerConfig::Diagonal => {
+            let p = build_diagonal(design, weights)?;
+            Ok(Some(Preconditioner::diagonal(p)))
         }
     }
 }

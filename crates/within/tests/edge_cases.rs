@@ -2,7 +2,7 @@ use ndarray::array;
 use rand::rngs::SmallRng;
 use rand::{Rng, SeedableRng};
 use within::observation::FactorMajorStore;
-use within::{solve, Design, LsmrOptions, PreconditionerConfig, Solver};
+use within::{solve, BuildError, Design, LsmrOptions, PreconditionerConfig, Solver, WithinError};
 
 #[path = "common/orchestrate_helpers.rs"]
 mod common;
@@ -95,6 +95,31 @@ fn test_zero_weight_error_with_preconditioner() {
     );
 }
 
+#[test]
+fn test_zero_weight_error_with_diagonal_preconditioner() {
+    let cats = array![[0u32, 0], [1u32, 0], [0u32, 1], [1u32, 1], [2u32, 0]];
+    let y = vec![1.0f64; 5];
+    let weights = vec![0.0f64; 5];
+    let precond = PreconditionerConfig::Diagonal;
+
+    let err = solve(
+        cats.view(),
+        &y,
+        Some(&weights),
+        &LsmrOptions::default(),
+        Some(&precond),
+    )
+    .expect_err("zero weights with diagonal preconditioner should produce an error");
+
+    match err {
+        WithinError::Build(BuildError::SingularDiagonal {
+            block: "diagonal",
+            index: 0,
+        }) => {}
+        other => panic!("expected diagonal SingularDiagonal, got {other:?}"),
+    }
+}
+
 /// Without a preconditioner, all-zero weights produce a zero system and a
 /// zero RHS. LSMR starts with residual zero and converges immediately to x=0.
 #[test]
@@ -120,6 +145,33 @@ fn test_zero_weight_no_preconditioner_returns_zero() {
         result.x.iter().all(|&v| v == 0.0),
         "zero-Gramian solution must be the zero vector"
     );
+}
+
+#[test]
+fn test_diagonal_and_unpreconditioned_solutions_are_finite() {
+    let cats = array![[0u32, 0], [1, 0], [0, 1], [1, 1], [2, 0], [2, 1]];
+    let y = vec![1.0, 2.0, 1.5, 2.5, 3.0, 3.5];
+    let params = LsmrOptions::default();
+
+    let diagonal = solve(
+        cats.view(),
+        &y,
+        None,
+        &params,
+        Some(&PreconditionerConfig::Diagonal),
+    )
+    .expect("diagonal solve");
+    let unpreconditioned = solve(
+        cats.view(),
+        &y,
+        None,
+        &params,
+        Some(&PreconditionerConfig::Off),
+    )
+    .expect("unpreconditioned solve");
+
+    common::assert_solution_finite(&diagonal);
+    common::assert_solution_finite(&unpreconditioned);
 }
 
 // ---------------------------------------------------------------------------

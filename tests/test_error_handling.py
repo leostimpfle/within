@@ -66,8 +66,9 @@ class TestErrorHandling:
         """String preconditioner should raise TypeError."""
         cats = as_solver_categories([np.array([0, 1, 0]), np.array([0, 0, 1])])
         y = np.array([1.0, 2.0, 3.0])
-        with pytest.raises(TypeError):
+        with pytest.raises(TypeError) as exc:
             solve(cats, y, preconditioner="invalid")
+        assert "PreconditionerConfig.Diagonal" in str(exc.value)
 
     def test_approx_schur_config_split_zero_raises(self):
         """ApproxSchurConfig(split=0) should raise ValueError."""

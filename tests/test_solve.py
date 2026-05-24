@@ -83,6 +83,21 @@ class TestPreconditioners:
         )
         assert result.converged
 
+    def test_diagonal_preconditioner(self):
+        rng = np.random.default_rng(123)
+        categories = as_solver_categories(
+            [rng.integers(0, 10, size=400), rng.integers(0, 8, size=400)]
+        )
+        y = rng.standard_normal(400)
+        result = solve(
+            categories,
+            y,
+            LsmrOptions(maxiter=2000),
+            preconditioner=PreconditionerConfig.Diagonal,
+        )
+        assert result.converged
+        assert np.all(np.isfinite(result.x))
+
 
 class TestDemean:
     def test_recovers_fixed_effects(self):
@@ -288,6 +303,31 @@ class TestSolverSerde:
             as_solver_categories(cats), preconditioner=PreconditionerConfig.Off
         )
         assert solver.preconditioner is None
+
+    def test_diagonal_preconditioner_pickle_and_reuse(self):
+        import pickle
+
+        categories = as_solver_categories(
+            [np.array([0, 1, 0, 1, 2, 2]), np.array([0, 0, 1, 1, 0, 1])]
+        )
+        y = np.array([1.0, 2.0, 1.5, 2.5, 3.0, 3.5])
+
+        solver1 = Solver(categories, preconditioner=PreconditionerConfig.Diagonal)
+        r1 = solver1.solve(y)
+        precond = solver1.preconditioner
+
+        assert precond is not None
+        assert "Diagonal" in repr(precond)
+
+        x = np.arange(precond.ncols, dtype=np.float64) + 0.25
+        np.testing.assert_array_equal(precond.apply(x), precond.apply(x))
+
+        precond2 = pickle.loads(pickle.dumps(precond))
+        np.testing.assert_array_equal(precond.apply(x), precond2.apply(x))
+
+        solver2 = Solver(categories, preconditioner=precond2)
+        r2 = solver2.solve(y)
+        np.testing.assert_allclose(r2.x, r1.x, atol=1e-10)
 
 
 # ---------------------------------------------------------------------------

@@ -1,7 +1,8 @@
 //! Solver and preconditioner configuration types.
 //!
 //! `Option<&PreconditionerConfig>` accepts `None` (default Additive Schwarz),
-//! `Some(Off)` (identity), or `Some(Additive(_))` (tuned).
+//! `Some(Off)` (identity), `Some(Additive(_))` (tuned), or
+//! `Some(Diagonal)` (Jacobi).
 
 pub use schwarz_precond::ReductionStrategy;
 
@@ -132,6 +133,8 @@ pub enum PreconditionerConfig {
         /// Strategy for combining overlapping subdomain contributions.
         reduction: ReductionStrategy,
     },
+    /// Diagonal/Jacobi preconditioner with `M^{-1} = diag(D^T W D)^{-1}`.
+    Diagonal,
 }
 
 impl Default for PreconditionerConfig {

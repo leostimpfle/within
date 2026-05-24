@@ -39,6 +39,12 @@ let precond = PreconditionerConfig::default();
 let result = solve(categories.view(), &y, None, &lsmr, Some(&precond))
     .expect("solve should succeed");
 assert!(result.converged);
+
+// Or opt into a diagonal/Jacobi preconditioner.
+let diagonal = PreconditionerConfig::Diagonal;
+let result = solve(categories.view(), &y, None, &lsmr, Some(&diagonal))
+    .expect("solve should succeed");
+assert!(result.converged);
 ```
 
 ## Feature flags

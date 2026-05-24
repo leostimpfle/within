@@ -141,12 +141,14 @@ impl PyApproxSchurConfig {
 ///
 /// - ``PreconditionerConfig.Additive`` — additive Schwarz (default)
 /// - ``PreconditionerConfig.Off`` — no preconditioner
+/// - ``PreconditionerConfig.Diagonal`` — diagonal/Jacobi preconditioner
 #[pyclass(frozen, eq, eq_int, module = "within._within")]
 #[pyo3(name = "PreconditionerConfig")]
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum PyPreconditionerConfig {
     Additive = 0,
     Off = 1,
+    Diagonal = 2,
 }
 
 #[pymethods]
@@ -157,6 +159,7 @@ impl PyPreconditionerConfig {
         match val {
             0 => Ok(Self::Additive),
             1 => Ok(Self::Off),
+            2 => Ok(Self::Diagonal),
             _ => Err(pyo3::exceptions::PyValueError::new_err(format!(
                 "invalid PreconditionerConfig discriminant: {val}"
             ))),
@@ -429,6 +432,7 @@ fn extract_preconditioner_config(
         return Ok(Some(match p {
             PyPreconditionerConfig::Off => PreconditionerConfig::Off,
             PyPreconditionerConfig::Additive => PreconditionerConfig::default(),
+            PyPreconditionerConfig::Diagonal => PreconditionerConfig::Diagonal,
         }));
     }
 
@@ -470,7 +474,7 @@ fn extract_preconditioner_config(
 
     Err(PyErr::new::<pyo3::exceptions::PyTypeError, _>(
         "preconditioner must be PreconditionerConfig.Additive, PreconditionerConfig.Off, \
-         AdditiveSchwarz(...), Preconditioner(...), or None",
+         PreconditionerConfig.Diagonal, AdditiveSchwarz(...), Preconditioner(...), or None",
     ))
 }
 
@@ -715,7 +719,11 @@ impl PyPreconditioner {
     }
 
     fn __repr__(&self) -> String {
-        format!("Preconditioner(Additive, n={})", self.inner.nrows())
+        format!(
+            "Preconditioner({}, n={})",
+            self.inner.variant_name(),
+            self.inner.nrows()
+        )
     }
 
     /// Pickle support: serialize to ``(bytes,)`` constructor arg.
