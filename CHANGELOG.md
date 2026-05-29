@@ -50,6 +50,7 @@ Modified LSMR is now the sole iterative solver, replacing CG and GMRES.
 - **BREAKING:** `Solver::new` accepts `Option<impl Into<Vec<f64>>>` for weights; `WithinError` is `#[non_exhaustive]`.
 - Free `solve()` / `solve_batch()` accept `impl Into<PreconditionerInput>` (same shapes as `Solver::new`).
 - `Solver` and `Preconditioner` implement `Debug`.
+- `approx-chol` bumped `0.1` → `0.2` (now published on crates.io); the new upstream sampler may produce slightly different fill edges in the Schur complement.
 
 ### Fixed
 

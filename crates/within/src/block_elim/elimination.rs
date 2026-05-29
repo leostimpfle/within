@@ -56,8 +56,6 @@ pub(crate) struct Star<'a> {
     col_indices: &'a [u32],
     /// Edge weights to each neighbor.
     weights: &'a [f64],
-    /// `D_elim[k]` (needed by `clique_tree_sample`).
-    diag: f64,
 }
 
 impl Star<'_> {
@@ -87,7 +85,7 @@ impl SampledCliqueEmitter {
         }
         let seed = self.seed.wrapping_add(star.index as u64);
         if self.split <= 1 {
-            clique_tree_sample(scratch, star.diag, seed, edges);
+            clique_tree_sample(scratch, seed, edges);
         } else {
             clique_tree_sample_multi(scratch, self.split, seed, edges);
         }
@@ -107,7 +105,6 @@ pub(crate) struct Elimination<'a> {
     pub(crate) n_keep: usize,
     pub(crate) n_elim: usize,
     pub(crate) inv_diag_elim: Vec<f64>,
-    pub(crate) diag_elim: &'a [f64],
     pub(crate) diag_keep: &'a [f64],
     pub(crate) keep_to_elim: &'a CsrBlock,
     pub(crate) elim_to_keep: &'a CsrBlock,
@@ -156,7 +153,6 @@ impl<'a> Elimination<'a> {
             n_keep,
             n_elim,
             inv_diag_elim,
-            diag_elim,
             diag_keep,
             keep_to_elim,
             elim_to_keep,
@@ -171,7 +167,6 @@ impl<'a> Elimination<'a> {
             index: k,
             col_indices: &self.elim_to_keep.indices[start..end],
             weights: &self.elim_to_keep.data[start..end],
-            diag: self.diag_elim[k],
         }
     }
 
