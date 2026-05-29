@@ -159,8 +159,13 @@ impl Store for ArrayStore<'_> {
 
     fn factor_column(&self, factor: usize) -> Option<&[u32]> {
         let strides = self.categories.strides();
-        // Columns are contiguous only when the row stride is 1 (F-order).
-        if strides[0] != 1 {
+        // Columns are contiguous only when the row stride is 1 (F-order). The
+        // column stride must additionally be positive: a column-reversed view
+        // (e.g. `cats[:, ::-1]` of an F-order array) keeps `strides[0] == 1`
+        // but has `strides[1] < 1`, which would wrap to a huge `usize` below
+        // and produce an out-of-bounds `from_raw_parts`. Fall back to the safe
+        // per-element `level()` path in that case.
+        if strides[0] != 1 || strides[1] < 1 {
             return None;
         }
         let n_obs = self.categories.nrows();

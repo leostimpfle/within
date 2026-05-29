@@ -10,7 +10,18 @@ use crate::domain::{Design, FactorMeta};
 use crate::observation::Store;
 
 /// Max entries in a flat dense cross-tab accumulator (~40 MB at 8 bytes each).
+/// Absolute hard cap on the dense path: tables larger than this always go
+/// sparse, regardless of the cost comparison in `accumulate_cross_block`.
 const DENSE_TABLE_MAX_ENTRIES: usize = 5_000_000;
+
+/// Checked `usize -> u32` for CSR indptr/index and compact-level values. A
+/// silent `as u32` truncation above `u32::MAX` would corrupt the assembled
+/// cross-tab with no diagnostic; these are build-path invariants, so panic
+/// loudly instead.
+#[inline]
+fn to_u32(x: usize) -> u32 {
+    u32::try_from(x).expect("CSR index exceeds u32::MAX")
+}
 
 // ---------------------------------------------------------------------------
 // BipartiteComponent / SchurData — supporting types for CrossTab
@@ -82,12 +93,12 @@ fn build_compact_mapping(
     let mut local_to_global = Vec::with_capacity(n_q + n_r);
     for (j, &a) in active_q.iter().enumerate() {
         if a {
-            local_to_global.push((fq.offset + j) as u32);
+            local_to_global.push(to_u32(fq.offset + j));
         }
     }
     for (k, &a) in active_r.iter().enumerate() {
         if a {
-            local_to_global.push((fr.offset + k) as u32);
+            local_to_global.push(to_u32(fr.offset + k));
         }
     }
 
@@ -254,11 +265,11 @@ impl CrossTab {
         // Build reverse maps: parent compact index -> component compact index
         let mut q_remap = vec![u32::MAX; self.n_q()];
         for (new_idx, &old_idx) in comp.q_indices.iter().enumerate() {
-            q_remap[old_idx] = new_idx as u32;
+            q_remap[old_idx] = to_u32(new_idx);
         }
         let mut r_remap = vec![u32::MAX; self.n_r()];
         for (new_idx, &old_idx) in comp.r_indices.iter().enumerate() {
-            r_remap[old_idx] = new_idx as u32;
+            r_remap[old_idx] = to_u32(new_idx);
         }
 
         // Extract diagonals
@@ -280,7 +291,7 @@ impl CrossTab {
                     c_data.push(self.c.data[idx]);
                 }
             }
-            c_indptr[new_qi + 1] = c_indices.len() as u32;
+            c_indptr[new_qi + 1] = to_u32(c_indices.len());
         }
 
         let c = CsrBlock {
@@ -310,7 +321,8 @@ impl CrossTab {
 /// Used by `CrossTab::build_for_pair`. Observations whose compact index is
 /// `u32::MAX` are skipped.
 ///
-/// Dispatches to a dense or sparse path based on the table size.
+/// Dispatches to a dense or sparse path by comparing their estimated peak
+/// transient memory, with a hard dense-table ceiling.
 fn accumulate_cross_block<S: Store>(
     design: &Design<S>,
     weights: Option<&[f64]>,
@@ -318,15 +330,32 @@ fn accumulate_cross_block<S: Store>(
     r: usize,
     active: &ActiveLevels,
 ) -> (CsrBlock, Vec<f64>, Vec<f64>) {
-    let table_size = active.n_q * active.n_r;
-    if table_size <= DENSE_TABLE_MAX_ENTRIES {
-        accumulate_dense_cross_block(design, weights, q, r, active)
-    } else {
+    // Cost-based dispatch. Both paths produce a bit-identical CSR `C`, `diag_q`,
+    // and `diag_r`; only their peak transient allocation differs:
+    //   - dense path: a flat `n_q * n_r` f64 table -> ~8 * n_q * n_r bytes;
+    //   - sparse path: per-observation buckets of (u32 col, f64 weight) sized
+    //     by valid observations (approximated by n_obs) -> ~12 * n_obs bytes.
+    // Picking sparse purely on cell count makes the sparse path use MORE memory
+    // than the dense table it replaces whenever n_obs >> cells. So use the dense
+    // table unconditionally up to `DENSE_TABLE_MAX_ENTRIES` (for small tables
+    // memory is a non-issue and the flat table is the faster build); only past
+    // that cap do we consider sparse, and even then only when its bucket cost is
+    // actually below the dense table cost -- otherwise the large-n_obs blowup
+    // this guards against would make sparse the *more* expensive choice, so we
+    // keep dense. Saturating math keeps the comparison well-defined even for
+    // enormous level counts.
+    let table_size = active.n_q.saturating_mul(active.n_r);
+    let dense_cost = table_size.saturating_mul(8);
+    let sparse_cost = design.store.n_obs().saturating_mul(12);
+    let go_sparse = table_size > DENSE_TABLE_MAX_ENTRIES && sparse_cost < dense_cost;
+    if go_sparse {
         accumulate_sparse_cross_block(design, weights, q, r, active)
+    } else {
+        accumulate_dense_cross_block(design, weights, q, r, active)
     }
 }
 
-/// Dense path: flat table with O(1) accumulation per observation (n_q * n_r <= 5M).
+/// Dense path: flat `n_q * n_r` table with O(1) accumulation per observation.
 fn accumulate_dense_cross_block<S: Store>(
     design: &Design<S>,
     weights: Option<&[f64]>,
@@ -439,7 +468,7 @@ fn accumulate_sparse_cross_block<S: Store>(
         for idx in start..end {
             let col = bucket_cols[idx] as usize;
             if work[col] == 0.0 {
-                touched.push(col as u32);
+                touched.push(to_u32(col));
             }
             work[col] += bucket_vals[idx];
         }
@@ -452,7 +481,7 @@ fn accumulate_sparse_cross_block<S: Store>(
             }
             work[col as usize] = 0.0;
         }
-        c_indptr[row + 1] = c_indices.len() as u32;
+        c_indptr[row + 1] = to_u32(c_indices.len());
         touched.clear();
     }
 
