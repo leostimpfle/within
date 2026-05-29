@@ -5,27 +5,7 @@ pub(crate) mod factor_pairs;
 
 pub(crate) use cross_tab::{find_all_active_levels, CrossTab};
 
-pub(crate) use factor_pairs::build_local_domains;
-
-use schwarz_precond::SubdomainCore;
-
-/// A local subdomain corresponding to a pair of factors.
-#[derive(Clone)]
-pub(crate) struct Subdomain {
-    /// Indices `(q, r)` of the two factors this subdomain covers.
-    pub factor_pair: (usize, usize),
-    /// Generic subdomain core: global DOF indices, restriction, and partition-of-unity weights.
-    pub core: SubdomainCore,
-}
-
-impl std::fmt::Debug for Subdomain {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("Subdomain")
-            .field("factor_pair", &self.factor_pair)
-            .field("n_dofs", &self.core.n_local())
-            .finish()
-    }
-}
+pub(crate) use factor_pairs::{build_local_domains, Subdomain};
 
 // ===========================================================================
 // Design — categorical fixed-effects design (data + layout)

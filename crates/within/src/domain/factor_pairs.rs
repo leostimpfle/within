@@ -6,11 +6,29 @@
 //!
 //! Entry point: [`build_local_domains`].
 
-use schwarz_precond::PartitionWeights;
+use schwarz_precond::{PartitionWeights, SubdomainCore};
 
 use super::cross_tab::BipartiteComponent;
-use super::{find_all_active_levels, CrossTab, Design, Subdomain};
+use super::{find_all_active_levels, CrossTab, Design};
 use crate::observation::Store;
+
+/// A local subdomain corresponding to a pair of factors.
+#[derive(Clone)]
+pub(crate) struct Subdomain {
+    /// Indices `(q, r)` of the two factors this subdomain covers.
+    pub factor_pair: (usize, usize),
+    /// Generic subdomain core: global DOF indices, restriction, and partition-of-unity weights.
+    pub core: SubdomainCore,
+}
+
+impl std::fmt::Debug for Subdomain {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Subdomain")
+            .field("factor_pair", &self.factor_pair)
+            .field("n_dofs", &self.core.n_local())
+            .finish()
+    }
+}
 
 /// Build local subdomains (with pre-built CrossTabs) for pairs of factors.
 ///
