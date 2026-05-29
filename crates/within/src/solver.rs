@@ -261,13 +261,14 @@ impl<S: Store> Solver<S> {
 
         let rect_op = DesignOperator::new(&self.design, self.weights.as_deref());
         let b = rect_op.weighted_rhs(y);
+        let b: &[f64] = &b;
 
         let t_solve_start = Instant::now();
         let time_setup = t_solve_start.duration_since(t_start).as_secs_f64();
 
         let r = match self.preconditioner.as_ref() {
-            Some(p) => mlsmr(&rect_op, &b, p, lsmr.tol, lsmr.maxiter, lsmr.local_size)?,
-            None => lsmr_solve(&rect_op, &b, lsmr.tol, lsmr.maxiter, lsmr.local_size)?,
+            Some(p) => mlsmr(&rect_op, b, p, lsmr.tol, lsmr.maxiter, lsmr.local_size)?,
+            None => lsmr_solve(&rect_op, b, lsmr.tol, lsmr.maxiter, lsmr.local_size)?,
         };
 
         let time_solve = t_solve_start.elapsed().as_secs_f64();
@@ -285,11 +286,11 @@ impl<S: Store> Solver<S> {
         // Compute D^T W v as rect_op.apply_adjoint(W^{1/2} v): apply_adjoint
         // delivers D^T W^{1/2} (·), so feeding W^{1/2} v gives D^T W v.
         let mut rhs = vec![0.0; self.design.n_dofs];
-        rect_op.apply_adjoint(&b, &mut rhs)?;
+        rect_op.apply_adjoint(b, &mut rhs)?;
         let rhs_norm = norm(&rhs).max(1e-15);
         let weighted_demeaned = rect_op.weighted_rhs(&demeaned);
         let mut residual_dof = vec![0.0; self.design.n_dofs];
-        rect_op.apply_adjoint(&weighted_demeaned, &mut residual_dof)?;
+        rect_op.apply_adjoint(weighted_demeaned.as_ref(), &mut residual_dof)?;
         let residual = norm(&residual_dof) / rhs_norm;
 
         Ok(SolveResult {

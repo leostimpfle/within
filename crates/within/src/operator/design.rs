@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::sync::atomic::Ordering;
 
 use portable_atomic::AtomicF64;
@@ -98,7 +99,7 @@ where
     }
 }
 
-fn scatter_apply<S, F>(design: &Design<S>, dst: &mut [f64], value_fn: F)
+fn scatter_apply<S, F>(design: &Design<S>, dst: &mut [f64], value_fn: F, atomic_buf: &[AtomicF64])
 where
     S: Store,
     F: Fn(usize) -> f64 + Sync,
@@ -106,8 +107,6 @@ where
     debug_assert_eq!(dst.len(), design.n_dofs);
     let factor_columns = factor_columns(&design.store);
     let parallel = design.n_obs > PAR_THRESHOLD;
-    let max_levels = design.factors.iter().map(|f| f.n_levels).max().unwrap_or(0);
-    let mut atomic_buf: Vec<AtomicF64> = Vec::with_capacity(max_levels);
     let store = &design.store;
     let n_rows = design.n_obs;
 
@@ -119,9 +118,7 @@ where
         match ScatterStrategy::pick(parallel, f.n_levels) {
             ScatterStrategy::Sequential => scatter_sequential(slice, n_rows, lvl, &value_fn),
             ScatterStrategy::Fold => scatter_fold(slice, n_rows, lvl, &value_fn),
-            ScatterStrategy::Atomic => {
-                scatter_atomic(slice, n_rows, lvl, &value_fn, &mut atomic_buf)
-            }
+            ScatterStrategy::Atomic => scatter_atomic(slice, n_rows, lvl, &value_fn, atomic_buf),
         }
     }
 }
@@ -170,21 +167,25 @@ fn scatter_fold(
 }
 
 /// Parallel scatter-add via atomic CAS — best when `slice.len()` is large
-/// relative to thread count (low contention). `atomic_buf` is reused across
-/// factors to amortize allocation.
+/// relative to thread count (low contention). `atomic_buf` is the operator's
+/// reusable scratch (sized to the largest factor); we use its first
+/// `slice.len()` slots, re-seeding them via `store` so no allocation occurs.
 fn scatter_atomic(
     slice: &mut [f64],
     n_rows: usize,
     lvl: impl Fn(usize) -> usize + Sync,
     value_fn: &(impl Fn(usize) -> f64 + Sync),
-    atomic_buf: &mut Vec<AtomicF64>,
+    atomic_buf: &[AtomicF64],
 ) {
-    atomic_buf.clear();
-    atomic_buf.extend(slice.iter().map(|&v| AtomicF64::new(v)));
+    debug_assert!(atomic_buf.len() >= slice.len());
+    let buf = &atomic_buf[..slice.len()];
+    for (a, &v) in buf.iter().zip(slice.iter()) {
+        a.store(v, Ordering::Relaxed);
+    }
     (0..n_rows).into_par_iter().for_each(|i| {
-        atomic_buf[lvl(i)].fetch_add(value_fn(i), Ordering::Relaxed);
+        buf[lvl(i)].fetch_add(value_fn(i), Ordering::Relaxed);
     });
-    for (d, a) in slice.iter_mut().zip(atomic_buf.iter()) {
+    for (d, a) in slice.iter_mut().zip(buf.iter()) {
         *d = a.load(Ordering::Relaxed);
     }
 }
@@ -202,10 +203,17 @@ fn scatter_atomic(
 /// [`DesignOperator::new`] for `D`, or `Some(&w)` for `W^{1/2} D`. The branch
 /// on weights is hoisted outside the per-row loop — the weighted finalize is
 /// fused into the last gather sweep, and the adjoint multiplies inline through
-/// a closure, so there is no scratch buffer.
+/// a closure, so there is no per-row scratch buffer.
 pub(crate) struct DesignOperator<'a, S: Store> {
     design: &'a Design<S>,
     sqrt_weights: Option<Vec<f64>>,
+    /// Reusable atomic-scatter scratch, sized once to the largest factor's
+    /// level count and reused across factors and `apply_adjoint` calls so it is
+    /// allocated once per operator rather than once per LSMR iteration.
+    /// `apply_adjoint` takes `&self`, but `AtomicF64`'s load/store/fetch_add are
+    /// `&self` operations, so a plain `Vec<AtomicF64>` (already `Sync`) needs no
+    /// lock: each call re-seeds the buffer via `store` instead of resizing it.
+    scatter_scratch: Vec<AtomicF64>,
 }
 
 impl<'a, S: Store> DesignOperator<'a, S> {
@@ -233,19 +241,22 @@ impl<'a, S: Store> DesignOperator<'a, S> {
             );
             w.iter().map(|wi| wi.sqrt()).collect()
         });
+        let max_levels = design.factors.iter().map(|f| f.n_levels).max().unwrap_or(0);
         Self {
             design,
             sqrt_weights,
+            scatter_scratch: (0..max_levels).map(|_| AtomicF64::new(0.0)).collect(),
         }
     }
 
     /// Compute the observation-space RHS `b = W^{1/2} y`.
     ///
-    /// For unweighted designs, returns a copy of `y`.
-    pub(crate) fn weighted_rhs(&self, y: &[f64]) -> Vec<f64> {
+    /// For unweighted designs, borrows `y` (no allocation); the weighted
+    /// variant returns an owned scaled copy.
+    pub(crate) fn weighted_rhs<'y>(&self, y: &'y [f64]) -> Cow<'y, [f64]> {
         match &self.sqrt_weights {
-            None => y.to_vec(),
-            Some(sw) => y.iter().zip(sw).map(|(&yi, &swi)| swi * yi).collect(),
+            None => Cow::Borrowed(y),
+            Some(sw) => Cow::Owned(y.iter().zip(sw).map(|(&yi, &swi)| swi * yi).collect()),
         }
     }
 }
@@ -271,9 +282,13 @@ impl<S: Store> Operator for DesignOperator<'_, S> {
         debug_assert_eq!(x.len(), self.design.n_obs);
         debug_assert_eq!(y.len(), self.design.n_dofs);
         y.fill(0.0);
+        // Reuse the per-operator atomic-scatter scratch across iterations. No
+        // lock needed: `AtomicF64` mutates through `&self`, and a single
+        // operator's `apply_adjoint` calls are sequential (`solve_batch` builds
+        // a distinct operator per RHS), so the shared buffer is never raced.
         match &self.sqrt_weights {
-            Some(sw) => scatter_apply(self.design, y, |i| sw[i] * x[i]),
-            None => scatter_apply(self.design, y, |i| x[i]),
+            Some(sw) => scatter_apply(self.design, y, |i| sw[i] * x[i], &self.scatter_scratch),
+            None => scatter_apply(self.design, y, |i| x[i], &self.scatter_scratch),
         }
         Ok(())
     }
