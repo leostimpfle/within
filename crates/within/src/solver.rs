@@ -258,13 +258,12 @@ impl<S: Store> Solver<S> {
         }
 
         let t_start = Instant::now();
-        let t_setup_start = Instant::now();
 
         let rect_op = DesignOperator::new(&self.design, self.weights.as_deref());
         let b = rect_op.weighted_rhs(y);
 
         let t_solve_start = Instant::now();
-        let time_setup = t_solve_start.duration_since(t_setup_start).as_secs_f64();
+        let time_setup = t_solve_start.duration_since(t_start).as_secs_f64();
 
         let r = match self.preconditioner.as_ref() {
             Some(p) => mlsmr(&rect_op, &b, p, lsmr.tol, lsmr.maxiter, lsmr.local_size)?,

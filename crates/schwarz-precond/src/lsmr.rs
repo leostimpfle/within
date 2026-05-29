@@ -88,7 +88,13 @@ pub fn lsmr<A: Operator + ?Sized>(
 
     let b_norm = vec_norm(b);
     if b_norm == 0.0 {
-        return Ok(zero_rhs_result(n));
+        return Ok(LsmrResult {
+            x: vec![0.0; n],
+            converged: true,
+            iterations: 0,
+            residual_norm: 0.0,
+            stop_reason: LsmrStopReason::ZeroRhs,
+        });
     }
 
     let local_size = local_size.unwrap_or(0);
@@ -123,22 +129,18 @@ pub fn mlsmr<A: Operator + ?Sized, M: Operator + ?Sized>(
 
     let b_norm = vec_norm(b);
     if b_norm == 0.0 {
-        return Ok(zero_rhs_result(n));
+        return Ok(LsmrResult {
+            x: vec![0.0; n],
+            converged: true,
+            iterations: 0,
+            residual_norm: 0.0,
+            stop_reason: LsmrStopReason::ZeroRhs,
+        });
     }
 
     let local_size = local_size.unwrap_or(0);
     let (bidiag, step1) = ModifiedGolubKahan::init(operator, preconditioner, b, local_size)?;
     lsmr_from_bidiag(bidiag, step1, b_norm, tol, maxiter)
-}
-
-fn zero_rhs_result(n: usize) -> LsmrResult {
-    LsmrResult {
-        x: vec![0.0; n],
-        converged: true,
-        iterations: 0,
-        residual_norm: 0.0,
-        stop_reason: LsmrStopReason::ZeroRhs,
-    }
 }
 
 /// Run the LSMR scalar/vector recurrences over a bidiagonalization stream.

@@ -416,6 +416,23 @@ fn column_refs(columns: &[Vec<f64>]) -> Vec<&[f64]> {
 // Extraction helpers
 // ---------------------------------------------------------------------------
 
+fn build_local_solver_config(py: Python<'_>, sc: &PyLocalSolverConfig) -> LocalSolverConfig {
+    let approx_chol = sc
+        .approx_chol
+        .as_ref()
+        .map(|c| c.bind(py).get().to_native())
+        .unwrap_or_else(|| LocalSolverConfig::default().approx_chol);
+    let approx_schur = sc
+        .approx_schur
+        .as_ref()
+        .map(|c| c.bind(py).get().to_native());
+    LocalSolverConfig {
+        approx_chol,
+        approx_schur,
+        dense_threshold: sc.dense_threshold,
+    }
+}
+
 fn extract_preconditioner_config(
     py: Python<'_>,
     preconditioner: Option<&Bound<'_, PyAny>>,
@@ -444,21 +461,7 @@ fn extract_preconditioner_config(
                         "local_solver must be LocalSolverConfig or None",
                     ));
                 };
-                let sc = sc.get();
-                let approx_chol = sc
-                    .approx_chol
-                    .as_ref()
-                    .map(|c| c.bind(py).get().to_native())
-                    .unwrap_or_else(|| LocalSolverConfig::default().approx_chol);
-                let approx_schur = sc
-                    .approx_schur
-                    .as_ref()
-                    .map(|c| c.bind(py).get().to_native());
-                LocalSolverConfig {
-                    approx_chol,
-                    approx_schur,
-                    dense_threshold: sc.dense_threshold,
-                }
+                build_local_solver_config(py, sc.get())
             }
         };
         let reduction = s.reduction.to_native();
