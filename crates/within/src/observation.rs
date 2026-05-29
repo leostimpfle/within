@@ -5,21 +5,6 @@ use ndarray::ArrayView2;
 use crate::error::BuildError;
 
 // ---------------------------------------------------------------------------
-// FactorMeta — per-factor metadata (no observation data)
-// ---------------------------------------------------------------------------
-
-/// Per-factor metadata: level count and global DOF offset.
-///
-/// Separated from observation data — the factor no longer "owns" categories.
-#[derive(Debug, Clone, Copy)]
-pub struct FactorMeta {
-    /// Number of levels (groups) in this factor.
-    pub n_levels: usize,
-    /// Starting index in coefficient space for this factor.
-    pub offset: usize,
-}
-
-// ---------------------------------------------------------------------------
 // Store trait
 // ---------------------------------------------------------------------------
 
@@ -45,6 +30,26 @@ pub trait Store: Send + Sync {
     fn factor_column(&self, _factor: usize) -> Option<&[u32]> {
         None
     }
+}
+
+/// Resolve the level for row `i` in factor `q`.
+///
+/// `levels` is the optional fast-path column (a contiguous `&[u32]` view of the
+/// factor's levels); when `None`, fall back to the store's virtual lookup.
+/// Hoisted out of inner loops so the compiler keeps the row body branch-free.
+#[inline]
+pub(crate) fn level_at<S: Store>(store: &S, levels: Option<&[u32]>, i: usize, q: usize) -> usize {
+    match levels {
+        Some(col) => col[i] as usize,
+        None => store.level(i, q) as usize,
+    }
+}
+
+/// Pre-compute the factor-column fast-path slices for every factor of `store`.
+pub(crate) fn factor_columns<S: Store>(store: &S) -> Vec<Option<&[u32]>> {
+    (0..store.n_factors())
+        .map(|q| store.factor_column(q))
+        .collect()
 }
 
 // ---------------------------------------------------------------------------
@@ -154,8 +159,13 @@ impl Store for ArrayStore<'_> {
 
     fn factor_column(&self, factor: usize) -> Option<&[u32]> {
         let strides = self.categories.strides();
-        // Columns are contiguous only when the row stride is 1 (F-order).
-        if strides[0] != 1 {
+        // Columns are contiguous only when the row stride is 1 (F-order). The
+        // column stride must additionally be positive: a column-reversed view
+        // (e.g. `cats[:, ::-1]` of an F-order array) keeps `strides[0] == 1`
+        // but has `strides[1] < 1`, which would wrap to a huge `usize` below
+        // and produce an out-of-bounds `from_raw_parts`. Fall back to the safe
+        // per-element `level()` path in that case.
+        if strides[0] != 1 || strides[1] < 1 {
             return None;
         }
         let n_obs = self.categories.nrows();

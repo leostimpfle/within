@@ -73,27 +73,24 @@ impl BufferPool {
         ))
     }
 
-    fn put(
-        &self,
-        bufs: SchwarzBuffers,
-        apply_result: &Result<(), SolveError>,
-    ) -> Result<(), SolveError> {
+    /// Return a buffer to the pool. Infallible by design: pool bookkeeping
+    /// must never mask the caller's real `apply_result`. On the error path the
+    /// buffer is dropped (see below); on a poisoned pool lock the buffer is
+    /// likewise dropped rather than surfaced as a `Synchronization` error.
+    fn put(&self, bufs: SchwarzBuffers, apply_result: &Result<(), SolveError>) {
         // On error, the atomic backend's swap-zero readout pass is skipped,
         // leaving stale partial-write values in the AtomicU64 vec. Drop the
         // buffer rather than pooling it for the next caller to inherit dirty
         // state.
         if apply_result.is_err() {
-            return Ok(());
+            return;
         }
+        // A poisoned lock means a worker panicked; just drop the buffer (the
+        // pool lazily re-allocates on the next `take`) instead of erroring.
         if let Ok(mut pool) = self.inner.lock() {
             if pool.len() < Self::MAX_POOL_SIZE {
                 pool.push(bufs);
             }
-            Ok(())
-        } else {
-            Err(SolveError::Synchronization {
-                context: "additive.buf_pool.lock.push",
-            })
         }
     }
 }
@@ -218,7 +215,15 @@ impl WorkerReductionBuffers {
         z: &mut [f64],
         apply_result: &Result<(), SolveError>,
     ) -> Result<Vec<AdditiveSweepBuffers>, SolveError> {
+        // Always leave `z` fully written so a failed apply never exposes a
+        // partial accumulation. On the apply-error path zero `z` up front —
+        // there is nothing to reduce, and this also covers the case where the
+        // subsequent pool recovery fails.
+        if apply_result.is_err() {
+            z.fill(0.0);
+        }
         let mut buffers = self.into_buffers()?;
+        // On success, `reduce_into` zeroes-then-sums into `z`.
         if apply_result.is_ok() {
             Self::reduce_into(z, &buffers);
         }
@@ -314,7 +319,8 @@ impl<S: LocalSolver> AdditiveExecutor<S> {
                 self.apply_parallel_reduction(plan.allow_inner_parallelism, r, z, pool)
             }
         };
-        self.buf_pool.put(bufs, &apply_result)?;
+        // `put` is infallible and never overwrites the real `apply_result`.
+        self.buf_pool.put(bufs, &apply_result);
         apply_result
     }
 
@@ -384,7 +390,13 @@ impl<S: LocalSolver> AdditiveExecutor<S> {
                     })
                 });
 
-        *pool = worker_buffers.finish_round(z, &apply_result)?;
+        // `finish_round` writes `z` (zeroed on the apply-error path) and
+        // recovers the pool. A pool-recovery failure must not mask a real
+        // `LocalSolveFailed`, so prefer the original error when it is one.
+        match worker_buffers.finish_round(z, &apply_result) {
+            Ok(recovered) => *pool = recovered,
+            Err(finish_err) => return apply_result.and(Err(finish_err)),
+        }
 
         apply_result
     }
@@ -427,8 +439,7 @@ mod tests {
             &Err(SolveError::Synchronization {
                 context: "test.simulated_failure",
             }),
-        )
-        .expect("put on err path");
+        );
 
         let fresh = pool
             .take(ResolvedReductionStrategy::AtomicScatter)
@@ -456,7 +467,7 @@ mod tests {
         let bufs = pool
             .take(ResolvedReductionStrategy::AtomicScatter)
             .expect("first take");
-        pool.put(bufs, &Ok(())).expect("put on ok path");
+        pool.put(bufs, &Ok(()));
 
         let _ = pool
             .take(ResolvedReductionStrategy::AtomicScatter)

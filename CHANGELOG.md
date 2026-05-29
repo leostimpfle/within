@@ -58,6 +58,11 @@ Modified LSMR is now the sole iterative solver, replacing CG and GMRES.
 - `BufferPool` no longer recycles a partially-written atomic-scatter buffer when the preceding apply returned an error — the buffer is dropped so the next caller starts from a freshly-zeroed allocation rather than inheriting stale atomic state.
 - Python `Solver.solve_batch` accepts `Y` as a keyword argument again — the Rust impl exposed it as `y_matrix=` while the stub advertised `Y=`, so `solver.solve_batch(Y=...)` failed at runtime.
 - Python `Solver.solve_batch` now validates `Y.shape[0]` against the solver's `n_obs` up front (parity with the free `solve_batch`); previously an empty batch with the wrong row count silently returned a success.
+- `ArrayStore::factor_column` falls back to safe per-element access for negative-column-stride numpy views (e.g. `cats[:, ::-1]`), closing an out-of-bounds read reachable from Python.
+- CSR index construction (Schur + cross-tab) uses checked `usize`→`u32` conversions that panic above `u32::MAX` nonzeros instead of silently truncating.
+- Modified LSMR returns `SolveError::InvalidInput` for a non-positive-definite preconditioner (`⟨v, Mv⟩ < 0`) instead of silently converging to a wrong solution.
+- Additive-Schwarz `apply` preserves the original solve error (no longer masked by a buffer-pool error) and zeroes its output on the reduction error path.
+- Python `solve_batch` raises `ValueError` instead of an opaque `PanicException` on an internal shape-invariant violation.
 
 ### Removed
 

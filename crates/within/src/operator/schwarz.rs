@@ -7,8 +7,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::block_elim::BlockElimSolver;
 use crate::config::{LocalSolverConfig, PreconditionerConfig};
-use crate::domain::CrossTab;
-use crate::domain::{Design, Subdomain};
+use crate::domain::{Design, LocalDomain};
 use crate::observation::{validate_weights, Store};
 use crate::BuildError;
 
@@ -54,24 +53,17 @@ impl Operator for FeSchwarz {
 
 /// Build additive Schwarz with an explicit reduction strategy.
 pub(crate) fn build_additive_with_strategy(
-    domains: Vec<(Subdomain, CrossTab)>,
+    domains: Vec<LocalDomain>,
     config: &LocalSolverConfig,
     strategy: schwarz_precond::ReductionStrategy,
 ) -> Result<FeSchwarz, BuildError> {
-    let entries = build_entries_from_pairs(domains, config)?;
+    let entries = domains
+        .into_par_iter()
+        .map(|domain| build_entry(domain, config))
+        .collect::<Result<Vec<_>, BuildError>>()?;
     Ok(FeSchwarz::new(SchwarzPreconditioner::new(
         entries, strategy,
     )))
-}
-
-fn build_entries_from_pairs(
-    domain_pairs: Vec<(Subdomain, CrossTab)>,
-    config: &LocalSolverConfig,
-) -> Result<Vec<SubdomainEntry<BlockElimSolver>>, BuildError> {
-    domain_pairs
-        .into_par_iter()
-        .map(|(domain, cross_tab)| build_entry(domain, cross_tab, config))
-        .collect()
 }
 
 // ---------------------------------------------------------------------------
@@ -80,12 +72,11 @@ fn build_entries_from_pairs(
 
 /// Build a single `SubdomainEntry<BlockElimSolver>` from a pre-built CrossTab.
 pub(crate) fn build_entry(
-    domain: Subdomain,
-    cross_tab: CrossTab,
+    domain: LocalDomain,
     config: &LocalSolverConfig,
 ) -> Result<SubdomainEntry<BlockElimSolver>, BuildError> {
-    let solver = BlockElimSolver::build(cross_tab, config)?;
-    SubdomainEntry::try_new(domain.core, solver).map_err(BuildError::Preconditioner)
+    let solver = BlockElimSolver::build(domain.cross_tab, config)?;
+    SubdomainEntry::try_new(domain.subdomain.core, solver).map_err(BuildError::Preconditioner)
 }
 
 // ---------------------------------------------------------------------------
@@ -132,12 +123,6 @@ enum Variant {
 }
 
 impl Preconditioner {
-    pub(crate) fn additive(inner: FeSchwarz) -> Self {
-        Self {
-            inner: Variant::Additive(inner),
-        }
-    }
-
     /// Number of rows of the underlying linear operator.
     pub fn nrows(&self) -> usize {
         <Self as schwarz_precond::Operator>::nrows(self)
@@ -206,7 +191,9 @@ pub(crate) fn build_preconditioner<S: Store>(
                 return Ok(None);
             }
             let p = build_additive_with_strategy(domains, local_solver, *reduction)?;
-            Ok(Some(Preconditioner::additive(p)))
+            Ok(Some(Preconditioner {
+                inner: Variant::Additive(p),
+            }))
         }
     }
 }

@@ -6,26 +6,26 @@
 //! Levels are stored compactly with a `local_to_global` map for active levels only.
 
 use crate::csr_block::CsrBlock;
-use crate::domain::Design;
+use crate::domain::{Design, FactorMeta};
 use crate::observation::Store;
 
 /// Max entries in a flat dense cross-tab accumulator (~40 MB at 8 bytes each).
+/// Absolute hard cap on the dense path: tables larger than this always go
+/// sparse, regardless of the cost comparison in `accumulate_cross_block`.
 const DENSE_TABLE_MAX_ENTRIES: usize = 5_000_000;
+
+/// Checked `usize -> u32` for CSR indptr/index and compact-level values. A
+/// silent `as u32` truncation above `u32::MAX` would corrupt the assembled
+/// cross-tab with no diagnostic; these are build-path invariants, so panic
+/// loudly instead.
+#[inline]
+fn to_u32(x: usize) -> u32 {
+    u32::try_from(x).expect("CSR index exceeds u32::MAX")
+}
 
 // ---------------------------------------------------------------------------
 // BipartiteComponent / SchurData — supporting types for CrossTab
 // ---------------------------------------------------------------------------
-
-/// Borrowed view of compact mapping parameters for a factor pair.
-///
-/// Bundles the global-to-compact index maps and compact dimensions,
-/// reducing the parameter count of `accumulate_cross_block`.
-struct CompactPair<'a> {
-    q_map: &'a [u32],
-    r_map: &'a [u32],
-    n_q: usize,
-    n_r: usize,
-}
 
 /// Compact mapping of active levels for a factor pair.
 ///
@@ -37,17 +37,6 @@ struct ActiveLevels {
     r_map: Vec<u32>,
     n_r: usize,
     local_to_global: Vec<u32>,
-}
-
-impl ActiveLevels {
-    fn as_compact_pair(&self) -> CompactPair<'_> {
-        CompactPair {
-            q_map: &self.q_map,
-            r_map: &self.r_map,
-            n_q: self.n_q,
-            n_r: self.n_r,
-        }
-    }
 }
 
 /// Scan all observations once and mark which levels are active for each factor.
@@ -69,6 +58,21 @@ pub(crate) fn find_all_active_levels<S: Store>(design: &Design<S>) -> Vec<Vec<bo
     active
 }
 
+/// Compact mapping of active levels: assigns each active level a 0-based compact
+/// index. Returns the global-to-compact map (`u32::MAX` for inactive levels) and
+/// the number of active levels.
+fn compact_map(active: &[bool]) -> (Vec<u32>, usize) {
+    let mut map = vec![u32::MAX; active.len()];
+    let mut n = 0u32;
+    for (j, &a) in active.iter().enumerate() {
+        if a {
+            map[j] = n;
+            n += 1;
+        }
+    }
+    (map, n as usize)
+}
+
 /// Build compact mapping for a factor pair using pre-computed active level flags.
 ///
 /// Extracts the mapping logic from `find_active_levels`, taking pre-computed
@@ -76,29 +80,11 @@ pub(crate) fn find_all_active_levels<S: Store>(design: &Design<S>) -> Vec<Vec<bo
 fn build_compact_mapping(
     active_q: &[bool],
     active_r: &[bool],
-    fq: &crate::observation::FactorMeta,
-    fr: &crate::observation::FactorMeta,
+    fq: &FactorMeta,
+    fr: &FactorMeta,
 ) -> Option<ActiveLevels> {
-    let mut q_map = vec![u32::MAX; fq.n_levels];
-    let mut n_q = 0u32;
-    for (j, &a) in active_q.iter().enumerate() {
-        if a {
-            q_map[j] = n_q;
-            n_q += 1;
-        }
-    }
-
-    let mut r_map = vec![u32::MAX; fr.n_levels];
-    let mut n_r = 0u32;
-    for (k, &a) in active_r.iter().enumerate() {
-        if a {
-            r_map[k] = n_r;
-            n_r += 1;
-        }
-    }
-
-    let n_q = n_q as usize;
-    let n_r = n_r as usize;
+    let (q_map, n_q) = compact_map(active_q);
+    let (r_map, n_r) = compact_map(active_r);
 
     if n_q == 0 || n_r == 0 {
         return None;
@@ -107,12 +93,12 @@ fn build_compact_mapping(
     let mut local_to_global = Vec::with_capacity(n_q + n_r);
     for (j, &a) in active_q.iter().enumerate() {
         if a {
-            local_to_global.push((fq.offset + j) as u32);
+            local_to_global.push(to_u32(fq.offset + j));
         }
     }
     for (k, &a) in active_r.iter().enumerate() {
         if a {
-            local_to_global.push((fr.offset + k) as u32);
+            local_to_global.push(to_u32(fr.offset + k));
         }
     }
 
@@ -129,8 +115,8 @@ fn build_compact_mapping(
 ///
 /// Indices are compact (0-based into the parent CrossTab's n_q / n_r).
 pub(crate) struct BipartiteComponent {
-    pub q_indices: Vec<usize>,
-    pub r_indices: Vec<usize>,
+    pub(crate) q_indices: Vec<usize>,
+    pub(crate) r_indices: Vec<usize>,
 }
 
 // ---------------------------------------------------------------------------
@@ -158,17 +144,17 @@ pub(crate) struct CrossTab {
 
 impl CrossTab {
     /// Number of rows in the q-block.
-    pub fn n_q(&self) -> usize {
+    pub(crate) fn n_q(&self) -> usize {
         self.c.nrows
     }
 
     /// Number of rows in the r-block.
-    pub fn n_r(&self) -> usize {
+    pub(crate) fn n_r(&self) -> usize {
         self.c.ncols
     }
 
     /// Total number of DOFs (n_q + n_r).
-    pub fn n_local(&self) -> usize {
+    pub(crate) fn n_local(&self) -> usize {
         self.c.nrows + self.c.ncols
     }
 
@@ -176,7 +162,7 @@ impl CrossTab {
     ///
     /// Like `build_for_pair` but avoids redundant observation scans when
     /// active levels have already been determined via `find_all_active_levels`.
-    pub fn build_for_pair_with_active<S: Store>(
+    pub(crate) fn build_for_pair_with_active<S: Store>(
         design: &Design<S>,
         weights: Option<&[f64]>,
         q: usize,
@@ -187,8 +173,7 @@ impl CrossTab {
         let fr = &design.factors[r];
         let active = build_compact_mapping(&all_active[q], &all_active[r], fq, fr)?;
 
-        let (c, diag_q, diag_r) =
-            accumulate_cross_block(design, weights, q, r, &active.as_compact_pair());
+        let (c, diag_q, diag_r) = accumulate_cross_block(design, weights, q, r, &active);
         let ct = c.transpose();
         let cross_tab = CrossTab {
             c,
@@ -204,7 +189,7 @@ impl CrossTab {
     /// Uses DFS on CSR(C) (q->r edges) and CSR(C^T) (r->q edges).
     /// Returns components as vectors of compact q-indices and r-indices.
     /// O(n_q + n_r + nnz_C).
-    pub fn bipartite_connected_components(&self) -> Vec<BipartiteComponent> {
+    pub(crate) fn bipartite_connected_components(&self) -> Vec<BipartiteComponent> {
         let n_q = self.n_q();
         let n_r = self.n_r();
         let n = n_q + n_r;
@@ -273,18 +258,18 @@ impl CrossTab {
     ///
     /// Remaps q/r indices to the component's local 0-based indexing.
     /// O(nnz in the component).
-    pub fn extract_component(&self, comp: &BipartiteComponent) -> Self {
+    pub(crate) fn extract_component(&self, comp: &BipartiteComponent) -> Self {
         let n_q = comp.q_indices.len();
         let n_r = comp.r_indices.len();
 
         // Build reverse maps: parent compact index -> component compact index
         let mut q_remap = vec![u32::MAX; self.n_q()];
         for (new_idx, &old_idx) in comp.q_indices.iter().enumerate() {
-            q_remap[old_idx] = new_idx as u32;
+            q_remap[old_idx] = to_u32(new_idx);
         }
         let mut r_remap = vec![u32::MAX; self.n_r()];
         for (new_idx, &old_idx) in comp.r_indices.iter().enumerate() {
-            r_remap[old_idx] = new_idx as u32;
+            r_remap[old_idx] = to_u32(new_idx);
         }
 
         // Extract diagonals
@@ -306,7 +291,7 @@ impl CrossTab {
                     c_data.push(self.c.data[idx]);
                 }
             }
-            c_indptr[new_qi + 1] = c_indices.len() as u32;
+            c_indptr[new_qi + 1] = to_u32(c_indices.len());
         }
 
         let c = CsrBlock {
@@ -336,35 +321,53 @@ impl CrossTab {
 /// Used by `CrossTab::build_for_pair`. Observations whose compact index is
 /// `u32::MAX` are skipped.
 ///
-/// Dispatches to a dense or sparse path based on the table size.
+/// Dispatches to a dense or sparse path by comparing their estimated peak
+/// transient memory, with a hard dense-table ceiling.
 fn accumulate_cross_block<S: Store>(
     design: &Design<S>,
     weights: Option<&[f64]>,
     q: usize,
     r: usize,
-    compact: &CompactPair<'_>,
+    active: &ActiveLevels,
 ) -> (CsrBlock, Vec<f64>, Vec<f64>) {
-    let table_size = compact.n_q * compact.n_r;
-    if table_size <= DENSE_TABLE_MAX_ENTRIES {
-        accumulate_dense_cross_block(design, weights, q, r, compact)
+    // Cost-based dispatch. Both paths produce a bit-identical CSR `C`, `diag_q`,
+    // and `diag_r`; only their peak transient allocation differs:
+    //   - dense path: a flat `n_q * n_r` f64 table -> ~8 * n_q * n_r bytes;
+    //   - sparse path: per-observation buckets of (u32 col, f64 weight) sized
+    //     by valid observations (approximated by n_obs) -> ~12 * n_obs bytes.
+    // Picking sparse purely on cell count makes the sparse path use MORE memory
+    // than the dense table it replaces whenever n_obs >> cells. So use the dense
+    // table unconditionally up to `DENSE_TABLE_MAX_ENTRIES` (for small tables
+    // memory is a non-issue and the flat table is the faster build); only past
+    // that cap do we consider sparse, and even then only when its bucket cost is
+    // actually below the dense table cost -- otherwise the large-n_obs blowup
+    // this guards against would make sparse the *more* expensive choice, so we
+    // keep dense. Saturating math keeps the comparison well-defined even for
+    // enormous level counts.
+    let table_size = active.n_q.saturating_mul(active.n_r);
+    let dense_cost = table_size.saturating_mul(8);
+    let sparse_cost = design.store.n_obs().saturating_mul(12);
+    let go_sparse = table_size > DENSE_TABLE_MAX_ENTRIES && sparse_cost < dense_cost;
+    if go_sparse {
+        accumulate_sparse_cross_block(design, weights, q, r, active)
     } else {
-        accumulate_sparse_cross_block(design, weights, q, r, compact)
+        accumulate_dense_cross_block(design, weights, q, r, active)
     }
 }
 
-/// Dense path: flat table with O(1) accumulation per observation (n_q * n_r <= 5M).
+/// Dense path: flat `n_q * n_r` table with O(1) accumulation per observation.
 fn accumulate_dense_cross_block<S: Store>(
     design: &Design<S>,
     weights: Option<&[f64]>,
     q: usize,
     r: usize,
-    compact: &CompactPair<'_>,
+    active: &ActiveLevels,
 ) -> (CsrBlock, Vec<f64>, Vec<f64>) {
     let n_obs = design.store.n_obs();
-    let n_q = compact.n_q;
-    let n_r = compact.n_r;
-    let q_compact = compact.q_map;
-    let r_compact = compact.r_map;
+    let n_q = active.n_q;
+    let n_r = active.n_r;
+    let q_compact = &active.q_map;
+    let r_compact = &active.r_map;
     let mut diag_q = vec![0.0f64; n_q];
     let mut diag_r = vec![0.0f64; n_r];
     let mut table = vec![0.0f64; n_q * n_r];
@@ -398,13 +401,13 @@ fn accumulate_sparse_cross_block<S: Store>(
     weights: Option<&[f64]>,
     q: usize,
     r: usize,
-    compact: &CompactPair<'_>,
+    active: &ActiveLevels,
 ) -> (CsrBlock, Vec<f64>, Vec<f64>) {
     let n_obs = design.store.n_obs();
-    let n_q = compact.n_q;
-    let n_r = compact.n_r;
-    let q_compact = compact.q_map;
-    let r_compact = compact.r_map;
+    let n_q = active.n_q;
+    let n_r = active.n_r;
+    let q_compact = &active.q_map;
+    let r_compact = &active.r_map;
     let mut diag_q = vec![0.0f64; n_q];
     let mut diag_r = vec![0.0f64; n_r];
 
@@ -465,7 +468,7 @@ fn accumulate_sparse_cross_block<S: Store>(
         for idx in start..end {
             let col = bucket_cols[idx] as usize;
             if work[col] == 0.0 {
-                touched.push(col as u32);
+                touched.push(to_u32(col));
             }
             work[col] += bucket_vals[idx];
         }
@@ -478,7 +481,7 @@ fn accumulate_sparse_cross_block<S: Store>(
             }
             work[col as usize] = 0.0;
         }
-        c_indptr[row + 1] = c_indices.len() as u32;
+        c_indptr[row + 1] = to_u32(c_indices.len());
         touched.clear();
     }
 

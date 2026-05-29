@@ -21,12 +21,10 @@ pub(crate) mod block_elim;
 pub(crate) mod csr_block;
 pub(crate) mod domain;
 pub(crate) mod operator;
-pub(crate) mod orchestrate;
 pub(crate) mod solver;
 
 pub use config::{LsmrOptions, PreconditionerConfig};
 pub use domain::Design;
 pub use error::{BuildError, SolveError, WithinError};
 pub use operator::schwarz::Preconditioner;
-pub use orchestrate::{solve, solve_batch, BatchSolveResult, SolveResult};
-pub use solver::Solver;
+pub use solver::{solve, solve_batch, BatchSolveResult, SolveResult, Solver};

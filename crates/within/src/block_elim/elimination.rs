@@ -124,17 +124,20 @@ impl<'a> Elimination<'a> {
         } else {
             &cross_tab.diag_r
         };
-        let mut inv_diag_elim = Vec::with_capacity(diag_elim.len());
-        for (i, &d) in diag_elim.iter().enumerate() {
-            if d > 0.0 {
-                inv_diag_elim.push(1.0 / d);
-            } else {
-                return Err(BuildError::SingularDiagonal {
-                    block: if eliminate_q { "q (elim)" } else { "r (elim)" },
-                    index: i,
-                });
-            }
-        }
+        let inv_diag_elim = diag_elim
+            .iter()
+            .enumerate()
+            .map(|(i, &d)| {
+                if d > 0.0 {
+                    Ok(1.0 / d)
+                } else {
+                    Err(BuildError::SingularDiagonal {
+                        block: if eliminate_q { "q (elim)" } else { "r (elim)" },
+                        index: i,
+                    })
+                }
+            })
+            .collect::<Result<_, _>>()?;
 
         let diag_keep = if eliminate_q {
             &cross_tab.diag_r

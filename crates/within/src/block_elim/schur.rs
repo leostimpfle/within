@@ -14,6 +14,14 @@ use super::elimination::{Edge, Elimination, SampledCliqueEmitter};
 use crate::config::ApproxSchurConfig;
 use crate::csr_block::CsrBlock;
 
+/// Checked `usize -> u32` for CSR indptr/index values. A silent `as u32`
+/// truncation above `u32::MAX` would corrupt the factorization with no
+/// diagnostic; these are build-path invariants, so panic loudly instead.
+#[inline]
+fn to_u32(x: usize) -> u32 {
+    u32::try_from(x).expect("CSR index exceeds u32::MAX")
+}
+
 pub(crate) struct SchurLaplacian;
 
 impl SchurLaplacian {
@@ -147,12 +155,14 @@ impl SchurLaplacian {
         touched: &mut [usize],
     ) -> (Vec<u32>, Vec<f64>) {
         touched.sort_unstable();
-        let mut row_indices = Vec::new();
-        let mut row_data = Vec::new();
+        // `touched.len()` is a tight upper bound on the emitted non-zeros
+        // (the diagonal plus every fill column), so size both buffers once.
+        let mut row_indices = Vec::with_capacity(touched.len());
+        let mut row_data = Vec::with_capacity(touched.len());
         for &j in touched.iter() {
             let v = work[j];
             if v != 0.0 || j == i {
-                row_indices.push(j as u32);
+                row_indices.push(to_u32(j));
                 row_data.push(v);
             }
             work[j] = 0.0;
@@ -163,12 +173,14 @@ impl SchurLaplacian {
     /// Assemble a CSR matrix from per-row sparse results.
     fn assemble_schur_csr(rows: Vec<(Vec<u32>, Vec<f64>)>, n_keep: usize) -> CsrMatrix {
         let mut s_indptr = vec![0u32; n_keep + 1];
-        let mut s_indices = Vec::new();
-        let mut s_data = Vec::new();
+        // Pre-count total NNZ so the value/index buffers allocate exactly once.
+        let total_nnz: usize = rows.iter().map(|(ri, _)| ri.len()).sum();
+        let mut s_indices = Vec::with_capacity(total_nnz);
+        let mut s_data = Vec::with_capacity(total_nnz);
         for (i, (ri, rd)) in rows.into_iter().enumerate() {
             s_indices.extend_from_slice(&ri);
             s_data.extend_from_slice(&rd);
-            s_indptr[i + 1] = s_indices.len() as u32;
+            s_indptr[i + 1] = to_u32(s_indices.len());
         }
         CsrMatrix::new(s_indptr, s_indices, s_data, n_keep)
             .expect("schur rows are well-formed by construction")
@@ -209,7 +221,7 @@ impl SchurLaplacian {
             .collect();
         for i in 0..n_keep {
             let pos = (offsets[i] + lower_count[i]) as usize;
-            indices[pos] = i as u32;
+            indices[pos] = to_u32(i);
             data[pos] = diag[i];
         }
 
