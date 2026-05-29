@@ -5,21 +5,6 @@ use ndarray::ArrayView2;
 use crate::error::BuildError;
 
 // ---------------------------------------------------------------------------
-// FactorMeta — per-factor metadata (no observation data)
-// ---------------------------------------------------------------------------
-
-/// Per-factor metadata: level count and global DOF offset.
-///
-/// Separated from observation data — the factor no longer "owns" categories.
-#[derive(Debug, Clone, Copy)]
-pub struct FactorMeta {
-    /// Number of levels (groups) in this factor.
-    pub n_levels: usize,
-    /// Starting index in coefficient space for this factor.
-    pub offset: usize,
-}
-
-// ---------------------------------------------------------------------------
 // Store trait
 // ---------------------------------------------------------------------------
 

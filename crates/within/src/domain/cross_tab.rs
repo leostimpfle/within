@@ -6,7 +6,7 @@
 //! Levels are stored compactly with a `local_to_global` map for active levels only.
 
 use crate::csr_block::CsrBlock;
-use crate::domain::Design;
+use crate::domain::{Design, FactorMeta};
 use crate::observation::Store;
 
 /// Max entries in a flat dense cross-tab accumulator (~40 MB at 8 bytes each).
@@ -76,8 +76,8 @@ pub(crate) fn find_all_active_levels<S: Store>(design: &Design<S>) -> Vec<Vec<bo
 fn build_compact_mapping(
     active_q: &[bool],
     active_r: &[bool],
-    fq: &crate::observation::FactorMeta,
-    fr: &crate::observation::FactorMeta,
+    fq: &FactorMeta,
+    fr: &FactorMeta,
 ) -> Option<ActiveLevels> {
     let mut q_map = vec![u32::MAX; fq.n_levels];
     let mut n_q = 0u32;

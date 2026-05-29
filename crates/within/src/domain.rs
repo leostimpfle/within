@@ -11,8 +11,20 @@ pub(crate) use factor_pairs::{build_local_domains, Subdomain};
 // Design — categorical fixed-effects design (data + layout)
 // ===========================================================================
 
-use crate::observation::{FactorMeta, Store};
+use crate::observation::Store;
 use crate::BuildError;
+
+/// Per-factor metadata: level count and global DOF offset.
+///
+/// Pure design-space layout derived from the store's raw levels — the store
+/// holds categories, this records where each factor lands in coefficient space.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct FactorMeta {
+    /// Number of levels (groups) in this factor.
+    pub n_levels: usize,
+    /// Starting index in coefficient space for this factor.
+    pub offset: usize,
+}
 
 /// Fixed-effects design, generic over observation storage.
 ///
