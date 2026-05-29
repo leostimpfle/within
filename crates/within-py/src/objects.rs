@@ -7,10 +7,8 @@ use pyo3::prelude::*;
 use within::observation::FactorMajorStore;
 use within::{Design, Preconditioner, Solver};
 
-use crate::convert::{
-    coerce_to_slice, column_refs, extract_columns, extract_prebuilt, extract_preconditioner_config,
-    resolve_lsmr_config, value_err, warn_c_contiguous,
-};
+use crate::config::{extract_preconditioner_config, resolve_lsmr_config};
+use crate::convert::{coerce_to_slice, column_refs, extract_columns, value_err, warn_c_contiguous};
 use crate::results::{into_py_batch_result, into_py_result, PyBatchSolveResult, PySolveResult};
 
 // ---------------------------------------------------------------------------
@@ -92,6 +90,17 @@ impl PyPreconditioner {
         })?;
         Ok(Self { inner })
     }
+}
+
+/// If the Python preconditioner argument is a pre-built `Preconditioner`,
+/// return a clone of the inner native value. Otherwise `None`.
+pub(crate) fn extract_prebuilt(
+    preconditioner: Option<&Bound<'_, PyAny>>,
+) -> Option<Preconditioner> {
+    let obj = preconditioner?;
+    obj.downcast::<PyPreconditioner>()
+        .ok()
+        .map(|b| b.get().inner.clone())
 }
 
 // ---------------------------------------------------------------------------

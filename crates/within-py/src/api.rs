@@ -7,10 +7,11 @@ use pyo3::prelude::*;
 use within::SolveResult;
 use within::{solve as solve_native, solve_batch as solve_batch_native, Solver, WithinError};
 
+use crate::config::{extract_preconditioner_config, resolve_lsmr_config};
 use crate::convert::{
-    coerce_to_slice, column_refs, extract_columns, extract_prebuilt, extract_preconditioner_config,
-    extract_weight_vec, resolve_lsmr_config, value_err, warn_c_contiguous,
+    coerce_to_slice, column_refs, extract_columns, extract_weight_vec, value_err, warn_c_contiguous,
 };
+use crate::objects::extract_prebuilt;
 use crate::results::{into_py_batch_result, into_py_result, PyBatchSolveResult, PySolveResult};
 
 // ---------------------------------------------------------------------------

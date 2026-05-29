@@ -1,11 +1,15 @@
 //! PyO3 config wrapper classes exposed via `within._within`.
 //!
-//! These mirror the native [`within::config`] types and provide pickle support
-//! plus `to_native` conversions consumed by [`crate::convert`].
+//! These mirror the native [`within::config`] types, provide pickle support,
+//! and host the Python→native config conversions (`to_native`,
+//! `extract_preconditioner_config`, `resolve_lsmr_config`).
 
 use pyo3::prelude::*;
 
-use within::config::{ApproxCholConfig, ApproxSchurConfig, LocalSolverConfig, ReductionStrategy};
+use within::config::{
+    ApproxCholConfig, ApproxSchurConfig, LocalSolverConfig, LsmrOptions, PreconditionerConfig,
+    ReductionStrategy,
+};
 
 // ---------------------------------------------------------------------------
 // Low-level config classes (available via `_within` for benchmarks)
@@ -296,4 +300,86 @@ impl PyLsmrOptions {
         let cls = py.get_type::<Self>();
         Ok((cls.into_any(), (self.tol, self.maxiter, self.local_size)))
     }
+}
+
+// ---------------------------------------------------------------------------
+// Python → native config conversion
+// ---------------------------------------------------------------------------
+
+fn build_local_solver_config(py: Python<'_>, sc: &PyLocalSolverConfig) -> LocalSolverConfig {
+    let approx_chol = sc
+        .approx_chol
+        .as_ref()
+        .map(|c| c.bind(py).get().to_native())
+        .unwrap_or_else(|| LocalSolverConfig::default().approx_chol);
+    let approx_schur = sc
+        .approx_schur
+        .as_ref()
+        .map(|c| c.bind(py).get().to_native());
+    LocalSolverConfig {
+        approx_chol,
+        approx_schur,
+        dense_threshold: sc.dense_threshold,
+    }
+}
+
+pub(crate) fn extract_preconditioner_config(
+    py: Python<'_>,
+    preconditioner: Option<&Bound<'_, PyAny>>,
+) -> PyResult<Option<PreconditionerConfig>> {
+    let Some(obj) = preconditioner else {
+        return Ok(None);
+    };
+
+    // Enum shorthand
+    if let Ok(p) = obj.extract::<PyPreconditionerConfig>() {
+        return Ok(Some(match p {
+            PyPreconditionerConfig::Off => PreconditionerConfig::Off,
+            PyPreconditionerConfig::Additive => PreconditionerConfig::default(),
+        }));
+    }
+
+    // Advanced: AdditiveSchwarz object
+    if let Ok(schwarz) = obj.downcast::<PyAdditiveSchwarz>() {
+        let s = schwarz.get();
+        let local = match &s.local_solver {
+            None => LocalSolverConfig::default(),
+            Some(obj) => {
+                let obj = obj.bind(py);
+                let Ok(sc) = obj.downcast::<PyLocalSolverConfig>() else {
+                    return Err(PyErr::new::<pyo3::exceptions::PyTypeError, _>(
+                        "local_solver must be LocalSolverConfig or None",
+                    ));
+                };
+                build_local_solver_config(py, sc.get())
+            }
+        };
+        let reduction = s.reduction.to_native();
+        return Ok(Some(PreconditionerConfig::Additive {
+            local_solver: local,
+            reduction,
+        }));
+    }
+
+    Err(PyErr::new::<pyo3::exceptions::PyTypeError, _>(
+        "preconditioner must be PreconditionerConfig.Additive, PreconditionerConfig.Off, \
+         AdditiveSchwarz(...), Preconditioner(...), or None",
+    ))
+}
+
+pub(crate) fn resolve_lsmr_config(config: Option<&Bound<'_, PyAny>>) -> PyResult<LsmrOptions> {
+    let Some(c) = config else {
+        return Ok(LsmrOptions::default());
+    };
+    if let Ok(lsmr) = c.downcast::<PyLsmrOptions>() {
+        let lsmr = lsmr.get();
+        return Ok(LsmrOptions {
+            tol: lsmr.tol,
+            maxiter: lsmr.maxiter,
+            local_size: lsmr.local_size,
+        });
+    }
+    Err(PyErr::new::<pyo3::exceptions::PyTypeError, _>(
+        "options must be LsmrOptions",
+    ))
 }
