@@ -378,7 +378,16 @@ impl<A: Operator + ?Sized, M: Operator + ?Sized> Bidiagonalization
         }
 
         let vp = par_dot(&self.bufs.v, &self.bufs.p_tilde);
-        let alpha_new = if vp > 0.0 { vp.sqrt() } else { 0.0 };
+        // vp = ⟨v, M v⟩. vp == 0 is a clean (lucky) breakdown; vp < 0 means
+        // the preconditioner is not positive definite, which would otherwise
+        // produce a silent premature "converged" at the wrong solution.
+        if vp < 0.0 {
+            return Err(SolveError::InvalidInput {
+                context: "mlsmr",
+                message: "preconditioner not positive definite (⟨v, Mv⟩ < 0)".to_string(),
+            });
+        }
+        let alpha_new = vp.sqrt();
 
         if alpha_new > 0.0 {
             scale_in_place(&mut self.bufs.v, 1.0 / alpha_new);
@@ -560,9 +569,17 @@ impl<'a, A: Operator + ?Sized, M: Operator + ?Sized> ModifiedGolubKahan<'a, A, M
         // ṽ₁ = M⁻¹ p̃
         preconditioner.apply(&bufs.p_tilde, &mut bufs.v)?;
 
-        // α₁ = √⟨ṽ₁, p̃⟩ via the M-norm dot product trick.
+        // α₁ = √⟨ṽ₁, p̃⟩ via the M-norm dot product trick. vp == 0 is a clean
+        // breakdown; vp < 0 means a non-positive-definite preconditioner and
+        // must be rejected rather than silently yielding α₁ = 0.
         let vp = par_dot(&bufs.v, &bufs.p_tilde);
-        let alpha = if vp > 0.0 { vp.sqrt() } else { 0.0 };
+        if vp < 0.0 {
+            return Err(SolveError::InvalidInput {
+                context: "mlsmr",
+                message: "preconditioner not positive definite (⟨v, Mv⟩ < 0)".to_string(),
+            });
+        }
+        let alpha = vp.sqrt();
 
         // Normalize v; leave p_tilde at α₁·p̃_norm.
         if alpha > 0.0 {
