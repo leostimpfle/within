@@ -5,7 +5,7 @@ use rayon::prelude::*;
 use schwarz_precond::Operator;
 
 use crate::domain::Design;
-use crate::observation::Store;
+use crate::observation::{factor_columns, level_at, Store};
 
 // ===========================================================================
 // Iteration kernels — module-private, shared between apply / apply_adjoint
@@ -42,26 +42,6 @@ impl ScatterStrategy {
     }
 }
 
-/// Resolve the level for row `i` in factor `q`.
-///
-/// `levels` is the optional fast-path column (a contiguous `&[u32]` view of the
-/// factor's levels); when `None`, fall back to the store's virtual lookup.
-/// Hoisted out of inner loops so the compiler keeps the row body branch-free.
-#[inline]
-fn level_at<S: Store>(store: &S, levels: Option<&[u32]>, i: usize, q: usize) -> usize {
-    match levels {
-        Some(col) => col[i] as usize,
-        None => store.level(i, q) as usize,
-    }
-}
-
-/// Pre-compute the factor-column fast-path slices for all factors of `design`.
-fn factor_columns<S: Store>(design: &Design<S>) -> Vec<Option<&[u32]>> {
-    (0..design.factors.len())
-        .map(|q| design.store.factor_column(q))
-        .collect()
-}
-
 /// Gather-apply: `dst[i] = finalize(i, Σ_q src[off_q + level(i, q)])`.
 ///
 /// `finalize` is folded into the LAST factor's pass — exactly Q sweeps over
@@ -83,7 +63,7 @@ where
         return;
     }
     dst.fill(0.0);
-    let factor_columns = factor_columns(design);
+    let factor_columns = factor_columns(&design.store);
     let store = &design.store;
     let last = factors.len() - 1;
 
@@ -124,7 +104,7 @@ where
     F: Fn(usize) -> f64 + Sync,
 {
     debug_assert_eq!(dst.len(), design.n_dofs);
-    let factor_columns = factor_columns(design);
+    let factor_columns = factor_columns(&design.store);
     let parallel = design.n_obs > PAR_THRESHOLD;
     let max_levels = design.factors.iter().map(|f| f.n_levels).max().unwrap_or(0);
     let mut atomic_buf: Vec<AtomicF64> = Vec::with_capacity(max_levels);

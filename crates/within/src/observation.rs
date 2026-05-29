@@ -47,6 +47,26 @@ pub trait Store: Send + Sync {
     }
 }
 
+/// Resolve the level for row `i` in factor `q`.
+///
+/// `levels` is the optional fast-path column (a contiguous `&[u32]` view of the
+/// factor's levels); when `None`, fall back to the store's virtual lookup.
+/// Hoisted out of inner loops so the compiler keeps the row body branch-free.
+#[inline]
+pub(crate) fn level_at<S: Store>(store: &S, levels: Option<&[u32]>, i: usize, q: usize) -> usize {
+    match levels {
+        Some(col) => col[i] as usize,
+        None => store.level(i, q) as usize,
+    }
+}
+
+/// Pre-compute the factor-column fast-path slices for every factor of `store`.
+pub(crate) fn factor_columns<S: Store>(store: &S) -> Vec<Option<&[u32]>> {
+    (0..store.n_factors())
+        .map(|q| store.factor_column(q))
+        .collect()
+}
+
 // ---------------------------------------------------------------------------
 // FactorMajorStore
 // ---------------------------------------------------------------------------
