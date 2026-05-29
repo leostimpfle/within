@@ -8,7 +8,6 @@
 
 use schwarz_precond::{PartitionWeights, SubdomainCore};
 
-use super::cross_tab::BipartiteComponent;
 use super::{find_all_active_levels, CrossTab, Design};
 use crate::observation::Store;
 
@@ -30,6 +29,16 @@ impl std::fmt::Debug for Subdomain {
     }
 }
 
+/// A factor-pair subdomain paired with the CrossTab it was built from.
+///
+/// The CrossTab travels with the subdomain so the local solver can be built
+/// without rebuilding the cross-tabulation.
+#[derive(Clone)]
+pub(crate) struct LocalDomain {
+    pub(crate) subdomain: Subdomain,
+    pub(crate) cross_tab: CrossTab,
+}
+
 /// Build local subdomains (with pre-built CrossTabs) for pairs of factors.
 ///
 /// For each factor pair, builds a fused CrossTab via a single observation scan,
@@ -43,38 +52,31 @@ impl std::fmt::Debug for Subdomain {
 pub(crate) fn build_local_domains<S: Store>(
     design: &Design<S>,
     weights: Option<&[f64]>,
-) -> Vec<(Subdomain, CrossTab)> {
+) -> Vec<LocalDomain> {
     use rayon::prelude::*;
 
     let n_factors = design.n_factors();
-    let pairs = build_pairs(n_factors);
+    let pairs: Vec<(usize, usize)> = (0..n_factors)
+        .flat_map(|q| ((q + 1)..n_factors).map(move |r| (q, r)))
+        .collect();
     let all_active = find_all_active_levels(design);
 
-    let mut domain_pairs: Vec<(Subdomain, CrossTab)> = pairs
+    let mut domain_pairs: Vec<LocalDomain> = pairs
         .par_iter()
-        .flat_map(|&(q, r)| domains_for_pair(design, weights, q, r, &all_active))
+        .flat_map(|&(q, r)| {
+            let (full_ct, l2g) =
+                match CrossTab::build_for_pair_with_active(design, weights, q, r, &all_active) {
+                    Some(pair) => pair,
+                    None => return Vec::new(),
+                };
+            let n_q_full = full_ct.n_q();
+            split_into_subdomains(full_ct, &l2g, n_q_full, (q, r))
+        })
         .collect();
 
     compute_partition_weights(&mut domain_pairs, design.n_dofs);
 
     domain_pairs
-}
-
-fn domains_for_pair<S: Store>(
-    design: &Design<S>,
-    weights: Option<&[f64]>,
-    q: usize,
-    r: usize,
-    all_active: &[Vec<bool>],
-) -> Vec<(Subdomain, CrossTab)> {
-    let (full_ct, l2g) =
-        match CrossTab::build_for_pair_with_active(design, weights, q, r, all_active) {
-            Some(pair) => pair,
-            None => return Vec::new(),
-        };
-
-    let n_q_full = full_ct.n_q();
-    split_into_subdomains(full_ct, &l2g, n_q_full, (q, r))
 }
 
 /// Split a full CrossTab into per-component subdomains.
@@ -86,7 +88,7 @@ fn split_into_subdomains(
     l2g: &[u32],
     n_q_full: usize,
     factor_pair: (usize, usize),
-) -> Vec<(Subdomain, CrossTab)> {
+) -> Vec<LocalDomain> {
     let components = full_ct.bipartite_connected_components();
 
     let cross_tabs: Vec<CrossTab> = if components.len() == 1 {
@@ -102,35 +104,21 @@ fn split_into_subdomains(
         .iter()
         .zip(cross_tabs)
         .map(|(comp, comp_ct)| {
-            let comp_l2g = component_global_indices(comp, l2g, n_q_full);
+            let comp_l2g: Vec<usize> = comp
+                .q_indices
+                .iter()
+                .map(|&i| l2g[i] as usize)
+                .chain(comp.r_indices.iter().map(|&i| l2g[n_q_full + i] as usize))
+                .collect();
             let core = schwarz_precond::SubdomainCore::uniform(
                 comp_l2g.into_iter().map(|g| g as u32).collect(),
             );
-            (Subdomain { factor_pair, core }, comp_ct)
+            LocalDomain {
+                subdomain: Subdomain { factor_pair, core },
+                cross_tab: comp_ct,
+            }
         })
         .collect()
-}
-
-/// Compute global DOF indices for a bipartite component.
-///
-/// Maps the component's compact q/r indices through the local-to-global vector,
-/// returning global indices with q-levels first, then r-levels.
-fn component_global_indices(comp: &BipartiteComponent, l2g: &[u32], n_q_full: usize) -> Vec<usize> {
-    comp.q_indices
-        .iter()
-        .map(|&i| l2g[i] as usize)
-        .chain(comp.r_indices.iter().map(|&i| l2g[n_q_full + i] as usize))
-        .collect()
-}
-
-fn build_pairs(n_factors: usize) -> Vec<(usize, usize)> {
-    let mut pairs = Vec::new();
-    for q in 0..n_factors {
-        for r in (q + 1)..n_factors {
-            pairs.push((q, r));
-        }
-    }
-    pairs
 }
 
 /// Compute partition-of-unity weights for overlapping Schwarz subdomains.
@@ -143,15 +131,16 @@ fn build_pairs(n_factors: usize) -> Vec<(usize, usize)> {
 /// In the common (non-overlapping) case where every DOF belongs to exactly one
 /// subdomain, all weights are 1.0 and the compact `PartitionWeights::Uniform`
 /// representation is used to avoid per-DOF storage.
-fn compute_partition_weights(domain_pairs: &mut [(Subdomain, CrossTab)], n_dofs: usize) {
+fn compute_partition_weights(domain_pairs: &mut [LocalDomain], n_dofs: usize) {
     let mut counts = vec![0u32; n_dofs];
-    for (d, _) in domain_pairs.iter() {
-        for &idx in d.core.global_indices() {
+    for ld in domain_pairs.iter() {
+        for &idx in ld.subdomain.core.global_indices() {
             debug_assert!((idx as usize) < n_dofs);
             counts[idx as usize] += 1;
         }
     }
-    for (d, _) in domain_pairs.iter_mut() {
+    for ld in domain_pairs.iter_mut() {
+        let d = &mut ld.subdomain;
         let all_unique = d
             .core
             .global_indices()
@@ -211,7 +200,8 @@ mod tests {
         let n_dofs = dm.n_dofs;
         // Two-sided PoU: squared weights must sum to 1 at every DOF.
         let mut weight_sq_sum = vec![0.0; n_dofs];
-        for (d, _) in &domain_pairs {
+        for ld in &domain_pairs {
+            let d = &ld.subdomain;
             for (i, &idx) in d.core.global_indices().iter().enumerate() {
                 let w = d.core.partition_weights().get(i);
                 weight_sq_sum[idx as usize] += w * w;
@@ -229,8 +219,8 @@ mod tests {
         let dm = make_test_design();
         let domain_pairs = build_local_domains(&dm, None);
         let mut covered = vec![false; dm.n_dofs];
-        for (d, _) in &domain_pairs {
-            for &idx in d.core.global_indices() {
+        for ld in &domain_pairs {
+            for &idx in ld.subdomain.core.global_indices() {
                 covered[idx as usize] = true;
             }
         }

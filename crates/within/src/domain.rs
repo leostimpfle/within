@@ -5,7 +5,7 @@ pub(crate) mod factor_pairs;
 
 pub(crate) use cross_tab::{find_all_active_levels, CrossTab};
 
-pub(crate) use factor_pairs::{build_local_domains, Subdomain};
+pub(crate) use factor_pairs::{build_local_domains, LocalDomain};
 
 // ===========================================================================
 // Design — categorical fixed-effects design (data + layout)
@@ -31,6 +31,7 @@ pub(crate) struct FactorMeta {
 /// `store` holds per-observation factor levels; `factors` holds per-factor
 /// metadata (n_levels, offset). The `Design` itself is pure data + layout —
 /// matrix-vector products live in the internal operator layer.
+#[derive(Clone, Debug)]
 pub struct Design<S: Store> {
     /// Observation storage backend (owns or borrows the raw factor levels).
     pub(crate) store: S,
@@ -40,28 +41,6 @@ pub struct Design<S: Store> {
     pub(crate) n_obs: usize,
     /// Total degrees of freedom (columns of D = sum of levels across factors).
     pub(crate) n_dofs: usize,
-}
-
-impl<S: Store + Clone> Clone for Design<S> {
-    fn clone(&self) -> Self {
-        Self {
-            store: self.store.clone(),
-            factors: self.factors.clone(),
-            n_obs: self.n_obs,
-            n_dofs: self.n_dofs,
-        }
-    }
-}
-
-impl<S: Store + std::fmt::Debug> std::fmt::Debug for Design<S> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("Design")
-            .field("store", &self.store)
-            .field("factors", &self.factors)
-            .field("n_obs", &self.n_obs)
-            .field("n_dofs", &self.n_dofs)
-            .finish()
-    }
 }
 
 impl<S: Store> Design<S> {

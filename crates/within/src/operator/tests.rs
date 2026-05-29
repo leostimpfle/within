@@ -384,15 +384,16 @@ mod schwarz_tests {
     use crate::block_elim::factor::ReducedFactor;
     use crate::block_elim::BlockElimSolver;
     use crate::csr_block::CsrBlock;
+    use crate::domain::factor_pairs::Subdomain;
     use crate::domain::CrossTab;
-    use crate::domain::{build_local_domains, Design, Subdomain};
+    use crate::domain::{build_local_domains, Design, LocalDomain};
     use crate::observation::FactorMajorStore;
     use crate::operator::schwarz::{build_additive_with_strategy, build_entry};
     use schwarz_precond::{LocalSolver, Operator, ReductionStrategy};
 
     const BLOCK_ELIM_NESTED_RAYON_CHILD_ENV: &str = "WITHIN_TEST_BLOCK_ELIM_NESTED_RAYON_CHILD";
 
-    fn make_test_data() -> (Design<FactorMajorStore>, Vec<(Subdomain, CrossTab)>) {
+    fn make_test_data() -> (Design<FactorMajorStore>, Vec<LocalDomain>) {
         let store = FactorMajorStore::new(vec![vec![0, 1, 0, 1, 2], vec![0, 0, 1, 1, 0]], 5)
             .expect("valid factor-major store");
         let design = Design::from_store(store).expect("valid fixed-effects design");
@@ -495,20 +496,18 @@ mod schwarz_tests {
         n_keep: usize,
         elim_ratio: usize,
         n_subdomains: usize,
-    ) -> (usize, Vec<(Subdomain, CrossTab)>) {
+    ) -> (usize, Vec<LocalDomain>) {
         let cross_tab = synthetic_sparse_cross_tab(n_keep, elim_ratio);
         let n_local = cross_tab.n_local();
         let global_indices: Vec<u32> = (0..n_local as u32).collect();
 
         let domain_pairs = (0..n_subdomains)
-            .map(|idx| {
-                (
-                    Subdomain {
-                        factor_pair: (idx, idx + 1),
-                        core: SubdomainCore::uniform(global_indices.clone()),
-                    },
-                    cross_tab.clone(),
-                )
+            .map(|idx| LocalDomain {
+                subdomain: Subdomain {
+                    factor_pair: (idx, idx + 1),
+                    core: SubdomainCore::uniform(global_indices.clone()),
+                },
+                cross_tab: cross_tab.clone(),
             })
             .collect();
         (n_local, domain_pairs)
@@ -697,15 +696,14 @@ mod schwarz_tests {
     #[test]
     fn test_exact_schur_uses_dense_fast_path_for_tiny_reduced_system() {
         let (_, mut domain_pairs) = make_test_data();
-        let (domain, cross_tab) = domain_pairs.swap_remove(0);
+        let domain = domain_pairs.swap_remove(0);
 
         let config = LocalSolverConfig {
             approx_chol: ApproxCholConfig::default(),
             approx_schur: None,
             dense_threshold: DEFAULT_DENSE_SCHUR_THRESHOLD,
         };
-        let entry =
-            build_entry(domain, cross_tab, &config).expect("exact Schur entry build failed");
+        let entry = build_entry(domain, &config).expect("exact Schur entry build failed");
         assert!(matches!(
             entry.solver().reduced_factor,
             ReducedFactor::Dense(_)
@@ -715,7 +713,7 @@ mod schwarz_tests {
     #[test]
     fn test_approximate_schur_uses_dense_fast_path_for_tiny_reduced_system() {
         let (_, mut domain_pairs) = make_test_data();
-        let (domain, cross_tab) = domain_pairs.swap_remove(0);
+        let domain = domain_pairs.swap_remove(0);
 
         let config = LocalSolverConfig {
             approx_chol: ApproxCholConfig::default(),
@@ -725,8 +723,7 @@ mod schwarz_tests {
             }),
             dense_threshold: DEFAULT_DENSE_SCHUR_THRESHOLD,
         };
-        let entry =
-            build_entry(domain, cross_tab, &config).expect("approximate Schur entry build failed");
+        let entry = build_entry(domain, &config).expect("approximate Schur entry build failed");
         assert!(matches!(
             entry.solver().reduced_factor,
             ReducedFactor::Dense(_)
@@ -736,15 +733,14 @@ mod schwarz_tests {
     #[test]
     fn test_dense_threshold_zero_disables_dense_fast_path() {
         let (_, mut domain_pairs) = make_test_data();
-        let (domain, cross_tab) = domain_pairs.swap_remove(0);
+        let domain = domain_pairs.swap_remove(0);
 
         let config = LocalSolverConfig {
             approx_chol: ApproxCholConfig::default(),
             approx_schur: None,
             dense_threshold: 0,
         };
-        let entry =
-            build_entry(domain, cross_tab, &config).expect("exact Schur entry build failed");
+        let entry = build_entry(domain, &config).expect("exact Schur entry build failed");
         assert!(!matches!(
             entry.solver().reduced_factor,
             ReducedFactor::Dense(_)
