@@ -162,7 +162,11 @@ impl<'a> Elimination<'a> {
     }
 
     pub(crate) fn par_emit(&self, emitter: &SampledCliqueEmitter) -> Vec<Edge> {
-        (0..self.n_elim)
+        // Emit in parallel (one scratch buffer reused per fold chunk), concatenate,
+        // then a single total-order `sort_and_dedup`. The total order fixes the
+        // per-`(lo, hi)` weight summation order, so the result is independent of
+        // thread scheduling (the concatenation order no longer matters).
+        let mut edges = (0..self.n_elim)
             .into_par_iter()
             .fold(
                 || (Vec::new(), Vec::<(u32, f64)>::new()),
@@ -174,16 +178,25 @@ impl<'a> Elimination<'a> {
                     (edges, scratch)
                 },
             )
-            .map(|(mut edges, _)| {
-                Self::sort_and_dedup(&mut edges);
-                edges
-            })
-            .reduce(Vec::new, Self::merge_dedup)
+            .map(|(edges, _)| edges)
+            .reduce(Vec::new, |mut a, mut b| {
+                a.append(&mut b);
+                a
+            });
+        Self::sort_and_dedup(&mut edges);
+        edges
     }
 
-    /// Sort edges by `(lo, hi)` and merge duplicates by summing weights.
+    /// Sort edges into a total `(lo, hi, weight)` order and merge duplicates by
+    /// summing weights. The weight tiebreak fixes the per-`(lo, hi)` summation
+    /// order, making the assembled Schur complement reproducible across runs and
+    /// thread counts.
     fn sort_and_dedup(edges: &mut Vec<Edge>) {
-        edges.sort_unstable_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(&b.1)));
+        edges.sort_unstable_by(|a, b| {
+            a.0.cmp(&b.0)
+                .then(a.1.cmp(&b.1))
+                .then_with(|| a.2.total_cmp(&b.2))
+        });
         if edges.len() <= 1 {
             return;
         }
@@ -197,43 +210,5 @@ impl<'a> Elimination<'a> {
             }
         }
         edges.truncate(write + 1);
-    }
-
-    /// Merge two sorted, deduplicated edge lists, summing weights for duplicates.
-    fn merge_dedup(a: Vec<Edge>, b: Vec<Edge>) -> Vec<Edge> {
-        if a.is_empty() {
-            return b;
-        }
-        if b.is_empty() {
-            return a;
-        }
-        let mut result = Vec::with_capacity(a.len() + b.len());
-        let (mut ia, mut ib) = (0, 0);
-        while ia < a.len() && ib < b.len() {
-            let ka = (a[ia].0, a[ia].1);
-            let kb = (b[ib].0, b[ib].1);
-            match ka.cmp(&kb) {
-                std::cmp::Ordering::Less => {
-                    result.push(a[ia]);
-                    ia += 1;
-                }
-                std::cmp::Ordering::Greater => {
-                    result.push(b[ib]);
-                    ib += 1;
-                }
-                std::cmp::Ordering::Equal => {
-                    result.push((a[ia].0, a[ia].1, a[ia].2 + b[ib].2));
-                    ia += 1;
-                    ib += 1;
-                }
-            }
-        }
-        if ia < a.len() {
-            result.extend_from_slice(&a[ia..]);
-        }
-        if ib < b.len() {
-            result.extend_from_slice(&b[ib..]);
-        }
-        result
     }
 }
