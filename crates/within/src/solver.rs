@@ -11,6 +11,7 @@ use schwarz_precond::{lsmr as lsmr_solve, mlsmr, Operator as _};
 use crate::config::{LsmrOptions, PreconditionerConfig};
 use crate::domain::Design;
 use crate::observation::{validate_weights, ArrayStore, Store};
+use crate::operator::design::gather_apply;
 use crate::operator::schwarz::{build_preconditioner, Preconditioner};
 use crate::operator::DesignOperator;
 use crate::{BuildError, SolveError, WithinError};
@@ -273,11 +274,11 @@ impl<S: Store> Solver<S> {
 
         let time_solve = t_solve_start.elapsed().as_secs_f64();
 
-        // demeaned = y - D x. The bare unweighted `D x` matvec uses an
-        // unweighted DesignOperator over the same design.
-        let bare_op = DesignOperator::new(&self.design, None);
+        // demeaned = y - D x. The bare unweighted `D x` matvec is the identity
+        // finalize over `gather_apply`; shapes are guaranteed here, so it is
+        // infallible — no DesignOperator wrapper (and its scatter scratch) needed.
         let mut demeaned = vec![0.0; self.design.n_obs];
-        bare_op.apply(&r.x, &mut demeaned)?;
+        gather_apply(&self.design, &r.x, &mut demeaned, |_, s| s);
         for (d, &yi) in demeaned.iter_mut().zip(y.iter()) {
             *d = yi - *d;
         }

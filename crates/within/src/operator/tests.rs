@@ -191,6 +191,71 @@ mod design_tests {
             .expect("apply_adjoint succeeds");
         assert_eq!(x, vec![5.0, 7.0, 3.0]);
     }
+
+    /// Single-factor design with `level(i) = i % n_levels`; when
+    /// `n_obs >= n_levels` every level is populated so the inferred level count
+    /// is exactly `n_levels` (which selects the scatter strategy).
+    fn make_strategy_design(n_obs: usize, n_levels: usize) -> Design<FactorMajorStore> {
+        let f: Vec<u32> = (0..n_obs).map(|i| (i % n_levels) as u32).collect();
+        let store = FactorMajorStore::new(vec![f], n_obs).expect("valid store");
+        Design::from_store(store).expect("valid design")
+    }
+
+    fn assert_all_close(actual: &[f64], expected: &[f64], ctx: &str) {
+        assert_eq!(actual.len(), expected.len(), "{ctx}: length mismatch");
+        for (i, (&a, &e)) in actual.iter().zip(expected.iter()).enumerate() {
+            // Generous relative tolerance: parallel reductions may reorder FP
+            // adds (~1e-13), but stale-scratch contamination is an O(value)
+            // error, so this catches the bug class without flaking on FP noise.
+            let tol = 1e-9 * e.abs().max(1.0);
+            assert!(
+                (a - e).abs() <= tol,
+                "{ctx}: index {i}: {a} vs {e} (tol {tol})"
+            );
+        }
+    }
+
+    /// Regression guard for the scatter-scratch reuse bug class (cf. the removed
+    /// `SCATTER_FOLD_POOL` leak). `apply_adjoint` reuses the operator's atomic
+    /// scatter scratch across calls, so a second call on the *same* operator
+    /// must match a freshly built operator — i.e. stale values from the first
+    /// call must not bleed into the second. The three `(n_obs, n_levels)` pairs
+    /// route the three scatter strategies: Sequential (`n_obs <= PAR_THRESHOLD`),
+    /// Fold (parallel, `n_levels < SCATTER_LOCAL_THRESHOLD`), and Atomic
+    /// (`n_levels >= SCATTER_LOCAL_THRESHOLD`) — the Atomic path, which owns the
+    /// reused scratch, was otherwise never unit-tested.
+    #[test]
+    fn test_scatter_scratch_reuse_matches_fresh_operator() {
+        for (n_obs, n_levels) in [(200usize, 16usize), (15_000, 64), (150_000, 100_000)] {
+            let dm = make_strategy_design(n_obs, n_levels);
+            let r: Vec<f64> = (0..dm.n_obs)
+                .map(|i| (i as f64 * 0.37 + 1.0).sin())
+                .collect();
+
+            // Baseline: a fresh operator that has never applied before.
+            let fresh = DesignOperator::new(&dm, None);
+            let mut baseline = vec![0.0f64; dm.n_dofs];
+            fresh
+                .apply_adjoint(&r, &mut baseline)
+                .expect("apply_adjoint succeeds");
+
+            // Dirty the scratch with a first apply, then apply again on the same
+            // operator; the second result must equal the fresh baseline.
+            let op = DesignOperator::new(&dm, None);
+            let mut warmup = vec![0.0f64; dm.n_dofs];
+            op.apply_adjoint(&r, &mut warmup)
+                .expect("apply_adjoint succeeds");
+            let mut reused = vec![0.0f64; dm.n_dofs];
+            op.apply_adjoint(&r, &mut reused)
+                .expect("apply_adjoint succeeds");
+
+            assert_all_close(
+                &reused,
+                &baseline,
+                &format!("reused vs fresh (n_obs={n_obs}, n_levels={n_levels})"),
+            );
+        }
+    }
 }
 
 // ===========================================================================

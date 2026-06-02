@@ -13,10 +13,11 @@
 //!   [`AdditiveSweepBuffers`], each containing a private `Vec<f64>`
 //!   accumulator plus local-solve scratch
 //!
-//! [`WorkerReductionBuffers`] manages the worker-local buffer stacks for
-//! the parallel-reduction path, using `ThreadLocal` to give each Rayon
-//! worker its own reusable buffer without cross-thread synchronization
-//! in the hot loop.
+//! [`WorkerBufferStack`] is the worker-local reuse engine shared by both
+//! paths: it gives each Rayon worker its own `ThreadLocal` buffer stack with
+//! no cross-thread synchronization in the hot loop. The reduction path wraps
+//! it in [`WorkerReductionBuffers`] to add the reduce-into-`z` step; the atomic
+//! path uses a `WorkerBufferStack<LocalSolveScratch>` directly.
 
 use std::cell::RefCell;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -137,8 +138,11 @@ impl AdditiveSweepBuffers {
 
 /// Pooled buffers that vary by reduction strategy.
 enum SchwarzBuffers {
-    /// Shared atomic accumulator.
-    Atomic { accum: Vec<AtomicU64> },
+    /// Shared atomic accumulator plus a pool of per-worker local-solve scratch.
+    Atomic {
+        accum: Vec<AtomicU64>,
+        scratch_pool: Vec<LocalSolveScratch>,
+    },
     /// Reusable task-local buffers for parallel reduction.
     Reduction { pool: Vec<AdditiveSweepBuffers> },
 }
@@ -148,6 +152,7 @@ impl SchwarzBuffers {
         match strategy {
             ResolvedReductionStrategy::AtomicScatter => Self::Atomic {
                 accum: (0..n_dofs).map(|_| AtomicU64::new(0)).collect(),
+                scratch_pool: Vec::new(),
             },
             ResolvedReductionStrategy::ParallelReduction => Self::Reduction {
                 pool: vec![AdditiveSweepBuffers::new(n_dofs, max_scratch_size)],
@@ -163,51 +168,83 @@ impl SchwarzBuffers {
     }
 }
 
-/// Worker-local buffer stacks for additive parallel reduction.
+/// Thread-local stack of reusable per-worker buffers backed by a shared pool.
 ///
-/// Each Rayon worker reuses its own accumulator buffers across sequential outer
-/// tasks. Nested re-entry on the same worker allocates a second buffer only when
-/// needed, so the number of retained full-length accumulators tracks re-entry
-/// depth rather than Rayon task splitting.
+/// Each Rayon worker reuses its own buffers across sequential outer tasks via a
+/// `ThreadLocal` stack, with no cross-thread synchronization in the hot loop.
+/// Nested re-entry on the same worker allocates an extra buffer only when
+/// needed, so the number of retained buffers tracks re-entry depth rather than
+/// Rayon task splitting. At round end [`into_pool`](Self::into_pool) gathers the
+/// shared pool and every worker stack back into one vec for the next round.
+struct WorkerBufferStack<T: Send> {
+    shared_pool: Mutex<Vec<T>>,
+    worker_stacks: ThreadLocal<RefCell<Vec<T>>>,
+    alloc: Box<dyn Fn() -> T + Send + Sync>,
+}
+
+impl<T: Send> WorkerBufferStack<T> {
+    fn new(pool: Vec<T>, alloc: impl Fn() -> T + Send + Sync + 'static) -> Self {
+        Self {
+            shared_pool: Mutex::new(pool),
+            worker_stacks: ThreadLocal::with_capacity(rayon::current_num_threads().max(1)),
+            alloc: Box::new(alloc),
+        }
+    }
+
+    fn with_buffer<R>(&self, f: impl FnOnce(&mut T) -> R) -> R {
+        let mut buffer = match self
+            .worker_stacks
+            .get_or(|| RefCell::new(Vec::new()))
+            .borrow_mut()
+            .pop()
+        {
+            Some(buffer) => buffer,
+            None => self.take_or_alloc(),
+        };
+        let result = f(&mut buffer);
+        self.worker_stacks
+            .get_or(|| RefCell::new(Vec::new()))
+            .borrow_mut()
+            .push(buffer);
+        result
+    }
+
+    fn take_or_alloc(&self) -> T {
+        self.shared_pool
+            .lock()
+            .ok()
+            .and_then(|mut pool| pool.pop())
+            .unwrap_or_else(|| (self.alloc)())
+    }
+
+    /// Gather the shared pool and all worker stacks back into one vec so it can
+    /// be returned to its [`SchwarzBuffers`] home for the next round. `ctx`
+    /// labels the synchronization error if the pool lock was poisoned.
+    fn into_pool(mut self, ctx: &'static str) -> Result<Vec<T>, SolveError> {
+        let mut pool = self
+            .shared_pool
+            .into_inner()
+            .map_err(|_| SolveError::Synchronization { context: ctx })?;
+        for worker_stack in self.worker_stacks.iter_mut() {
+            pool.append(worker_stack.get_mut());
+        }
+        Ok(pool)
+    }
+}
+
+/// Worker-local buffers for the parallel-reduction path: a [`WorkerBufferStack`]
+/// of per-worker accumulators plus the reduce-into-`z` step that sums them.
 struct WorkerReductionBuffers {
-    shared_pool: Mutex<Vec<AdditiveSweepBuffers>>,
-    worker_stacks: ThreadLocal<RefCell<Vec<AdditiveSweepBuffers>>>,
-    n_dofs: usize,
-    max_scratch_size: usize,
+    stack: WorkerBufferStack<AdditiveSweepBuffers>,
 }
 
 impl WorkerReductionBuffers {
     fn new(pool: Vec<AdditiveSweepBuffers>, n_dofs: usize, max_scratch_size: usize) -> Self {
         Self {
-            shared_pool: Mutex::new(pool),
-            worker_stacks: ThreadLocal::with_capacity(rayon::current_num_threads().max(1)),
-            n_dofs,
-            max_scratch_size,
+            stack: WorkerBufferStack::new(pool, move || {
+                AdditiveSweepBuffers::new(n_dofs, max_scratch_size)
+            }),
         }
-    }
-
-    fn with_buffer<T>(&self, f: impl FnOnce(&mut AdditiveSweepBuffers) -> T) -> T {
-        let worker_stack = self.worker_stacks.get_or(|| RefCell::new(Vec::new()));
-        let mut buffers = if let Some(buffers) = worker_stack.borrow_mut().pop() {
-            buffers
-        } else {
-            self.take_or_alloc()
-        };
-
-        let result = f(&mut buffers);
-        self.worker_stacks
-            .get_or(|| RefCell::new(Vec::new()))
-            .borrow_mut()
-            .push(buffers);
-        result
-    }
-
-    fn take_or_alloc(&self) -> AdditiveSweepBuffers {
-        self.shared_pool
-            .lock()
-            .ok()
-            .and_then(|mut pool| pool.pop())
-            .unwrap_or_else(|| AdditiveSweepBuffers::new(self.n_dofs, self.max_scratch_size))
     }
 
     fn finish_round(
@@ -222,26 +259,13 @@ impl WorkerReductionBuffers {
         if apply_result.is_err() {
             z.fill(0.0);
         }
-        let mut buffers = self.into_buffers()?;
+        let mut buffers = self.stack.into_pool("additive.reduction.pool.into_inner")?;
         // On success, `reduce_into` zeroes-then-sums into `z`.
         if apply_result.is_ok() {
             Self::reduce_into(z, &buffers);
         }
         for b in &mut buffers {
             b.global_accum.fill(0.0);
-        }
-        Ok(buffers)
-    }
-
-    fn into_buffers(mut self) -> Result<Vec<AdditiveSweepBuffers>, SolveError> {
-        let mut buffers =
-            self.shared_pool
-                .into_inner()
-                .map_err(|_| SolveError::Synchronization {
-                    context: "additive.reduction.pool.into_inner",
-                })?;
-        for worker_stack in self.worker_stacks.iter_mut() {
-            buffers.append(worker_stack.get_mut());
         }
         Ok(buffers)
     }
@@ -312,9 +336,10 @@ impl<S: LocalSolver> AdditiveExecutor<S> {
     ) -> Result<(), SolveError> {
         let mut bufs = self.buf_pool.take(plan.strategy)?;
         let apply_result = match &mut bufs {
-            SchwarzBuffers::Atomic { accum } => {
-                self.apply_atomic(plan.allow_inner_parallelism, r, z, accum)
-            }
+            SchwarzBuffers::Atomic {
+                accum,
+                scratch_pool,
+            } => self.apply_atomic(plan.allow_inner_parallelism, r, z, accum, scratch_pool),
             SchwarzBuffers::Reduction { pool } => {
                 self.apply_parallel_reduction(plan.allow_inner_parallelism, r, z, pool)
             }
@@ -330,22 +355,42 @@ impl<S: LocalSolver> AdditiveExecutor<S> {
         r: &[f64],
         z: &mut [f64],
         accum: &[AtomicU64],
+        scratch_pool: &mut Vec<LocalSolveScratch>,
     ) -> Result<(), SolveError> {
         let max_scratch_size = self.buf_pool.max_scratch_size();
-        self.subdomains.par_iter().enumerate().try_for_each_init(
-            || LocalSolveScratch::new(max_scratch_size),
-            |scratch, (subdomain, entry)| {
-                entry
-                    .apply_weighted_into_atomic(
-                        r,
-                        accum,
-                        &mut scratch.r_scratch,
-                        &mut scratch.z_scratch,
-                        allow_inner_parallelism,
-                    )
-                    .map_err(|source| SolveError::LocalSolveFailed { subdomain, source })
-            },
-        )?;
+        let worker_scratch = WorkerBufferStack::new(std::mem::take(scratch_pool), move || {
+            LocalSolveScratch::new(max_scratch_size)
+        });
+        let apply_result =
+            self.subdomains
+                .par_iter()
+                .enumerate()
+                .try_for_each(|(subdomain, entry)| {
+                    worker_scratch.with_buffer(|scratch| {
+                        entry
+                            .apply_weighted_into_atomic(
+                                r,
+                                accum,
+                                &mut scratch.r_scratch,
+                                &mut scratch.z_scratch,
+                                allow_inner_parallelism,
+                            )
+                            .map_err(|source| SolveError::LocalSolveFailed { subdomain, source })
+                    })
+                });
+
+        // Recover the scratch pool for the next round before propagating any
+        // apply error. A pool-recovery failure must not mask a real
+        // `LocalSolveFailed`, so prefer the original error when it is one.
+        match worker_scratch.into_pool("additive.atomic.scratch.into_inner") {
+            Ok(recovered) => *scratch_pool = recovered,
+            Err(into_err) => return apply_result.and(Err(into_err)),
+        }
+
+        // On apply error the swap-zero readout is skipped, leaving `accum`
+        // dirty; `BufferPool::put` then drops the whole buffer (matching the
+        // pre-pooling behaviour), so the next caller starts from a clean accum.
+        apply_result?;
 
         const READOUT_CHUNK: usize = 4096;
         z.par_chunks_mut(READOUT_CHUNK)
@@ -377,7 +422,7 @@ impl<S: LocalSolver> AdditiveExecutor<S> {
                 .par_iter()
                 .enumerate()
                 .try_for_each(|(subdomain, entry)| {
-                    worker_buffers.with_buffer(|buffers| {
+                    worker_buffers.stack.with_buffer(|buffers| {
                         entry
                             .apply_weighted_into_with_scratch(
                                 r,
@@ -426,7 +471,7 @@ mod tests {
             .take(ResolvedReductionStrategy::AtomicScatter)
             .expect("first take");
         match &mut bufs {
-            SchwarzBuffers::Atomic { accum } => {
+            SchwarzBuffers::Atomic { accum, .. } => {
                 for slot in accum {
                     slot.store(0xdead_beef_dead_beef, Ordering::Relaxed);
                 }
@@ -445,7 +490,7 @@ mod tests {
             .take(ResolvedReductionStrategy::AtomicScatter)
             .expect("second take");
         match &fresh {
-            SchwarzBuffers::Atomic { accum } => {
+            SchwarzBuffers::Atomic { accum, .. } => {
                 for (i, slot) in accum.iter().enumerate() {
                     assert_eq!(
                         slot.load(Ordering::Relaxed),
