@@ -58,10 +58,6 @@ pub struct LocalSolverConfig {
 
 impl Default for LocalSolverConfig {
     fn default() -> Self {
-        // The Schwarz preconditioner is always applied inside an iterative
-        // solver (modified LSMR), so we default to `split_merge=Some(2)` for
-        // the reduced Schur system. There is no "one-shot" use case where the
-        // sparser `split_merge=None` factorization would be appropriate.
         Self {
             approx_chol: ApproxCholConfig {
                 seed: 0,
@@ -110,12 +106,7 @@ impl Default for ApproxSchurConfig {
 
 /// Preconditioner variant.
 ///
-/// Marked `#[non_exhaustive]`: future variants (e.g. two-level Schwarz with a
-/// coarse space) may be added without requiring a major version bump.
-/// External `match` sites must include a wildcard arm.
-///
-/// See the [module-level docs](crate::config) for the two-channel signaling
-/// pattern that distinguishes "library default" from "explicit identity".
+/// `#[non_exhaustive]` — external `match` sites must include a wildcard arm.
 #[derive(Debug, Clone)]
 #[non_exhaustive]
 pub enum PreconditionerConfig {

@@ -56,8 +56,7 @@ impl<S: LocalSolver> AdditiveExecutor<S> {
     }
 
     /// Dispatch entry point: take a buffer from the pool, run the backend,
-    /// return the buffer. The pool size is bounded, so the steady state
-    /// allocates nothing.
+    /// return the buffer.
     pub(super) fn apply(
         &self,
         plan: ReductionPlan,

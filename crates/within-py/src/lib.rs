@@ -1,44 +1,10 @@
-// The various __reduce__ methods return tuples whose Rust type signatures are
-// inherently noisy (Bound<'py, PyAny>, (PyO3 fields...)). Suppressing the
-// clippy lint keeps the PyO3 boilerplate readable per-method.
+// __reduce__ methods return noisy PyO3 tuple types; allow the lint crate-wide.
 #![allow(clippy::type_complexity)]
 
-//! Thin PyO3 bridge exposing the [`within`] Rust crate to Python as `within._within`.
-//!
-//! This crate is intentionally minimal: it converts between Python/numpy types
-//! and the native Rust API, then delegates all computation to [`within`].
-//!
-//! # GIL release strategy
-//!
-//! Every call that performs substantial computation ([`api::solve`],
-//! [`api::solve_batch`], `PySolver::solve_py`, `PySolver::solve_batch_py`, and
-//! `PySolver::new`) releases the GIL via [`Python::allow_threads`] before
-//! entering the Rust solver. This means Python threads are **not** blocked
-//! during solve operations and the solver's internal rayon parallelism can run
-//! freely.
-//!
-//! # Type mapping
-//!
-//! | Python / numpy              | Rust                              |
-//! |-----------------------------|-----------------------------------|
-//! | `NDArray[np.uint32]` (2-D)  | `ndarray::ArrayView2<u32>`        |
-//! | `NDArray[np.float64]` (1-D) | `&[f64]`                          |
-//! | `NDArray[np.float64]` (2-D) | `Vec<Vec<f64>>` (columns)         |
-//! | `LsmrOptions`                | [`within::LsmrOptions`]            |
-//! | `PreconditionerConfig` enum | [`within::PreconditionerConfig`]  |
-//! | `Preconditioner` (built)    | [`within::Preconditioner`]        |
-//! | `SolveResult`               | [`within::SolveResult`]           |
-//!
-//! Category arrays are read directly via numpy's ndarray bridge (zero-copy
-//! when F-contiguous). Response vectors and weights are borrowed as slices
-//! or copied when non-contiguous. Results are converted to numpy arrays on
-//! return.
-//!
-//! # User-facing documentation
-//!
-//! For usage examples and the public API surface, see the Python package at
-//! `python/within/`. This crate's types are re-exported through
-//! `within.__init__` and documented in `within._within.pyi`.
+//! Thin PyO3 bridge exposing the [`within`] crate to Python as `within._within`.
+//! Converts Python/numpy types to the native API and delegates all computation
+//! to [`within`]; every heavy call releases the GIL via [`Python::allow_threads`].
+//! Usage docs live in `python/within/` and the `within._within.pyi` stub.
 
 use pyo3::prelude::*;
 

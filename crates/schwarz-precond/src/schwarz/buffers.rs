@@ -1,20 +1,7 @@
-//! Scratch-buffer types for the additive Schwarz executor.
-//!
-//! Two buffer layouts exist, matching the two reduction strategies:
-//!
-//! - [`SchwarzBuffers::Atomic`] — a single shared `Vec<AtomicU64>` accumulator
-//! - [`SchwarzBuffers::Reduction`] — a pool of per-worker
-//!   [`AdditiveSweepBuffers`], each containing a private `Vec<f64>`
-//!   accumulator plus local-solve scratch
-//!
-//! [`WorkerBufferStack`] is the worker-local reuse engine shared by both
-//! paths: it gives each Rayon worker its own `ThreadLocal` buffer stack with
-//! no cross-thread synchronization in the hot loop. The reduction path wraps
-//! it in [`WorkerReductionBuffers`] to add the reduce-into-`z` step; the atomic
-//! path uses a `WorkerBufferStack<LocalSolveScratch>` directly.
-//!
-//! [`BufferPool`] hands these buffers to the executor and reclaims them after
-//! each apply so the steady state allocates nothing.
+//! Scratch-buffer types for the additive Schwarz executor, one layout per
+//! reduction strategy ([`SchwarzBuffers::Atomic`], [`SchwarzBuffers::Reduction`]).
+//! [`BufferPool`] hands them to the executor and reclaims them after each apply
+//! so the steady state allocates nothing.
 
 use std::cell::RefCell;
 use std::sync::atomic::AtomicU64;

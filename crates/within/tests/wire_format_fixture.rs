@@ -1,19 +1,7 @@
-//! Wire-format byte fixture for the serialized [`Preconditioner`].
-//!
-//! `CHANGELOG.md` advertises that `#[serde(transparent)]` pins the postcard
-//! wire format across versions. The round-trip test in
-//! `crates/within/tests/solver.rs::test_serde_roundtrip` covers
-//! deserialize-after-serialize within the same build, but does not detect a
-//! silent encoding shift between versions (e.g. when `Variant` grows a new
-//! discriminant or a field). This test does: it embeds a payload generated
-//! by a known-good build, deserializes it, and asserts the resulting
-//! preconditioner can drive a solve.
-//!
-//! Regenerating the fixture (intentional wire-format bump): run
-//! `cargo test -p within --test wire_format_fixture -- --ignored
-//!  regenerate_wire_format_fixture --nocapture`, copy the printed bytes into
-//! `crates/within/tests/fixtures/preconditioner_v3.postcard`, then update the
-//! `WIRE_FORMAT_VERSION` constant and CHANGELOG.
+//! Wire-format byte fixture for the serialized [`Preconditioner`]: deserializes
+//! a payload from a known-good build and drives a solve, catching silent
+//! cross-version encoding shifts the same-build round-trip test cannot.
+//! Regenerate via the `#[ignore]`d `regenerate_wire_format_fixture` test.
 
 use ndarray::array;
 use within::{LsmrOptions, Preconditioner, Solver};

@@ -12,10 +12,6 @@
 #![deny(missing_docs)]
 #![warn(clippy::all)]
 
-// ============================================================================
-// Operator trait
-// ============================================================================
-
 /// A linear operator A: R^ncols -> R^nrows with its adjoint A^T.
 ///
 /// Preconditioners are operators too (M^{-1} is a linear map).
@@ -37,10 +33,6 @@ pub trait Operator: Send + Sync {
     /// Returns an error under the same conditions as `apply`.
     fn apply_adjoint(&self, x: &[f64], y: &mut [f64]) -> Result<(), error::SolveError>;
 }
-
-// ============================================================================
-// Modules
-// ============================================================================
 
 mod csr_matrix;
 /// Domain decomposition primitives: subdomain cores and partition weights.

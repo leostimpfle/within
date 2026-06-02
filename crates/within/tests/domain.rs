@@ -5,13 +5,8 @@
 use within::observation::FactorMajorStore;
 use within::Design;
 
-// ---------------------------------------------------------------------------
-// 1. Three-factor design: overlap creates NonUniform partition weights
-// ---------------------------------------------------------------------------
-// In a 3-factor design, pairs (0,1), (0,2), (1,2) all share DOFs from
-// the respective factors. Factor 0's DOFs appear in both the (0,1) and
-// (0,2) subdomains → NonUniform weights (1/2) must be assigned.
-// We verify this through the public solve API by checking convergence.
+// Three-factor design: shared DOFs across factor pairs force NonUniform
+// partition weights; verified via the public solve API.
 
 #[test]
 fn test_three_factor_design_solve_converges() {

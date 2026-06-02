@@ -41,10 +41,6 @@ impl Operator for FeSchwarz {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Crate-internal builders
-// ---------------------------------------------------------------------------
-
 /// Build additive Schwarz with an explicit reduction strategy.
 pub(crate) fn build_additive_with_strategy(
     domains: Vec<LocalDomain>,
@@ -57,10 +53,6 @@ pub(crate) fn build_additive_with_strategy(
         .collect::<Result<Vec<_>, BuildError>>()?;
     Ok(FeSchwarz(SchwarzPreconditioner::new(entries, strategy)))
 }
-
-// ---------------------------------------------------------------------------
-// Helper: build SubdomainEntry from FE types
-// ---------------------------------------------------------------------------
 
 /// Build a single `SubdomainEntry<BlockElimSolver>` from a pre-built CrossTab.
 pub(crate) fn build_entry(
@@ -76,38 +68,10 @@ pub(crate) fn build_entry(
     SubdomainEntry::try_new(subdomain.core, solver).map_err(BuildError::Preconditioner)
 }
 
-// ---------------------------------------------------------------------------
-// Opaque public preconditioner handle
-// ---------------------------------------------------------------------------
-
 /// Opaque handle to a pre-built fixed-effects preconditioner.
 ///
-/// # Cheap clone
-///
-/// Cloning a `Preconditioner` is O(1): it bumps `Arc` refcounts on the inner
-/// subdomain vector (`Arc<Vec<SubdomainEntry<_>>>`) and the scratch
-/// `BufferPool` shared by `schwarz_precond::SchwarzPreconditioner`. No
-/// factorization state is deep-copied (see that crate's `Clone` impl). This
-/// is what makes `From<&Preconditioner> for PreconditionerInput` honest —
-/// passing `&precond` to [`Solver::new`] does not duplicate the factorization.
-///
-/// # State invariants
-///
-/// Factorization state is immutable after build: the per-subdomain solvers
-/// and their backing storage never change once a `Preconditioner` exists.
-/// The one piece of interior mutability is a scratch `BufferPool:
-/// Arc<Mutex<Vec<SchwarzBuffers>>>` inside the underlying Schwarz executor,
-/// used by `apply` for take/put of temporary buffers; it is fully
-/// encapsulated and not observable to callers.
-///
-/// # For future maintainers
-///
-/// This contract holds for the current [`Variant::Additive`] variant. Any
-/// new `Variant` added below MUST preserve both invariants:
-/// 1. `Clone` must be O(1) — wrap any heavy per-variant state in an
-///    `Arc` rather than deep-copying it.
-/// 2. Factorization state must be immutable after build (interior
-///    mutability is allowed only for opaque scratch like `BufferPool`).
+/// Cloning is O(1): the inner factorization is `Arc`-backed, so passing
+/// `&precond` to [`Solver::new`] never duplicates it.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct Preconditioner {

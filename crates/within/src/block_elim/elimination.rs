@@ -21,18 +21,11 @@ pub(crate) type Edge = (u32, u32, f64);
 // Star — zero-copy neighborhood view
 // ===========================================================================
 
-// The Schur complement S = D_keep - C_keep^T * D_elim^{-1} * C_keep arises from
-// block-eliminating the diagonal block of the larger partition in the bipartite
-// SDDM system [D_q, -C; -C^T, D_r]. Since D_elim is diagonal, the elimination
-// is exact and each eliminated vertex k contributes a rank-1 clique (star) to
-// the fill graph: all pairs of k's neighbors in the keep-block get a fill edge.
-//
-// Two strategies materialize these fill edges:
-// - `ExactCliqueEmitter` (not shown here; the exact path uses row-workspace
-//   accumulation in `SchurLaplacian::from_elimination` instead)
-// - `SampledCliqueEmitter`: uses GKS 2023 clique-tree sampling to approximate
-//   high-degree cliques with O(deg) edges instead of O(deg^2), keeping the
-//   Schur complement spectrally close to the exact one.
+// Eliminating a diagonal vertex contributes a rank-1 clique (star) to the
+// Schur fill graph: every pair of its keep-block neighbors gets a fill edge.
+// `SampledCliqueEmitter` approximates high-degree stars with GKS 2023
+// clique-tree sampling — O(deg) edges instead of O(deg^2) — keeping the Schur
+// complement spectrally close to the exact (row-workspace) path.
 
 /// One eliminated vertex's neighbors in the keep-block.
 ///

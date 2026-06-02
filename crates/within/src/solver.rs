@@ -20,18 +20,11 @@ fn norm(v: &[f64]) -> f64 {
     v.iter().map(|x| x * x).sum::<f64>().sqrt()
 }
 
-// ---------------------------------------------------------------------------
-// Solver::new inputs (polymorphic via traits)
-// ---------------------------------------------------------------------------
-
 /// Fallible conversion into a [`Design`] for [`Solver::new`].
 ///
 /// Implemented for:
 /// - `ArrayView2<'a, u32>` — categories matrix; an `ArrayStore`-backed [`Design`] is built
 /// - `Design<S>` — pass-through for an already-built design
-///
-/// Implemented as a custom trait rather than `Into` because the raw-view path
-/// is fallible and `From`/`Into` are not.
 pub trait IntoDesign<'a> {
     /// Storage backend the resulting [`Design`] uses.
     type Store: Store;
@@ -97,16 +90,11 @@ impl From<Preconditioner> for PreconditionerInput {
 }
 
 impl From<&Preconditioner> for PreconditionerInput {
-    /// Reuse a preconditioner by reference. Cloning is O(1) (see
-    /// [`Preconditioner`] docs) so passing `&precond` is essentially free.
+    /// Reuse by reference; clone is O(1).
     fn from(p: &Preconditioner) -> Self {
         Self::Prebuilt(p.clone())
     }
 }
-
-// ---------------------------------------------------------------------------
-// Solve results
-// ---------------------------------------------------------------------------
 
 /// Common solve output for all orchestration entry points.
 #[derive(Debug, Clone)]
