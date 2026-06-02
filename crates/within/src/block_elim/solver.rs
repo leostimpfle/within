@@ -113,6 +113,42 @@ pub struct BlockElimSolver {
     n_reduced: usize,
 }
 
+/// The q/r blocks assigned to their eliminated/kept roles for one solve.
+///
+/// `BlockElimSolver` eliminates one diagonal block and solves a reduced system
+/// on the other; `eliminate_q` fixes which is which at construction. This bundles
+/// the per-orientation block ranges and cross operators under named roles —
+/// reusing [`super::elimination::Elimination`]'s `keep_to_elim` / `elim_to_keep`
+/// vocabulary — so [`BlockElimSolver::eliminate_and_recover`] stays
+/// orientation-agnostic.
+struct BlockRoles<'a> {
+    /// Index range of the eliminated block within the `[q | r]` layout.
+    elim: std::ops::Range<usize>,
+    /// Index range of the kept (reduced) block.
+    keep: std::ops::Range<usize>,
+    /// Cross block with kept rows / eliminated columns; applied to the eliminated
+    /// block to form the reduced RHS (`Cᵀ` when eliminating q, `C` when r).
+    keep_to_elim: &'a CsrBlock,
+    /// Cross block with eliminated rows / kept columns; used in back-substitution
+    /// to recover the eliminated block (`C` when eliminating q, `Cᵀ` when r).
+    elim_to_keep: &'a CsrBlock,
+}
+
+impl BlockRoles<'_> {
+    /// Borrow the eliminated block (mutable, the back-substitution output) and
+    /// the kept block (immutable source) out of `sol`. The two blocks meet at
+    /// the q/r boundary; `sol`'s tail past `n_local` is reduced-solve scratch,
+    /// so the kept side is clamped to `keep`'s length.
+    fn split_sol<'s>(&self, sol: &'s mut [f64]) -> (&'s mut [f64], &'s [f64]) {
+        let (lo, hi) = sol.split_at_mut(self.elim.start.max(self.keep.start));
+        if self.elim.start < self.keep.start {
+            (&mut lo[self.elim.clone()], &hi[..self.keep.len()])
+        } else {
+            (&mut hi[..self.elim.len()], &lo[self.keep.clone()])
+        }
+    }
+}
+
 impl BlockElimSolver {
     pub(crate) fn new(
         cross_tab: impl Into<Arc<CrossTab>>,
@@ -188,6 +224,62 @@ impl BlockElimSolver {
         let cross_nnz = self.cross_tab.c.nnz();
         (2 * cross_nnz) + self.n_local
     }
+
+    /// Eliminate one diagonal block and recover it by back-substitution.
+    ///
+    /// `elim` names the orientation roles (eliminated vs kept block, and the
+    /// cross operators for each); the sequence below is the bipartite-SDDM
+    /// block-elimination kernel and runs unchanged for both orientations.
+    /// Eliminate one diagonal block and recover it by back-substitution.
+    ///
+    /// `roles` assigns the q/r blocks and cross operators to the eliminated/kept
+    /// roles; the sequence below is the bipartite-SDDM block-elimination kernel
+    /// and runs unchanged for both orientations.
+    fn eliminate_and_recover(
+        &self,
+        roles: &BlockRoles,
+        rhs: &mut [f64],
+        sol: &mut [f64],
+        allow_inner_parallelism: bool,
+    ) -> Result<(), LocalSolveError> {
+        let n = self.n_local;
+        let n_keep = roles.keep.len();
+
+        // Scale the eliminated block by its inverse diagonal.
+        scale_by_diag_in_place(&mut rhs[roles.elim.clone()], &self.inv_diag_elim);
+
+        // Apply `keep_to_elim` into the scratch tail to form the reduced RHS.
+        {
+            let (main, scratch) = rhs.split_at_mut(n);
+            roles.keep_to_elim.spmv_assign_add(
+                &main[roles.elim.clone()],
+                &main[roles.keep.clone()],
+                &mut scratch[..n_keep],
+                allow_inner_parallelism,
+            );
+        }
+        if self.n_reduced > n_keep {
+            rhs[n + n_keep] = 0.0;
+        }
+        subtract_mean(&mut rhs[n..], self.n_reduced);
+
+        // Solve the reduced system in place.
+        let reduced = roles.keep.start..roles.keep.start + self.n_reduced;
+        sol[reduced.clone()].copy_from_slice(&rhs[n..n + self.n_reduced]);
+        self.reduced_factor.solve_in_place(&mut sol[reduced])?;
+
+        // Back-substitute to recover the eliminated block.
+        let (sol_output, sol_source) = roles.split_sol(sol);
+        backsub_block_from_scaled_rhs(
+            sol_output,
+            &rhs[roles.elim.clone()],
+            roles.elim_to_keep,
+            &self.inv_diag_elim,
+            sol_source,
+            allow_inner_parallelism,
+        );
+        Ok(())
+    }
 }
 
 impl LocalSolver for BlockElimSolver {
@@ -211,83 +303,32 @@ impl LocalSolver for BlockElimSolver {
     ) -> Result<(), LocalSolveError> {
         let n = self.n_local;
         let n_q = self.cross_tab.n_q();
-        let n_r = self.cross_tab.n_r();
         let ct = &self.cross_tab;
 
         // Block elimination for the bipartite SDDM system [D_q, C; C^T, D_r]:
-        // Step 1: Negate the q-block of rhs to convert from SDDM form to the
-        //         signed Laplacian form where C carries a negative sign.
-        //         This is equivalent to solving [-D_q, C; C^T, D_r] x = rhs'.
+        // negate the q-block to convert from SDDM form to the signed-Laplacian
+        // form where C carries a negative sign (equivalent to solving
+        // [-D_q, C; C^T, D_r] x = rhs').
         negate_block(&mut rhs[..n], n_q);
         subtract_mean(rhs, n);
 
-        if self.eliminate_q {
-            let n_keep = n_r;
-            scale_by_diag_in_place(&mut rhs[..n_q], &self.inv_diag_elim);
-
-            {
-                let (main, scratch) = rhs.split_at_mut(n);
-                ct.ct.spmv_assign_add(
-                    &main[..n_q],
-                    &main[n_q..n_q + n_keep],
-                    &mut scratch[..n_keep],
-                    allow_inner_parallelism,
-                );
-            }
-            if self.n_reduced > n_keep {
-                rhs[n + n_keep] = 0.0;
-            }
-            subtract_mean(&mut rhs[n..], self.n_reduced);
-
-            sol[n_q..n_q + self.n_reduced].copy_from_slice(&rhs[n..n + self.n_reduced]);
-            self.reduced_factor
-                .solve_in_place(&mut sol[n_q..n_q + self.n_reduced])?;
-
-            {
-                let (sol_q, sol_r) = sol.split_at_mut(n_q);
-                backsub_block_from_scaled_rhs(
-                    sol_q,
-                    &rhs[..n_q],
-                    &ct.c,
-                    &self.inv_diag_elim,
-                    sol_r,
-                    allow_inner_parallelism,
-                );
+        // The eliminated/kept roles are fixed by `eliminate_q`; name the swap once.
+        let roles = if self.eliminate_q {
+            BlockRoles {
+                elim: 0..n_q,
+                keep: n_q..n,
+                keep_to_elim: &ct.ct,
+                elim_to_keep: &ct.c,
             }
         } else {
-            let n_keep = n_q;
-            scale_by_diag_in_place(&mut rhs[n_q..n_q + n_r], &self.inv_diag_elim);
-
-            {
-                let (main, scratch) = rhs.split_at_mut(n);
-                ct.c.spmv_assign_add(
-                    &main[n_q..n_q + n_r],
-                    &main[..n_q],
-                    &mut scratch[..n_keep],
-                    allow_inner_parallelism,
-                );
+            BlockRoles {
+                elim: n_q..n,
+                keep: 0..n_q,
+                keep_to_elim: &ct.c,
+                elim_to_keep: &ct.ct,
             }
-            if self.n_reduced > n_keep {
-                rhs[n + n_keep] = 0.0;
-            }
-            subtract_mean(&mut rhs[n..], self.n_reduced);
-
-            sol[..self.n_reduced].copy_from_slice(&rhs[n..n + self.n_reduced]);
-            self.reduced_factor
-                .solve_in_place(&mut sol[..self.n_reduced])?;
-
-            {
-                let (sol_q, sol_r) = sol.split_at_mut(n_q);
-                backsub_block_from_scaled_rhs(
-                    &mut sol_r[..n_r],
-                    &rhs[n_q..n_q + n_r],
-                    &ct.ct,
-                    &self.inv_diag_elim,
-                    sol_q,
-                    allow_inner_parallelism,
-                );
-            }
-        }
+        };
+        self.eliminate_and_recover(&roles, rhs, sol, allow_inner_parallelism)?;
 
         subtract_mean(sol, n);
         negate_block(&mut sol[..n], n_q);
