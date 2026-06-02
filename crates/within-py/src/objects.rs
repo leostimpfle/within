@@ -201,14 +201,13 @@ impl PySolver {
         let columns = extract_columns(&y_arr);
         let col_refs = column_refs(&columns);
 
-        let n_dofs = self.solver.n_dofs();
         let params = resolve_lsmr_config(options)?;
 
         let result = py
             .allow_threads(|| self.solver.solve_batch(&col_refs, &params))
             .map_err(value_err)?;
 
-        into_py_batch_result(py, result, n_dofs, n_obs)
+        into_py_batch_result(py, result)
     }
 
     /// Return the built preconditioner, or ``None`` if unconfigured.

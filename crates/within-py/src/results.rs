@@ -72,14 +72,14 @@ pub(crate) fn into_py_result(py: Python<'_>, result: SolveResult) -> PySolveResu
 pub(crate) fn into_py_batch_result(
     py: Python<'_>,
     result: within::BatchSolveResult,
-    n_dofs: usize,
-    n_obs: usize,
 ) -> PyResult<PyBatchSolveResult> {
     let n_rhs = result.converged.len();
 
-    let x = Array2::from_shape_vec((n_dofs, n_rhs).f(), result.x).map_err(value_err)?;
+    // Source dimensions from the result (not output lengths) so empty batches
+    // stay well-shaped at (n_dofs, 0) / (n_obs, 0).
+    let x = Array2::from_shape_vec((result.n_dofs, n_rhs).f(), result.x).map_err(value_err)?;
     let demeaned =
-        Array2::from_shape_vec((n_obs, n_rhs).f(), result.demeaned).map_err(value_err)?;
+        Array2::from_shape_vec((result.n_obs, n_rhs).f(), result.demeaned).map_err(value_err)?;
 
     Ok(PyBatchSolveResult {
         x: x.into_pyarray(py).unbind(),

@@ -23,21 +23,31 @@ pub(crate) fn value_err(e: impl std::fmt::Display) -> PyErr {
     PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string())
 }
 
-/// Build a slice-of-slices reference view from owned column vectors.
-pub(crate) fn column_refs(columns: &[Vec<f64>]) -> Vec<&[f64]> {
-    columns.iter().map(|c| c.as_slice()).collect()
+/// Build a slice-of-slices reference view from borrowed-or-owned columns.
+pub(crate) fn column_refs<'a>(columns: &'a [Cow<'_, [f64]>]) -> Vec<&'a [f64]> {
+    columns.iter().map(|c| &**c).collect()
 }
 
 // ---------------------------------------------------------------------------
 // Misc helpers
 // ---------------------------------------------------------------------------
 
-/// Extract columns from a 2-D array as owned vectors.
+/// Extract the columns of a 2-D array as borrowed-or-owned slices.
 ///
-/// Columns may not be contiguous in memory, so we always copy.
-pub(crate) fn extract_columns(arr: &numpy::ndarray::ArrayView2<'_, f64>) -> Vec<Vec<f64>> {
+/// A column of an F-contiguous (column-major) array is contiguous in memory and
+/// is borrowed directly (`Cow::Borrowed`); a strided column (e.g. from C-order
+/// input) is copied (`Cow::Owned`). Borrows are tied to the view's data lifetime.
+pub(crate) fn extract_columns<'a>(
+    arr: &numpy::ndarray::ArrayView2<'a, f64>,
+) -> Vec<Cow<'a, [f64]>> {
     (0..arr.ncols())
-        .map(|j| arr.column(j).iter().copied().collect())
+        .map(|j| {
+            let col = arr.index_axis_move(numpy::ndarray::Axis(1), j);
+            match col.to_slice() {
+                Some(s) => Cow::Borrowed(s),
+                None => Cow::Owned(col.iter().copied().collect()),
+            }
+        })
         .collect()
 }
 

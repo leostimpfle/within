@@ -109,10 +109,5 @@ pub fn solve_batch<'py>(
         .map_err(value_err)?
     };
 
-    // Use the design dimensions carried by the result rather than inferring
-    // them from output lengths — that keeps empty batches well-shaped at
-    // (n_dofs, 0) / (n_obs, 0).
-    let n_dofs = result.n_dofs;
-    let n_obs = result.n_obs;
-    into_py_batch_result(py, result, n_dofs, n_obs)
+    into_py_batch_result(py, result)
 }
