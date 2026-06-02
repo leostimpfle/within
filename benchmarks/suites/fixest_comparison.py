@@ -58,6 +58,12 @@ def run_fixest_comparison(opts: SuiteOptions) -> list[BenchmarkResult]:
         approx_chol=ApproxCholConfig(seed=0, split_merge=8),
         approx_schur=ApproxSchurConfig(seed=0),
     )
+    # "2-2": both densification knobs on — split_merge=2 (AC2 factorization)
+    # and split=2 (denser Schur clique-tree sampling).
+    schur_2_2 = LocalSolverConfig(
+        approx_chol=ApproxCholConfig(seed=0, split_merge=2),
+        approx_schur=ApproxSchurConfig(seed=0, split=2),
+    )
 
     solver_configs = [
         SolverConfig(
@@ -69,6 +75,11 @@ def run_fixest_comparison(opts: SuiteOptions) -> list[BenchmarkResult]:
             "LSMR(approx)",
             benchmark_lsmr(opts),
             preconditioner=make_additive_schwarz(local_solver=approx_schur),
+        ),
+        SolverConfig(
+            "LSMR(2-2)",
+            benchmark_lsmr(opts),
+            preconditioner=make_additive_schwarz(local_solver=schur_2_2),
         ),
     ]
 
