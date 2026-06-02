@@ -22,15 +22,6 @@ Typical usage::
         reduction=ReductionStrategy.Auto,
     )
     result = solve(categories, y, preconditioner=schwarz)
-
-# `LocalSolverConfig.approx_schur` semantics
-
-- Omit the argument (``LocalSolverConfig()``) — library-default approximate
-  Schur complement (clique-tree sampling with default seed/split).
-- Pass ``approx_schur=None`` — request **exact** Schur complement. Slower per
-  subdomain but exact; used by validation benchmarks.
-- Pass ``approx_schur=ApproxSchurConfig(seed=…, split=…)`` — approximate Schur
-  with the given parameters.
 """
 
 from within._within import (

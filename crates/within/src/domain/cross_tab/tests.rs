@@ -30,7 +30,7 @@ fn test_cross_tab_sparse_accumulation_path() {
         FactorMajorStore::new(vec![fa.clone(), fb.clone()], n_obs).expect("valid sparse store");
     let design_sparse = Design::from_store(store_sparse).expect("valid sparse design");
     let active_sparse = find_all_active_levels(&design_sparse);
-    let (ct_sparse, _) =
+    let (ct_sparse, diag_sparse, _) =
         CrossTab::build_for_pair_with_active(&design_sparse, None, 0, 1, &active_sparse)
             .expect("sparse cross tab should build");
 
@@ -42,7 +42,7 @@ fn test_cross_tab_sparse_accumulation_path() {
         .expect("valid dense store");
     let design_dense = Design::from_store(store_dense).expect("valid dense design");
     let active_dense = find_all_active_levels(&design_dense);
-    let (ct_dense, _) =
+    let (_ct_dense, diag_dense, _) =
         CrossTab::build_for_pair_with_active(&design_dense, None, 0, 1, &active_dense)
             .expect("dense cross tab should build");
 
@@ -50,27 +50,27 @@ fn test_cross_tab_sparse_accumulation_path() {
     // to what we'd compute by hand (each observation appears exactly once in the
     // corresponding row/col bucket).
     assert_eq!(
-        ct_sparse.diag_q.len(),
+        diag_sparse.q.len(),
         ct_sparse.n_q(),
         "diag_q length matches n_q"
     );
     assert_eq!(
-        ct_sparse.diag_r.len(),
+        diag_sparse.r.len(),
         ct_sparse.n_r(),
         "diag_r length matches n_r"
     );
 
     // diag_q[i] = number of observations with fa == i (those within the first n_obs % n_lev levels)
     // All active diagonal entries must be positive.
-    for &v in &ct_sparse.diag_q {
+    for &v in &diag_sparse.q {
         assert!(v > 0.0, "all active q-diagonals must be positive");
     }
-    for &v in &ct_sparse.diag_r {
+    for &v in &diag_sparse.r {
         assert!(v > 0.0, "all active r-diagonals must be positive");
     }
 
     // Cross-verify: sum of sparse diagonals should equal n_obs.
-    let diag_q_sum: f64 = ct_sparse.diag_q.iter().sum();
+    let diag_q_sum: f64 = diag_sparse.q.iter().sum();
     assert!(
         (diag_q_sum - n_obs as f64).abs() < 1e-12,
         "diag_q sum should equal n_obs: {} vs {}",
@@ -79,7 +79,7 @@ fn test_cross_tab_sparse_accumulation_path() {
     );
 
     // Same cross-check for the dense path.
-    let diag_q_dense_sum: f64 = ct_dense.diag_q.iter().sum();
+    let diag_q_dense_sum: f64 = diag_dense.q.iter().sum();
     assert!(
         (diag_q_dense_sum - n_obs as f64).abs() < 1e-12,
         "dense diag_q sum should equal n_obs: {} vs {}",
@@ -123,11 +123,16 @@ fn test_extract_component_two_components() {
     let store = FactorMajorStore::new(vec![fa, fb], n_obs).expect("valid store");
     let design = Design::from_store(store).expect("valid design");
     let all_active = find_all_active_levels(&design);
-    let (ct, _) = CrossTab::build_for_pair_with_active(&design, None, 0, 1, &all_active)
-        .expect("cross tab should build");
+    let (ct, parent_diag, _) =
+        CrossTab::build_for_pair_with_active(&design, None, 0, 1, &all_active)
+            .expect("cross tab should build");
 
     let components = ct.bipartite_connected_components();
     assert_eq!(components.len(), 2, "should have 2 connected components");
+
+    // Reusable remap buffers, reset by `extract_component` between components.
+    let mut q_remap = vec![u32::MAX; ct.n_q()];
+    let mut r_remap = vec![u32::MAX; ct.n_r()];
 
     // Sort components by their smallest q-index for deterministic comparison.
     let mut comps: Vec<_> = components.iter().collect();
@@ -142,22 +147,22 @@ fn test_extract_component_two_components() {
     assert_eq!(comp_b.r_indices, vec![2, 3], "component B r-indices");
 
     // Extract component A and verify its sub-CrossTab.
-    let sub_a = ct.extract_component(comp_a);
+    let sub_a = ct.extract_component(comp_a, &mut q_remap, &mut r_remap);
     assert_eq!(sub_a.n_q(), 2, "component A: n_q=2");
     assert_eq!(sub_a.n_r(), 2, "component A: n_r=2");
 
-    // diag_q for component A should be the parent's diag_q at indices 0,1.
+    // Component A's sliced diagonals should match the parent's at indices 0,1.
+    let sub_a_diag = parent_diag.extract_component(comp_a);
     for (new_i, &old_i) in comp_a.q_indices.iter().enumerate() {
         assert!(
-            (sub_a.diag_q[new_i] - ct.diag_q[old_i]).abs() < 1e-12,
-            "sub_a.diag_q[{new_i}] should match ct.diag_q[{old_i}]"
+            (sub_a_diag.q[new_i] - parent_diag.q[old_i]).abs() < 1e-12,
+            "sub_a diag q[{new_i}] should match parent diag q[{old_i}]"
         );
     }
-    // diag_r for component A should be the parent's diag_r at indices 0,1.
     for (new_i, &old_i) in comp_a.r_indices.iter().enumerate() {
         assert!(
-            (sub_a.diag_r[new_i] - ct.diag_r[old_i]).abs() < 1e-12,
-            "sub_a.diag_r[{new_i}] should match ct.diag_r[{old_i}]"
+            (sub_a_diag.r[new_i] - parent_diag.r[old_i]).abs() < 1e-12,
+            "sub_a diag r[{new_i}] should match parent diag r[{old_i}]"
         );
     }
 
@@ -187,7 +192,7 @@ fn test_extract_component_two_components() {
     }
 
     // Extract component B and verify its sub-CrossTab.
-    let sub_b = ct.extract_component(comp_b);
+    let sub_b = ct.extract_component(comp_b, &mut q_remap, &mut r_remap);
     assert_eq!(sub_b.n_q(), 2, "component B: n_q=2");
     assert_eq!(sub_b.n_r(), 2, "component B: n_r=2");
 
@@ -235,7 +240,7 @@ proptest! {
         let store = FactorMajorStore::new(vec![fa, fb], n_obs).expect("valid store");
         let design = Design::from_store(store).expect("valid design");
         let all_active = find_all_active_levels(&design);
-        let (ct, _) = CrossTab::build_for_pair_with_active(&design, None, 0, 1, &all_active)
+        let (ct, _, _) = CrossTab::build_for_pair_with_active(&design, None, 0, 1, &all_active)
             .expect("cross tab should build");
 
         let components = ct.bipartite_connected_components();

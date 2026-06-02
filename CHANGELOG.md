@@ -15,7 +15,6 @@ Modified LSMR is now the sole iterative solver, replacing CG and GMRES.
 - `PreconditionerConfig::Off` variant — explicit identity preconditioner.
 - Python `within.config` submodule: `AdditiveSchwarz`, `LocalSolverConfig`, `ApproxCholConfig`, `ApproxSchurConfig`, `ReductionStrategy`.
 - Python `Solver` / `solve` / `solve_batch` accept a 4-form preconditioner: `None`, `PreconditionerConfig.{Off, Additive}`, `AdditiveSchwarz(...)`, or a pre-built `Preconditioner` (reuse path).
-- Python: all config and result classes are picklable.
 - `From<&Preconditioner> for PreconditionerInput`: `Solver::new(.., &precond)` now works alongside the owned form. Cloning a `Preconditioner` is O(1) (refcount-only), so this is a cheap reuse path.
 - `BuildError::PreconditionerDimensionMismatch { expected, actual_rows, actual_cols }`: `Solver::new` fails fast when a reused preconditioner's shape does not match the design's DOF count, instead of bubbling up an opaque error from inside the iterative solver.
 
@@ -23,6 +22,7 @@ Modified LSMR is now the sole iterative solver, replacing CG and GMRES.
 
 - **BREAKING:** Renamed (Rust + Python): `SolverParams` → `LsmrOptions`, `Preconditioner` config enum → `PreconditionerConfig`, `FePreconditioner` → `Preconditioner`, `SchurComplement` → `LocalSolverConfig`, `SparseMatrix` → `CsrMatrix`.
 - **BREAKING:** `Preconditioner` is an opaque struct (was an enum); `#[non_exhaustive]` removed; `#[serde(transparent)]` pins the wire format (future variants must be append-only).
+- **BREAKING:** The internal `CrossTab` no longer stores or serializes the factor-pair diagonal blocks (`D_q`, `D_r`) — they are build-time-only inputs, folded into the local factor and dropped after build. This shrinks the serialized `Preconditioner` payload (wire-format fixture bumped v2 → v3).
 - **BREAKING:** `within::{domain, operator, orchestrate, solver}` are `pub(crate)`; public items remain re-exported from the crate root.
 - **BREAKING:** `LocalSolverConfig::default()` uses `split_merge: Some(2)` (was structural zero).
 - **BREAKING:** `Solver::solve` / `solve_batch` reject `y.len() != n_obs` / `Y.shape[0] != n_obs` (was silent truncation in weighted mode).

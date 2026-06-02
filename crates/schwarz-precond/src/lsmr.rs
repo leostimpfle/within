@@ -14,12 +14,6 @@ use crate::{Operator, SolveError};
 use bidiag::{BidiagStep, Bidiagonalization, GolubKahan, ModifiedGolubKahan};
 use recurrence::{ConvergenceState, LsmrRecurrenceState, RotationStep, SolutionState, Stop};
 
-/// Inner product of two vectors.
-#[inline]
-pub(crate) fn dot(a: &[f64], b: &[f64]) -> f64 {
-    a.iter().zip(b).map(|(a, b)| a * b).sum()
-}
-
 /// Euclidean norm of a vector.
 #[inline]
 pub(crate) fn vec_norm(v: &[f64]) -> f64 {
@@ -29,16 +23,6 @@ pub(crate) fn vec_norm(v: &[f64]) -> f64 {
     }
     s.sqrt()
 }
-
-/// Below this count the per-iteration vector kernels run sequentially —
-/// rayon wake/steal overhead would dominate otherwise. Matches the threshold
-/// used by `sparse_matrix::CsrMatrix::matvec_add`.
-const LSMR_PAR_THRESHOLD: usize = 10_000;
-/// Per-worker chunk size for the parallel vector kernels. Tuned to keep each
-/// chunk's work above rayon dispatch overhead while staying L1-resident —
-/// sizing chunks to `n / n_threads` instead regresses at 5M+ DOFs because
-/// per-thread chunks blow L1/L2 and workers stream at DRAM bandwidth.
-const LSMR_UPDATE_CHUNK: usize = 4096;
 
 /// Result of an LSMR solve.
 #[must_use]

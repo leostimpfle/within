@@ -5,8 +5,7 @@
 //! that yield Algorithm 2.8 of Fong & Saunders, advances the `(x, h, h̄)`
 //! solution recurrence, and tracks the dual stopping criterion.
 
-use super::bidiag::BidiagStep;
-use super::{LSMR_PAR_THRESHOLD, LSMR_UPDATE_CHUNK};
+use super::bidiag::{BidiagStep, LSMR_PAR_THRESHOLD, LSMR_UPDATE_CHUNK};
 use rayon::iter::{IndexedParallelIterator, ParallelIterator};
 use rayon::prelude::{ParallelSlice, ParallelSliceMut};
 
@@ -173,14 +172,8 @@ impl SolutionState {
     /// [`RotationStep::initial`] on the first iteration).
     pub(super) fn update(&mut self, v: &[f64], curr: RotationStep, prev: RotationStep) {
         // Ratios consumed by the recurrence (Algorithm 2.8, "Update h̄, x, h").
-        // Absolute f64::EPSILON guard rationale (Fong & Saunders use exact-zero):
-        // the denominators here are products of Givens-rotation diagonals (ρ, ρ̄)
-        // or single rotation diagonals — quantities that are O(1) in well-scaled
-        // problems. A magnitude below f64::EPSILON for an O(1) quantity indicates
-        // complete loss of significance, so the absolute guard is equivalent to a
-        // relative guard against the rotation magnitudes. The `EPSILON` widening
-        // is defensive; Fong & Saunders' reference implementation uses an exact-
-        // zero check.
+        // Denominators are O(1) Givens-rotation diagonals, so an absolute
+        // f64::EPSILON guard catches genuine loss of significance.
         let t_x_denom = curr.rho * curr.rho_bar;
         let t_x = if t_x_denom.abs() > f64::EPSILON {
             curr.zeta / t_x_denom

@@ -11,40 +11,21 @@ use rayon::prelude::*;
 
 use crate::config::ApproxSchurConfig;
 use crate::csr_block::CsrBlock;
-use crate::domain::CrossTab;
+use crate::domain::{BlockDiagonals, CrossTab};
 use crate::BuildError;
 
 /// Undirected fill edge: `(lo_col, hi_col, weight)` with `lo_col < hi_col`.
 pub(crate) type Edge = (u32, u32, f64);
 
 // ===========================================================================
-// EliminationInfo — handed to BlockElimSolver after Schur assembly
-// ===========================================================================
-
-/// Metadata from the block-elimination step needed by `BlockElimSolver`.
-pub(crate) struct EliminationInfo {
-    /// 1 / D_elim[k] for the eliminated diagonal block.
-    pub(crate) inv_diag_elim: Vec<f64>,
-    /// True if the q-block was eliminated (n_q >= n_r).
-    pub(crate) eliminate_q: bool,
-}
-
-// ===========================================================================
 // Star — zero-copy neighborhood view
 // ===========================================================================
 
-// The Schur complement S = D_keep - C_keep^T * D_elim^{-1} * C_keep arises from
-// block-eliminating the diagonal block of the larger partition in the bipartite
-// SDDM system [D_q, -C; -C^T, D_r]. Since D_elim is diagonal, the elimination
-// is exact and each eliminated vertex k contributes a rank-1 clique (star) to
-// the fill graph: all pairs of k's neighbors in the keep-block get a fill edge.
-//
-// Two strategies materialize these fill edges:
-// - `ExactCliqueEmitter` (not shown here; the exact path uses row-workspace
-//   accumulation in `SchurLaplacian::from_elimination` instead)
-// - `SampledCliqueEmitter`: uses GKS 2023 clique-tree sampling to approximate
-//   high-degree cliques with O(deg) edges instead of O(deg^2), keeping the
-//   Schur complement spectrally close to the exact one.
+// Eliminating a diagonal vertex contributes a rank-1 clique (star) to the
+// Schur fill graph: every pair of its keep-block neighbors gets a fill edge.
+// `SampledCliqueEmitter` approximates high-degree stars with GKS 2023
+// clique-tree sampling — O(deg) edges instead of O(deg^2) — keeping the Schur
+// complement spectrally close to the exact (row-workspace) path.
 
 /// One eliminated vertex's neighbors in the keep-block.
 ///
@@ -112,7 +93,14 @@ pub(crate) struct Elimination<'a> {
 
 impl<'a> Elimination<'a> {
     /// Select which block to eliminate and precompute inverse-diagonals.
-    pub(crate) fn new(cross_tab: &'a CrossTab) -> Result<Self, BuildError> {
+    ///
+    /// The diagonal blocks are build-time-only inputs ([`BlockDiagonals`]); they
+    /// are folded into `inv_diag_elim` and borrowed as `diag_keep` here and not
+    /// retained past the build.
+    pub(crate) fn new(
+        cross_tab: &'a CrossTab,
+        diagonals: &'a BlockDiagonals,
+    ) -> Result<Self, BuildError> {
         let n_q = cross_tab.n_q();
         let n_r = cross_tab.n_r();
         // Eliminate the larger block to minimize the reduced system size.
@@ -120,9 +108,9 @@ impl<'a> Elimination<'a> {
         let (n_keep, n_elim) = if eliminate_q { (n_r, n_q) } else { (n_q, n_r) };
 
         let diag_elim = if eliminate_q {
-            &cross_tab.diag_q
+            &diagonals.q
         } else {
-            &cross_tab.diag_r
+            &diagonals.r
         };
         let inv_diag_elim = diag_elim
             .iter()
@@ -140,9 +128,9 @@ impl<'a> Elimination<'a> {
             .collect::<Result<_, _>>()?;
 
         let diag_keep = if eliminate_q {
-            &cross_tab.diag_r
+            &diagonals.r
         } else {
-            &cross_tab.diag_q
+            &diagonals.q
         };
 
         let (keep_to_elim, elim_to_keep) = if eliminate_q {
@@ -174,7 +162,11 @@ impl<'a> Elimination<'a> {
     }
 
     pub(crate) fn par_emit(&self, emitter: &SampledCliqueEmitter) -> Vec<Edge> {
-        (0..self.n_elim)
+        // Emit in parallel (one scratch buffer reused per fold chunk), concatenate,
+        // then a single total-order `sort_and_dedup`. The total order fixes the
+        // per-`(lo, hi)` weight summation order, so the result is independent of
+        // thread scheduling (the concatenation order no longer matters).
+        let mut edges = (0..self.n_elim)
             .into_par_iter()
             .fold(
                 || (Vec::new(), Vec::<(u32, f64)>::new()),
@@ -186,24 +178,25 @@ impl<'a> Elimination<'a> {
                     (edges, scratch)
                 },
             )
-            .map(|(mut edges, _)| {
-                Self::sort_and_dedup(&mut edges);
-                edges
-            })
-            .reduce(Vec::new, Self::merge_dedup)
+            .map(|(edges, _)| edges)
+            .reduce(Vec::new, |mut a, mut b| {
+                a.append(&mut b);
+                a
+            });
+        Self::sort_and_dedup(&mut edges);
+        edges
     }
 
-    /// Package elimination metadata into [`EliminationInfo`] for the solver.
-    pub(crate) fn into_info(self) -> EliminationInfo {
-        EliminationInfo {
-            inv_diag_elim: self.inv_diag_elim,
-            eliminate_q: self.eliminate_q,
-        }
-    }
-
-    /// Sort edges by `(lo, hi)` and merge duplicates by summing weights.
+    /// Sort edges into a total `(lo, hi, weight)` order and merge duplicates by
+    /// summing weights. The weight tiebreak fixes the per-`(lo, hi)` summation
+    /// order, making the assembled Schur complement reproducible across runs and
+    /// thread counts.
     fn sort_and_dedup(edges: &mut Vec<Edge>) {
-        edges.sort_unstable_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(&b.1)));
+        edges.sort_unstable_by(|a, b| {
+            a.0.cmp(&b.0)
+                .then(a.1.cmp(&b.1))
+                .then_with(|| a.2.total_cmp(&b.2))
+        });
         if edges.len() <= 1 {
             return;
         }
@@ -217,43 +210,5 @@ impl<'a> Elimination<'a> {
             }
         }
         edges.truncate(write + 1);
-    }
-
-    /// Merge two sorted, deduplicated edge lists, summing weights for duplicates.
-    fn merge_dedup(a: Vec<Edge>, b: Vec<Edge>) -> Vec<Edge> {
-        if a.is_empty() {
-            return b;
-        }
-        if b.is_empty() {
-            return a;
-        }
-        let mut result = Vec::with_capacity(a.len() + b.len());
-        let (mut ia, mut ib) = (0, 0);
-        while ia < a.len() && ib < b.len() {
-            let ka = (a[ia].0, a[ia].1);
-            let kb = (b[ib].0, b[ib].1);
-            match ka.cmp(&kb) {
-                std::cmp::Ordering::Less => {
-                    result.push(a[ia]);
-                    ia += 1;
-                }
-                std::cmp::Ordering::Greater => {
-                    result.push(b[ib]);
-                    ib += 1;
-                }
-                std::cmp::Ordering::Equal => {
-                    result.push((a[ia].0, a[ia].1, a[ia].2 + b[ib].2));
-                    ia += 1;
-                    ib += 1;
-                }
-            }
-        }
-        if ia < a.len() {
-            result.extend_from_slice(&a[ia..]);
-        }
-        if ib < b.len() {
-            result.extend_from_slice(&b[ib..]);
-        }
-        result
     }
 }

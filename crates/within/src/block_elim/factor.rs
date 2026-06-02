@@ -172,7 +172,7 @@ pub(crate) fn factor_sparse(
         matrix.indptr(),
         matrix.indices(),
         matrix.data(),
-        matrix.n() as u32,
+        u32::try_from(matrix.n()).expect("Schur complement dimension exceeds u32::MAX"),
     )
     .map_err(|e| BuildError::LocalSolverBuild(format!("invalid Schur complement CSR: {e}")))?;
     schur_builder

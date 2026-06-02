@@ -1,15 +1,5 @@
-//! Pinning tests for [`within::Solver::new`] argument resolution.
-//!
-//! The persistent `Solver` constructor accepts the preconditioner argument in
-//! several shapes via `impl Into<PreconditionerInput>`. The shapes themselves
-//! are part of the public API contract — adding a new `From<Option<X>>` impl
-//! to `PreconditionerInput` could make bare `None` ambiguous, and adding a
-//! `From<&Foo>` impl that overlaps with the existing chain could silently
-//! change which form a call site resolves to.
-//!
-//! This file is therefore a *compile-time* pinning: if any of the call shapes
-//! below stops compiling, the public surface of `Solver::new` has shifted in
-//! a way that warrants explicit review.
+//! Compile-time pinning of [`within::Solver::new`]'s `impl Into<PreconditionerInput>`
+//! argument shapes: if any call form below stops compiling, the public surface shifted.
 
 use ndarray::Array2;
 use within::{solve, solve_batch, LsmrOptions, PreconditionerConfig, Solver};

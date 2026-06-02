@@ -1,8 +1,9 @@
 //! LSMR test suite.
 
+use super::bidiag::dot;
 use super::bidiag::{Bidiagonalization, GolubKahan};
+use super::vec_norm;
 use super::*;
-use super::{dot, vec_norm};
 use crate::{Operator, SolveError};
 
 /// Identity operator used by mlsmr equivalence tests.
@@ -300,7 +301,7 @@ fn test_mlsmr_none_matches_identity_precond() {
 /// active. The M-weighted MGS path uses dot products against `p̃ = M v` and
 /// scales `p̃` by `1/α`; with `M = I` this must reduce to the Euclidean
 /// MGS used by the unpreconditioned path. Guards the windowed scaling
-/// logic in `ModifiedLocalReorth::push` against drift.
+/// logic in `WindowRing<2>::push` against drift.
 #[test]
 fn test_mlsmr_none_matches_identity_precond_windowed() {
     // 30×12 Vandermonde, cond(A) ≈ 1e10 — chosen to stress the windowed reorth

@@ -8,14 +8,12 @@
 
 use schwarz_precond::{PartitionWeights, SubdomainCore};
 
-use super::{find_all_active_levels, CrossTab, Design};
+use super::{find_all_active_levels, BlockDiagonals, CrossTab, Design};
 use crate::observation::Store;
 
 /// A local subdomain corresponding to a pair of factors.
 #[derive(Clone)]
 pub(crate) struct Subdomain {
-    /// Indices `(q, r)` of the two factors this subdomain covers.
-    pub factor_pair: (usize, usize),
     /// Generic subdomain core: global DOF indices, restriction, and partition-of-unity weights.
     pub core: SubdomainCore,
 }
@@ -23,7 +21,6 @@ pub(crate) struct Subdomain {
 impl std::fmt::Debug for Subdomain {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Subdomain")
-            .field("factor_pair", &self.factor_pair)
             .field("n_dofs", &self.core.n_local())
             .finish()
     }
@@ -31,12 +28,14 @@ impl std::fmt::Debug for Subdomain {
 
 /// A factor-pair subdomain paired with the CrossTab it was built from.
 ///
-/// The CrossTab travels with the subdomain so the local solver can be built
-/// without rebuilding the cross-tabulation.
+/// The CrossTab (and its build-time [`BlockDiagonals`]) travel with the
+/// subdomain so the local solver can be built without rebuilding the
+/// cross-tabulation.
 #[derive(Clone)]
 pub(crate) struct LocalDomain {
     pub(crate) subdomain: Subdomain,
     pub(crate) cross_tab: CrossTab,
+    pub(crate) block_diagonals: BlockDiagonals,
 }
 
 /// Build local subdomains (with pre-built CrossTabs) for pairs of factors.
@@ -64,13 +63,13 @@ pub(crate) fn build_local_domains<S: Store>(
     let mut domain_pairs: Vec<LocalDomain> = pairs
         .par_iter()
         .flat_map(|&(q, r)| {
-            let (full_ct, l2g) =
+            let (full_ct, full_diag, l2g) =
                 match CrossTab::build_for_pair_with_active(design, weights, q, r, &all_active) {
-                    Some(pair) => pair,
+                    Some(triple) => triple,
                     None => return Vec::new(),
                 };
             let n_q_full = full_ct.n_q();
-            split_into_subdomains(full_ct, &l2g, n_q_full, (q, r))
+            split_into_subdomains(full_ct, full_diag, &l2g, n_q_full)
         })
         .collect();
 
@@ -81,41 +80,51 @@ pub(crate) fn build_local_domains<S: Store>(
 
 /// Split a full CrossTab into per-component subdomains.
 ///
-/// Finds bipartite connected components, extracts a sub-CrossTab for each,
-/// and builds a `Subdomain` with uniform partition-of-unity weights.
+/// Finds bipartite connected components, extracts a sub-CrossTab and its sliced
+/// [`BlockDiagonals`] for each, and builds a `Subdomain` with uniform
+/// partition-of-unity weights.
 fn split_into_subdomains(
     full_ct: CrossTab,
+    full_diag: BlockDiagonals,
     l2g: &[u32],
     n_q_full: usize,
-    factor_pair: (usize, usize),
 ) -> Vec<LocalDomain> {
     let components = full_ct.bipartite_connected_components();
 
-    let cross_tabs: Vec<CrossTab> = if components.len() == 1 {
-        vec![full_ct]
+    let (cross_tabs, diagonals): (Vec<CrossTab>, Vec<BlockDiagonals>) = if components.len() == 1 {
+        (vec![full_ct], vec![full_diag])
     } else {
-        components
+        // One reusable remap buffer pair for the whole parent; `extract_component`
+        // resets it per component, avoiding a fresh parent-sized allocation each.
+        let mut q_remap = vec![u32::MAX; full_ct.n_q()];
+        let mut r_remap = vec![u32::MAX; full_ct.n_r()];
+        let cross_tabs = components
             .iter()
-            .map(|comp| full_ct.extract_component(comp))
-            .collect()
+            .map(|comp| full_ct.extract_component(comp, &mut q_remap, &mut r_remap))
+            .collect();
+        let diagonals = components
+            .iter()
+            .map(|comp| full_diag.extract_component(comp))
+            .collect();
+        (cross_tabs, diagonals)
     };
 
     components
         .iter()
         .zip(cross_tabs)
-        .map(|(comp, comp_ct)| {
-            let comp_l2g: Vec<usize> = comp
+        .zip(diagonals)
+        .map(|((comp, comp_ct), comp_diag)| {
+            let comp_l2g: Vec<u32> = comp
                 .q_indices
                 .iter()
-                .map(|&i| l2g[i] as usize)
-                .chain(comp.r_indices.iter().map(|&i| l2g[n_q_full + i] as usize))
+                .map(|&i| l2g[i])
+                .chain(comp.r_indices.iter().map(|&i| l2g[n_q_full + i]))
                 .collect();
-            let core = schwarz_precond::SubdomainCore::uniform(
-                comp_l2g.into_iter().map(|g| g as u32).collect(),
-            );
+            let core = schwarz_precond::SubdomainCore::uniform(comp_l2g);
             LocalDomain {
-                subdomain: Subdomain { factor_pair, core },
+                subdomain: Subdomain { core },
                 cross_tab: comp_ct,
+                block_diagonals: comp_diag,
             }
         })
         .collect()
@@ -132,14 +141,23 @@ fn split_into_subdomains(
 /// subdomain, all weights are 1.0 and the compact `PartitionWeights::Uniform`
 /// representation is used to avoid per-DOF storage.
 fn compute_partition_weights(domain_pairs: &mut [LocalDomain], n_dofs: usize) {
-    let mut counts = vec![0u32; n_dofs];
-    for ld in domain_pairs.iter() {
+    use rayon::prelude::*;
+    use std::sync::atomic::{AtomicU32, Ordering};
+
+    // Pass 1: histogram how many subdomains each DOF appears in. Atomic
+    // increments commute, so the parallel accumulation matches the serial scan.
+    let counts: Vec<AtomicU32> = (0..n_dofs).map(|_| AtomicU32::new(0)).collect();
+    domain_pairs.par_iter().for_each(|ld| {
         for &idx in ld.subdomain.core.global_indices() {
             debug_assert!((idx as usize) < n_dofs);
-            counts[idx as usize] += 1;
+            counts[idx as usize].fetch_add(1, Ordering::Relaxed);
         }
-    }
-    for ld in domain_pairs.iter_mut() {
+    });
+    let counts: Vec<u32> = counts.into_iter().map(AtomicU32::into_inner).collect();
+
+    // Pass 2: each subdomain's weights depend only on the shared counts, so the
+    // per-domain work is independent.
+    domain_pairs.par_iter_mut().for_each(|ld| {
         let d = &mut ld.subdomain;
         let all_unique = d
             .core
@@ -163,7 +181,7 @@ fn compute_partition_weights(domain_pairs: &mut [LocalDomain], n_dofs: usize) {
                 .set_partition_weights(PartitionWeights::NonUniform(weights))
                 .expect("partition weight count must match index count");
         }
-    }
+    });
 }
 
 #[cfg(test)]

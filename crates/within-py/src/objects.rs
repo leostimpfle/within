@@ -5,11 +5,14 @@ use numpy::{PyReadonlyArray1, PyReadonlyArray2};
 use pyo3::prelude::*;
 
 use within::observation::FactorMajorStore;
-use within::{Design, Preconditioner, Solver};
+use within::{BuildError, Design, Preconditioner, Solver};
 
-use crate::config::{extract_preconditioner_config, resolve_lsmr_config};
-use crate::convert::{coerce_to_slice, column_refs, extract_columns, value_err, warn_c_contiguous};
-use crate::results::{into_py_batch_result, into_py_result, PyBatchSolveResult, PySolveResult};
+use crate::config::{resolve_lsmr_config, resolve_precond_input, PrecondInput};
+use crate::convert::{
+    coerce_to_slice, column_refs, extract_columns, run_batch, run_solve, value_err,
+    warn_c_contiguous,
+};
+use crate::results::{PyBatchSolveResult, PySolveResult};
 
 // ---------------------------------------------------------------------------
 // Built preconditioner (returned by Solver, picklable)
@@ -92,17 +95,6 @@ impl PyPreconditioner {
     }
 }
 
-/// If the Python preconditioner argument is a pre-built `Preconditioner`,
-/// return a clone of the inner native value. Otherwise `None`.
-pub(crate) fn extract_prebuilt(
-    preconditioner: Option<&Bound<'_, PyAny>>,
-) -> Option<Preconditioner> {
-    let obj = preconditioner?;
-    obj.downcast::<PyPreconditioner>()
-        .ok()
-        .map(|b| b.get().inner.clone())
-}
-
 // ---------------------------------------------------------------------------
 // Persistent Solver
 // ---------------------------------------------------------------------------
@@ -129,30 +121,37 @@ impl PySolver {
         preconditioner: Option<&Bound<'py, PyAny>>,
     ) -> PyResult<Self> {
         let cats = categories.as_array();
-        warn_c_contiguous(py, cats.strides())?;
+        warn_c_contiguous(py, &cats)?;
 
-        // Build owned factor-major store from numpy array
         let n_obs = cats.nrows();
         let n_factors = cats.ncols();
-        let factor_levels: Vec<Vec<u32>> = (0..n_factors)
-            .map(|f| cats.column(f).iter().copied().collect())
-            .collect();
-        let store = FactorMajorStore::new(factor_levels, n_obs).map_err(value_err)?;
-        let design = Design::from_store(store).map_err(value_err)?;
         let weights_vec: Option<Vec<f64>> = weights
             .as_ref()
             .map(|w| w.as_array().iter().copied().collect());
 
-        // Pre-built Preconditioner uses the reuse path;
-        // all other variants go through extract_preconditioner_config.
-        let solver = if let Some(built) = extract_prebuilt(preconditioner) {
-            py.allow_threads(|| Solver::new(design, weights_vec, built))
-                .map_err(value_err)?
-        } else {
-            let precond = extract_preconditioner_config(py, preconditioner)?;
-            py.allow_threads(|| Solver::new(design, weights_vec, precond.as_ref()))
-                .map_err(value_err)?
-        };
+        // Resolve the preconditioner argument while the GIL is held (it inspects
+        // Python objects); the result carries only native data.
+        let precond = resolve_precond_input(py, preconditioner)?;
+
+        // Release the GIL for the CPU-heavy work: the factor-major copy out of
+        // the numpy array, the store/design construction, and the preconditioner
+        // factorisation. The `BuildError` carries no GIL types, so it is mapped
+        // to a Python exception only after the GIL is reacquired.
+        let solver = py
+            .allow_threads(move || -> Result<Solver<FactorMajorStore>, BuildError> {
+                let factor_levels: Vec<Vec<u32>> = (0..n_factors)
+                    .map(|f| cats.column(f).iter().copied().collect())
+                    .collect();
+                let store = FactorMajorStore::new(factor_levels, n_obs)?;
+                let design = Design::from_store(store)?;
+                match precond {
+                    PrecondInput::Prebuilt(built) => Solver::new(design, weights_vec, built),
+                    PrecondInput::Config(config) => {
+                        Solver::new(design, weights_vec, config.as_ref())
+                    }
+                }
+            })
+            .map_err(value_err)?;
 
         Ok(Self { solver })
     }
@@ -169,11 +168,7 @@ impl PySolver {
         let y_cow = coerce_to_slice(&y_arr);
         let params = resolve_lsmr_config(options)?;
 
-        let result = py
-            .allow_threads(|| self.solver.solve(&y_cow, &params))
-            .map_err(value_err)?;
-
-        Ok(into_py_result(py, result))
+        run_solve(py, || self.solver.solve(&y_cow, &params))
     }
 
     /// Solve for multiple response vectors in parallel.
@@ -201,14 +196,9 @@ impl PySolver {
         let columns = extract_columns(&y_arr);
         let col_refs = column_refs(&columns);
 
-        let n_dofs = self.solver.n_dofs();
         let params = resolve_lsmr_config(options)?;
 
-        let result = py
-            .allow_threads(|| self.solver.solve_batch(&col_refs, &params))
-            .map_err(value_err)?;
-
-        into_py_batch_result(py, result, n_dofs, n_obs)
+        run_batch(py, || self.solver.solve_batch(&col_refs, &params))
     }
 
     /// Return the built preconditioner, or ``None`` if unconfigured.

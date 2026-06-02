@@ -48,7 +48,7 @@ impl ScatterStrategy {
 /// `finalize` is folded into the LAST factor's pass — exactly Q sweeps over
 /// `dst`, no trailing scale loop. The identity finalize (`|_, s| s`) recovers
 /// the unweighted gather.
-fn gather_apply<S, F>(design: &Design<S>, src: &[f64], dst: &mut [f64], finalize: F)
+pub(crate) fn gather_apply<S, F>(design: &Design<S>, src: &[f64], dst: &mut [f64], finalize: F)
 where
     S: Store,
     F: Fn(usize, f64) -> f64 + Sync,

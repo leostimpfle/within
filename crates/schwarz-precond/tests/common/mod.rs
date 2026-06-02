@@ -1,7 +1,5 @@
 //! Shared test fixtures for schwarz-precond integration tests.
 
-#![allow(dead_code)]
-
 use schwarz_precond::{
     LocalSolveError, LocalSolver, Operator, SolveError, SubdomainCore, SubdomainEntry,
 };
@@ -139,18 +137,4 @@ impl LocalSolver for FailingLocalSolver {
             message: format!("deliberate failure for n={}", self.n_local),
         })
     }
-}
-
-/// Check that ||Ax - b|| < tol.
-pub fn check_residual<A: Operator>(op: &A, x: &[f64], b: &[f64], tol: f64) {
-    let n = b.len();
-    let mut ax = vec![0.0; n];
-    op.apply(x, &mut ax).expect("apply succeeds");
-    let err: f64 = ax
-        .iter()
-        .zip(b.iter())
-        .map(|(a, b)| (a - b).powi(2))
-        .sum::<f64>()
-        .sqrt();
-    assert!(err < tol, "residual too large: {err}");
 }

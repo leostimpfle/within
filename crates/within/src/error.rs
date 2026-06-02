@@ -29,6 +29,16 @@ pub enum BuildError {
         /// Actual weight vector length.
         got: usize,
     },
+    /// A weight is not a usable variance. The operator applies `W^{1/2}`, so a
+    /// negative or non-finite (NaN/∞) weight would take `sqrt` of a bad value
+    /// and silently corrupt the solution; weights must be finite and `>= 0`.
+    #[error("weight at index {index} must be finite and non-negative, got {value}")]
+    InvalidWeight {
+        /// Index of the offending weight.
+        index: usize,
+        /// The offending value.
+        value: f64,
+    },
     /// A zero diagonal was encountered during block elimination.
     #[error("zero diagonal in {block} block at index {index}")]
     SingularDiagonal {

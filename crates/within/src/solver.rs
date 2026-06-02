@@ -11,6 +11,7 @@ use schwarz_precond::{lsmr as lsmr_solve, mlsmr, Operator as _};
 use crate::config::{LsmrOptions, PreconditionerConfig};
 use crate::domain::Design;
 use crate::observation::{validate_weights, ArrayStore, Store};
+use crate::operator::design::gather_apply;
 use crate::operator::schwarz::{build_preconditioner, Preconditioner};
 use crate::operator::DesignOperator;
 use crate::{BuildError, SolveError, WithinError};
@@ -19,18 +20,11 @@ fn norm(v: &[f64]) -> f64 {
     v.iter().map(|x| x * x).sum::<f64>().sqrt()
 }
 
-// ---------------------------------------------------------------------------
-// Solver::new inputs (polymorphic via traits)
-// ---------------------------------------------------------------------------
-
 /// Fallible conversion into a [`Design`] for [`Solver::new`].
 ///
 /// Implemented for:
 /// - `ArrayView2<'a, u32>` — categories matrix; an `ArrayStore`-backed [`Design`] is built
 /// - `Design<S>` — pass-through for an already-built design
-///
-/// Implemented as a custom trait rather than `Into` because the raw-view path
-/// is fallible and `From`/`Into` are not.
 pub trait IntoDesign<'a> {
     /// Storage backend the resulting [`Design`] uses.
     type Store: Store;
@@ -96,16 +90,11 @@ impl From<Preconditioner> for PreconditionerInput {
 }
 
 impl From<&Preconditioner> for PreconditionerInput {
-    /// Reuse a preconditioner by reference. Cloning is O(1) (see
-    /// [`Preconditioner`] docs) so passing `&precond` is essentially free.
+    /// Reuse by reference; clone is O(1).
     fn from(p: &Preconditioner) -> Self {
         Self::Prebuilt(p.clone())
     }
 }
-
-// ---------------------------------------------------------------------------
-// Solve results
-// ---------------------------------------------------------------------------
 
 /// Common solve output for all orchestration entry points.
 #[derive(Debug, Clone)]
@@ -273,11 +262,11 @@ impl<S: Store> Solver<S> {
 
         let time_solve = t_solve_start.elapsed().as_secs_f64();
 
-        // demeaned = y - D x. The bare unweighted `D x` matvec uses an
-        // unweighted DesignOperator over the same design.
-        let bare_op = DesignOperator::new(&self.design, None);
+        // demeaned = y - D x. The bare unweighted `D x` matvec is the identity
+        // finalize over `gather_apply`; shapes are guaranteed here, so it is
+        // infallible — no DesignOperator wrapper (and its scatter scratch) needed.
         let mut demeaned = vec![0.0; self.design.n_obs];
-        bare_op.apply(&r.x, &mut demeaned)?;
+        gather_apply(&self.design, &r.x, &mut demeaned, |_, s| s);
         for (d, &yi) in demeaned.iter_mut().zip(y.iter()) {
             *d = yi - *d;
         }
@@ -314,8 +303,12 @@ impl<S: Store> Solver<S> {
         let t_start = Instant::now();
         let n_rhs = ys.len();
 
-        let results: Vec<Result<SolveResult, SolveError>> =
-            ys.par_iter().map(|y| self.solve(y, lsmr)).collect();
+        // Fail fast on the first per-RHS error rather than materializing a
+        // `Vec<Result<..>>` and only surfacing the failure during the fold.
+        let results: Vec<SolveResult> = ys
+            .par_iter()
+            .map(|y| self.solve(y, lsmr))
+            .collect::<Result<Vec<_>, _>>()?;
 
         let mut x = Vec::with_capacity(self.design.n_dofs * n_rhs);
         let mut demeaned = Vec::with_capacity(self.design.n_obs * n_rhs);
@@ -325,7 +318,6 @@ impl<S: Store> Solver<S> {
         let mut time_solve = Vec::with_capacity(n_rhs);
 
         for r in results {
-            let r = r?;
             x.extend_from_slice(&r.x);
             demeaned.extend_from_slice(&r.demeaned);
             converged.push(r.converged);
