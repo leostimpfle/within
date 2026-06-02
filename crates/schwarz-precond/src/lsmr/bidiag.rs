@@ -7,10 +7,17 @@
 //! helpers — they are implementation detail of this stream, not an
 //! independent subsystem.
 
-use super::{dot, LSMR_PAR_THRESHOLD, LSMR_UPDATE_CHUNK};
 use crate::{Operator, SolveError};
 use rayon::iter::{IndexedParallelIterator, ParallelIterator};
 use rayon::prelude::{ParallelSlice, ParallelSliceMut};
+
+/// Below this count the per-iteration vector kernels run sequentially —
+/// rayon wake/steal overhead would dominate otherwise. Matches the threshold
+/// used by `csr_matrix::CsrMatrix::matvec_add`.
+pub(super) const LSMR_PAR_THRESHOLD: usize = 10_000;
+/// Per-worker chunk size for the parallel vector kernels: large enough to clear
+/// rayon dispatch overhead, small enough to stay L1-resident.
+pub(super) const LSMR_UPDATE_CHUNK: usize = 4096;
 
 /// Fused `y = x + scale * y` with `‖y_new‖²` returned. Parallel above the
 /// threshold; each chunk accumulates its own partial sum to avoid cross-thread
@@ -70,7 +77,13 @@ fn scale_in_place(y: &mut [f64], s: f64) {
     }
 }
 
-/// Parallel dot product; falls back to the sequential `super::dot` below
+/// Inner product of two vectors.
+#[inline]
+pub(super) fn dot(a: &[f64], b: &[f64]) -> f64 {
+    a.iter().zip(b).map(|(a, b)| a * b).sum()
+}
+
+/// Parallel dot product; falls back to the sequential `dot` below
 /// the threshold.
 #[inline]
 fn par_dot(a: &[f64], b: &[f64]) -> f64 {

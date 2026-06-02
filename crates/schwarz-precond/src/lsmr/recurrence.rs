@@ -5,8 +5,7 @@
 //! that yield Algorithm 2.8 of Fong & Saunders, advances the `(x, h, h̄)`
 //! solution recurrence, and tracks the dual stopping criterion.
 
-use super::bidiag::BidiagStep;
-use super::{LSMR_PAR_THRESHOLD, LSMR_UPDATE_CHUNK};
+use super::bidiag::{BidiagStep, LSMR_PAR_THRESHOLD, LSMR_UPDATE_CHUNK};
 use rayon::iter::{IndexedParallelIterator, ParallelIterator};
 use rayon::prelude::{ParallelSlice, ParallelSliceMut};
 

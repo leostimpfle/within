@@ -1,8 +1,9 @@
 //! LSMR test suite.
 
+use super::bidiag::dot;
 use super::bidiag::{Bidiagonalization, GolubKahan};
+use super::vec_norm;
 use super::*;
-use super::{dot, vec_norm};
 use crate::{Operator, SolveError};
 
 /// Identity operator used by mlsmr equivalence tests.
