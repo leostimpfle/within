@@ -193,6 +193,17 @@ pub(crate) fn validate_weights(weights: Option<&[f64]>, n_obs: usize) -> Result<
                 got: w.len(),
             });
         }
+        // `W^{1/2}` is applied to the design, so each weight must be finite and
+        // non-negative; otherwise `sqrt(w)` is NaN and the solution is silently
+        // corrupted. `wi >= 0.0` already rejects NaN (comparisons with NaN are
+        // false); `is_finite` additionally rejects `+∞`.
+        if let Some((index, &value)) = w
+            .iter()
+            .enumerate()
+            .find(|&(_, &wi)| !(wi >= 0.0 && wi.is_finite()))
+        {
+            return Err(BuildError::InvalidWeight { index, value });
+        }
     }
     Ok(())
 }
@@ -224,6 +235,22 @@ mod tests {
     fn test_validate_weights() {
         assert!(validate_weights(None, 5).is_ok());
         assert!(validate_weights(Some(&[1.0, 2.0, 3.0, 4.0, 5.0]), 5).is_ok());
+        // Zero weights are valid (an excluded observation).
+        assert!(validate_weights(Some(&[0.0, 1.0, 2.0, 3.0, 4.0]), 5).is_ok());
+        // Length mismatch.
         assert!(validate_weights(Some(&[1.0, 2.0]), 5).is_err());
+        // Negative / non-finite weights are rejected with the offending index.
+        assert!(matches!(
+            validate_weights(Some(&[1.0, -2.0, 3.0, 4.0, 5.0]), 5),
+            Err(BuildError::InvalidWeight { index: 1, .. })
+        ));
+        assert!(matches!(
+            validate_weights(Some(&[1.0, 2.0, f64::NAN, 4.0, 5.0]), 5),
+            Err(BuildError::InvalidWeight { index: 2, .. })
+        ));
+        assert!(matches!(
+            validate_weights(Some(&[1.0, 2.0, 3.0, f64::INFINITY, 5.0]), 5),
+            Err(BuildError::InvalidWeight { index: 3, .. })
+        ));
     }
 }
