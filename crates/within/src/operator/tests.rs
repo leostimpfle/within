@@ -450,8 +450,8 @@ mod schwarz_tests {
     use crate::block_elim::BlockElimSolver;
     use crate::csr_block::CsrBlock;
     use crate::domain::factor_pairs::Subdomain;
-    use crate::domain::CrossTab;
     use crate::domain::{build_local_domains, Design, LocalDomain};
+    use crate::domain::{BlockDiagonals, CrossTab};
     use crate::observation::FactorMajorStore;
     use crate::operator::schwarz::{build_additive_with_strategy, build_entry};
     use schwarz_precond::{LocalSolver, Operator, ReductionStrategy};
@@ -466,7 +466,7 @@ mod schwarz_tests {
         (design, domain_pairs)
     }
 
-    fn synthetic_cross_tab(n_keep: usize, elim_ratio: usize) -> CrossTab {
+    fn synthetic_cross_tab(n_keep: usize, elim_ratio: usize) -> (CrossTab, BlockDiagonals) {
         let n_q = n_keep * elim_ratio;
         let n_r = n_keep;
         let mut table = vec![0.0; n_q * n_r];
@@ -494,15 +494,16 @@ mod schwarz_tests {
 
         let c = CsrBlock::from_dense_table(&table, n_q, n_r);
         let ct = c.transpose();
-        CrossTab {
-            c,
-            ct,
-            diag_q,
-            diag_r,
-        }
+        (
+            CrossTab { c, ct },
+            BlockDiagonals {
+                q: diag_q,
+                r: diag_r,
+            },
+        )
     }
 
-    fn synthetic_sparse_cross_tab(n_keep: usize, elim_ratio: usize) -> CrossTab {
+    fn synthetic_sparse_cross_tab(n_keep: usize, elim_ratio: usize) -> (CrossTab, BlockDiagonals) {
         let n_q = n_keep * elim_ratio;
         let n_r = n_keep;
         let mut indptr = Vec::with_capacity(n_q + 1);
@@ -549,12 +550,13 @@ mod schwarz_tests {
             ncols: n_r,
         };
         let ct = c.transpose();
-        CrossTab {
-            c,
-            ct,
-            diag_q,
-            diag_r,
-        }
+        (
+            CrossTab { c, ct },
+            BlockDiagonals {
+                q: diag_q,
+                r: diag_r,
+            },
+        )
     }
 
     fn make_nested_block_elim_domain_pairs(
@@ -562,7 +564,7 @@ mod schwarz_tests {
         elim_ratio: usize,
         n_subdomains: usize,
     ) -> (usize, Vec<LocalDomain>) {
-        let cross_tab = synthetic_sparse_cross_tab(n_keep, elim_ratio);
+        let (cross_tab, block_diagonals) = synthetic_sparse_cross_tab(n_keep, elim_ratio);
         let n_local = cross_tab.n_local();
         let global_indices: Vec<u32> = (0..n_local as u32).collect();
 
@@ -573,6 +575,7 @@ mod schwarz_tests {
                     core: SubdomainCore::uniform(global_indices.clone()),
                 },
                 cross_tab: cross_tab.clone(),
+                block_diagonals: block_diagonals.clone(),
             })
             .collect();
         (n_local, domain_pairs)
@@ -682,6 +685,7 @@ mod schwarz_tests {
 
     fn benchmark_build_path(
         cross_tab: &CrossTab,
+        diagonals: &BlockDiagonals,
         approx_schur: Option<ApproxSchurConfig>,
         dense_threshold: usize,
         iters: usize,
@@ -697,7 +701,7 @@ mod schwarz_tests {
         let mut samples = Vec::with_capacity(iters);
         for _ in 0..iters {
             let t0 = Instant::now();
-            let solver = BlockElimSolver::build(cross_tab.clone(), &config)
+            let solver = BlockElimSolver::build(cross_tab.clone(), diagonals, &config)
                 .expect("block-elim build failed");
             black_box(solver);
             samples.push(t0.elapsed().as_secs_f64() * 1e6);
@@ -711,7 +715,7 @@ mod schwarz_tests {
         approx_schur: Option<ApproxSchurConfig>,
         dense_threshold: usize,
     ) -> BlockElimSolver {
-        let cross_tab = synthetic_cross_tab(n_keep, 8);
+        let (cross_tab, diagonals) = synthetic_cross_tab(n_keep, 8);
         let config = LocalSolverConfig {
             approx_chol: ApproxCholConfig {
                 split_merge: Some(8),
@@ -720,7 +724,7 @@ mod schwarz_tests {
             approx_schur,
             dense_threshold,
         };
-        BlockElimSolver::build(cross_tab, &config).expect("block-elim build failed")
+        BlockElimSolver::build(cross_tab, &diagonals, &config).expect("block-elim build failed")
     }
 
     fn benchmark_local_solve_path(solver: &BlockElimSolver, iters: usize) -> f64 {
@@ -832,13 +836,15 @@ mod schwarz_tests {
         println!("{}", "-".repeat(118));
 
         for &n_keep in &sizes {
-            let cross_tab = synthetic_cross_tab(n_keep, 8);
+            let (cross_tab, diagonals) = synthetic_cross_tab(n_keep, 8);
             let build_iters = if n_keep <= 32 { 100 } else { 40 };
 
-            let exact_dense = benchmark_build_path(&cross_tab, None, usize::MAX, build_iters);
-            let exact_sparse = benchmark_build_path(&cross_tab, None, 0, build_iters);
+            let exact_dense =
+                benchmark_build_path(&cross_tab, &diagonals, None, usize::MAX, build_iters);
+            let exact_sparse = benchmark_build_path(&cross_tab, &diagonals, None, 0, build_iters);
             let approx_dense = benchmark_build_path(
                 &cross_tab,
+                &diagonals,
                 Some(ApproxSchurConfig {
                     seed: 42,
                     ..Default::default()
@@ -848,6 +854,7 @@ mod schwarz_tests {
             );
             let approx_sparse = benchmark_build_path(
                 &cross_tab,
+                &diagonals,
                 Some(ApproxSchurConfig {
                     seed: 42,
                     ..Default::default()

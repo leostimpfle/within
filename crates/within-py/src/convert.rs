@@ -3,8 +3,11 @@
 
 use std::borrow::Cow;
 
-use numpy::PyReadonlyArray1;
 use pyo3::prelude::*;
+
+use within::{BatchSolveResult, SolveResult};
+
+use crate::results::{into_py_batch_result, into_py_result, PyBatchSolveResult, PySolveResult};
 
 // ---------------------------------------------------------------------------
 // Shared conversion helpers
@@ -51,13 +54,16 @@ pub(crate) fn extract_columns<'a>(
         .collect()
 }
 
-pub(crate) fn extract_weight_vec(weights: &Option<PyReadonlyArray1<'_, f64>>) -> Option<Vec<f64>> {
-    weights.as_ref().map(|w| w.as_array().to_vec())
-}
-
-pub(crate) fn warn_c_contiguous(py: Python<'_>, strides: &[isize]) -> PyResult<()> {
-    // strides[0] == 0 occurs for zero-row arrays, which are trivially F-contiguous.
-    if strides.len() >= 2 && strides[0] != 1 && strides[0] != 0 {
+pub(crate) fn warn_c_contiguous(
+    py: Python<'_>,
+    cats: &numpy::ndarray::ArrayView2<'_, u32>,
+) -> PyResult<()> {
+    // Warn only when the per-factor columns are NOT readable as contiguous
+    // slices -- i.e. exactly when `ArrayStore::factor_column` rejects the fast
+    // path: row stride != 1, or a non-positive (reversed) column stride. A
+    // single row or empty input is trivially contiguous regardless of strides.
+    let strides = cats.strides();
+    if cats.nrows() > 1 && (strides[0] != 1 || strides[1] < 1) {
         PyErr::warn(
             py,
             &py.get_type::<pyo3::exceptions::PyUserWarning>(),
@@ -67,4 +73,35 @@ pub(crate) fn warn_c_contiguous(py: Python<'_>, strides: &[isize]) -> PyResult<(
         )?;
     }
     Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Off-GIL solve orchestration
+// ---------------------------------------------------------------------------
+
+/// Run a native single-response solve with the GIL released, then convert.
+///
+/// The closure produces a [`SolveResult`] off-GIL (`allow_threads`); its native
+/// error is mapped to a `PyValueError` and the result to its Python wrapper.
+/// Shared by the free `solve` function and the persistent `Solver.solve`.
+pub(crate) fn run_solve<E, F>(py: Python<'_>, solve: F) -> PyResult<PySolveResult>
+where
+    E: std::fmt::Display + Send,
+    F: Send + FnOnce() -> Result<SolveResult, E>,
+{
+    let result = py.allow_threads(solve).map_err(value_err)?;
+    Ok(into_py_result(py, result))
+}
+
+/// Run a native batch solve with the GIL released, then convert.
+///
+/// Batch counterpart to [`run_solve`]; the conversion itself is fallible
+/// (re-shaping the flat column buffers into 2-D arrays).
+pub(crate) fn run_batch<E, F>(py: Python<'_>, solve: F) -> PyResult<PyBatchSolveResult>
+where
+    E: std::fmt::Display + Send,
+    F: Send + FnOnce() -> Result<BatchSolveResult, E>,
+{
+    let result = py.allow_threads(solve).map_err(value_err)?;
+    into_py_batch_result(py, result)
 }

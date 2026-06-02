@@ -11,7 +11,7 @@ use rayon::prelude::*;
 
 use crate::config::ApproxSchurConfig;
 use crate::csr_block::CsrBlock;
-use crate::domain::CrossTab;
+use crate::domain::{BlockDiagonals, CrossTab};
 use crate::BuildError;
 
 /// Undirected fill edge: `(lo_col, hi_col, weight)` with `lo_col < hi_col`.
@@ -112,7 +112,14 @@ pub(crate) struct Elimination<'a> {
 
 impl<'a> Elimination<'a> {
     /// Select which block to eliminate and precompute inverse-diagonals.
-    pub(crate) fn new(cross_tab: &'a CrossTab) -> Result<Self, BuildError> {
+    ///
+    /// The diagonal blocks are build-time-only inputs ([`BlockDiagonals`]); they
+    /// are folded into `inv_diag_elim` and borrowed as `diag_keep` here and not
+    /// retained past the build.
+    pub(crate) fn new(
+        cross_tab: &'a CrossTab,
+        diagonals: &'a BlockDiagonals,
+    ) -> Result<Self, BuildError> {
         let n_q = cross_tab.n_q();
         let n_r = cross_tab.n_r();
         // Eliminate the larger block to minimize the reduced system size.
@@ -120,9 +127,9 @@ impl<'a> Elimination<'a> {
         let (n_keep, n_elim) = if eliminate_q { (n_r, n_q) } else { (n_q, n_r) };
 
         let diag_elim = if eliminate_q {
-            &cross_tab.diag_q
+            &diagonals.q
         } else {
-            &cross_tab.diag_r
+            &diagonals.r
         };
         let inv_diag_elim = diag_elim
             .iter()
@@ -140,9 +147,9 @@ impl<'a> Elimination<'a> {
             .collect::<Result<_, _>>()?;
 
         let diag_keep = if eliminate_q {
-            &cross_tab.diag_r
+            &diagonals.r
         } else {
-            &cross_tab.diag_q
+            &diagonals.q
         };
 
         let (keep_to_elim, elim_to_keep) = if eliminate_q {

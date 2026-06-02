@@ -12,14 +12,14 @@
 //! Regenerating the fixture (intentional wire-format bump): run
 //! `cargo test -p within --test wire_format_fixture -- --ignored
 //!  regenerate_wire_format_fixture --nocapture`, copy the printed bytes into
-//! `crates/within/tests/fixtures/preconditioner_v2.postcard`, then update the
+//! `crates/within/tests/fixtures/preconditioner_v3.postcard`, then update the
 //! `WIRE_FORMAT_VERSION` constant and CHANGELOG.
 
 use ndarray::array;
 use within::{LsmrOptions, Preconditioner, Solver};
 
-const WIRE_FORMAT_VERSION: u32 = 2;
-const PRECOND_BYTES: &[u8] = include_bytes!("fixtures/preconditioner_v2.postcard");
+const WIRE_FORMAT_VERSION: u32 = 3;
+const PRECOND_BYTES: &[u8] = include_bytes!("fixtures/preconditioner_v3.postcard");
 
 fn fixture_problem() -> (ndarray::Array2<u32>, Vec<f64>) {
     // Fixed-effects problem with two factors. Small enough to keep the
@@ -70,7 +70,7 @@ fn wire_format_fixture_deserializes_and_solves() {
 }
 
 /// Generate the wire-format fixture. Run with `--ignored` to overwrite
-/// `crates/within/tests/fixtures/preconditioner_v2.postcard`. Intended for
+/// `crates/within/tests/fixtures/preconditioner_v3.postcard`. Intended for
 /// intentional wire-format bumps only; CI runs the non-ignored test above.
 #[test]
 #[ignore]
@@ -86,7 +86,7 @@ fn regenerate_wire_format_fixture() {
     let bytes = postcard::to_stdvec(prec).expect("serialize");
 
     let mut path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    path.push("tests/fixtures/preconditioner_v2.postcard");
+    path.push("tests/fixtures/preconditioner_v3.postcard");
     let mut f = std::fs::File::create(&path).expect("create fixture file");
     f.write_all(&bytes).expect("write fixture bytes");
     eprintln!("wrote {} bytes to {}", bytes.len(), path.display());

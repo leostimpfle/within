@@ -32,7 +32,7 @@ pub(crate) fn vec_norm(v: &[f64]) -> f64 {
 
 /// Below this count the per-iteration vector kernels run sequentially —
 /// rayon wake/steal overhead would dominate otherwise. Matches the threshold
-/// used by `sparse_matrix::CsrMatrix::matvec_add`.
+/// used by `csr_matrix::CsrMatrix::matvec_add`.
 const LSMR_PAR_THRESHOLD: usize = 10_000;
 /// Per-worker chunk size for the parallel vector kernels. Tuned to keep each
 /// chunk's work above rayon dispatch overhead while staying L1-resident —

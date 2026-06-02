@@ -285,9 +285,17 @@ impl CsrMatrix {
 
         let lookup = IndexLookup::new(subset, max_idx, m);
 
+        // Upper bound on the submatrix nnz: the sum of the selected rows'
+        // lengths. The column filter below can only drop entries, so reserving
+        // this much avoids reallocations during the fill loop.
+        let nnz_upper_bound: usize = subset
+            .iter()
+            .map(|&global_row| (self.indptr[global_row + 1] - self.indptr[global_row]) as usize)
+            .sum();
+
         let mut new_indptr = Vec::with_capacity(m + 1);
-        let mut new_indices = Vec::new();
-        let mut new_data = Vec::new();
+        let mut new_indices = Vec::with_capacity(nnz_upper_bound);
+        let mut new_data = Vec::with_capacity(nnz_upper_bound);
         new_indptr.push(0u32);
 
         for &global_row in subset {

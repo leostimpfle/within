@@ -3,7 +3,7 @@
 pub(crate) mod cross_tab;
 pub(crate) mod factor_pairs;
 
-pub(crate) use cross_tab::{find_all_active_levels, CrossTab};
+pub(crate) use cross_tab::{find_all_active_levels, BlockDiagonals, CrossTab};
 
 pub(crate) use factor_pairs::{build_local_domains, LocalDomain};
 
@@ -11,7 +11,7 @@ pub(crate) use factor_pairs::{build_local_domains, LocalDomain};
 // Design — categorical fixed-effects design (data + layout)
 // ===========================================================================
 
-use crate::observation::Store;
+use crate::observation::{factor_columns, level_at, Store};
 use crate::BuildError;
 
 /// Per-factor metadata: level count and global DOF offset.
@@ -51,11 +51,12 @@ impl<S: Store> Design<S> {
             return Err(BuildError::EmptyObservations);
         }
 
+        let cols = factor_columns(&store);
         let mut factors = Vec::with_capacity(store.n_factors());
         let mut offset = 0;
-        for q in 0..store.n_factors() {
+        for (q, &cols_q) in cols.iter().enumerate() {
             let n_levels = (0..store.n_obs())
-                .map(|uid| store.level(uid, q) as usize + 1)
+                .map(|uid| level_at(&store, cols_q, uid, q) + 1)
                 .max()
                 .unwrap(); // safe: n_obs > 0
             factors.push(FactorMeta { n_levels, offset });

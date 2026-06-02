@@ -85,20 +85,28 @@ fn par_dot(a: &[f64], b: &[f64]) -> f64 {
     }
 }
 
-/// Ring buffer of past `v` vectors for windowed modified Gram-Schmidt in the
-/// standard Euclidean inner product. Used by [`GolubKahan`].
+/// Windowed ring of recent basis vectors for local (windowed) modified
+/// Gram-Schmidt reorthogonalization.
 ///
-/// The disabled state is encoded as `Option<LocalReorth> = None` on the
-/// owning buffer; this type is only ever constructed with a positive
-/// capacity.
-struct LocalReorth {
-    slots: Vec<f64>,
+/// Stores up to `cap` slots, each holding `L` parallel length-`n` lanes in a
+/// flat per-lane buffer. The ring mechanics — capacity clamp, chronological
+/// (oldest-first) traversal, and wrap-around writes — live here; the inner
+/// product and MGS sweep are supplied by the `L`-specialized impls below
+/// ([`WindowRing<1>`] for Euclidean `v`, [`WindowRing<2>`] for the M-weighted
+/// `(v, p̃ = M v)` pair).
+///
+/// The disabled state is encoded as `Option<WindowRing<L>> = None` on the
+/// owning buffer; this type is only ever constructed with a positive capacity.
+struct WindowRing<const L: usize> {
+    /// `L` flat buffers, each `cap * n` long; lane `l`, slot `s` is the
+    /// length-`n` window `[s*n .. s*n + n]` of `lanes[l]`.
+    lanes: [Vec<f64>; L],
     n: usize,
     next: usize,
     count: usize,
 }
 
-impl LocalReorth {
+impl<const L: usize> WindowRing<L> {
     /// Returns `None` when no reorthogonalization is requested (the effective
     /// capacity collapses to zero). The bidiagonalization can produce at most
     /// `min(m, n)` linearly independent basis vectors before α or β hits zero,
@@ -109,152 +117,102 @@ impl LocalReorth {
             return None;
         }
         Some(Self {
-            slots: vec![0.0; cap * n],
+            lanes: std::array::from_fn(|_| vec![0.0; cap * n]),
             n,
             next: 0,
             count: 0,
         })
     }
 
-    /// Modified Gram-Schmidt sweep over stored slots in chronological order
-    /// (oldest first). Subtracts the projection of `y` onto each stored
-    /// vector.
-    fn reorthogonalize(&self, y: &mut [f64]) {
+    #[inline]
+    fn capacity(&self) -> usize {
+        self.lanes[0].len() / self.n
+    }
+
+    /// Ring slots currently filled, in chronological order (oldest first).
+    fn chrono_slots(&self) -> impl Iterator<Item = usize> {
         let cap = self.capacity();
         let start = if self.count < cap { 0 } else { self.next };
-        for i in 0..self.count {
-            let v_j = self.slot((start + i) % cap);
+        let count = self.count;
+        (0..count).map(move |i| (start + i) % cap)
+    }
+
+    /// Reserve the next write slot, advancing the ring index and saturating the
+    /// count at capacity. Returns the slot to write into.
+    fn advance(&mut self) -> usize {
+        let cap = self.capacity();
+        let slot = self.next;
+        self.next = (self.next + 1) % cap;
+        if self.count < cap {
+            self.count += 1;
+        }
+        slot
+    }
+
+    #[inline]
+    fn lane(&self, l: usize, slot: usize) -> &[f64] {
+        let start = slot * self.n;
+        &self.lanes[l][start..start + self.n]
+    }
+
+    #[inline]
+    fn lane_mut(&mut self, l: usize, slot: usize) -> &mut [f64] {
+        let start = slot * self.n;
+        &mut self.lanes[l][start..start + self.n]
+    }
+}
+
+/// Euclidean windowed MGS over the single stored `v` lane. Used by
+/// [`GolubKahan`].
+impl WindowRing<1> {
+    /// Modified Gram-Schmidt sweep over stored slots in chronological order
+    /// (oldest first). Subtracts the projection of `y` onto each stored vector.
+    fn reorthogonalize(&self, y: &mut [f64]) {
+        for slot in self.chrono_slots() {
+            let v_j = self.lane(0, slot);
             let c = par_dot(y, v_j);
             axpby(y, v_j, -c, 1.0);
         }
     }
 
-    /// Copy `v` into the next slot, advancing the ring index and saturating
-    /// the count at capacity.
+    /// Copy `v` into the next slot, advancing the ring.
     fn push(&mut self, v: &[f64]) {
-        let cap = self.capacity();
-        let next = self.next;
-        self.slot_mut(next).copy_from_slice(v);
-        self.next = (self.next + 1) % cap;
-        if self.count < cap {
-            self.count += 1;
-        }
-    }
-
-    #[inline]
-    fn capacity(&self) -> usize {
-        self.slots.len() / self.n
-    }
-
-    #[inline]
-    fn slot(&self, slot: usize) -> &[f64] {
-        let start = slot * self.n;
-        &self.slots[start..start + self.n]
-    }
-
-    #[inline]
-    fn slot_mut(&mut self, slot: usize) -> &mut [f64] {
-        let start = slot * self.n;
-        &mut self.slots[start..start + self.n]
+        let slot = self.advance();
+        self.lane_mut(0, slot).copy_from_slice(v);
     }
 }
 
-/// Ring buffer of past `(v, p̃ = M v)` pairs for windowed modified
-/// Gram-Schmidt in the M-weighted inner product. Used by
+/// M-weighted windowed MGS over the paired `(v, p̃ = M v)` lanes. Used by
 /// [`ModifiedGolubKahan`]: `v` is M-orthogonal, not Euclidean, so the MGS
 /// coefficient is `⟨v_new, M v_j⟩ = ⟨v_new, p̃_j⟩`. Subtracting the same
-/// coefficient from both `v` and `p̃` in lockstep preserves the
-/// `p̃ = M v` invariant on the recurrence vectors.
-///
-/// As with [`LocalReorth`], the disabled state is encoded as
-/// `Option<ModifiedLocalReorth> = None` on the owning buffer.
-struct ModifiedLocalReorth {
-    v: Vec<f64>,
-    p_tilde: Vec<f64>,
-    n: usize,
-    next: usize,
-    count: usize,
-}
-
-impl ModifiedLocalReorth {
-    /// Returns `None` when no reorthogonalization is requested. See
-    /// [`LocalReorth::new`] for the capacity-clamping rationale.
-    fn new(m: usize, n: usize, local_size: usize) -> Option<Self> {
-        let cap = local_size.min(m.min(n));
-        if cap == 0 {
-            return None;
-        }
-        Some(Self {
-            v: vec![0.0; cap * n],
-            p_tilde: vec![0.0; cap * n],
-            n,
-            next: 0,
-            count: 0,
-        })
-    }
-
+/// coefficient from both `v` and `p̃` in lockstep preserves the `p̃ = M v`
+/// invariant on the recurrence vectors.
+impl WindowRing<2> {
     /// M-weighted MGS over stored `(v_j, p̃_j)` pairs. The coefficient
-    /// `c = ⟨v, p̃_j⟩` is subtracted from `v` (against `v_j`) and from
-    /// `p̃` (against `p̃_j`), keeping `p̃ = M v` consistent.
+    /// `c = ⟨v, p̃_j⟩` is subtracted from `v` (against `v_j`) and from `p̃`
+    /// (against `p̃_j`), keeping `p̃ = M v` consistent.
     fn reorthogonalize(&self, v: &mut [f64], p_tilde: &mut [f64]) {
-        let cap = self.capacity();
-        let start = if self.count < cap { 0 } else { self.next };
-        for i in 0..self.count {
-            let idx = (start + i) % cap;
-            let v_j = self.v_slot(idx);
-            let p_j = self.p_slot(idx);
+        for slot in self.chrono_slots() {
+            let v_j = self.lane(0, slot);
+            let p_j = self.lane(1, slot);
             let c = par_dot(v, p_j);
             axpby(v, v_j, -c, 1.0);
             axpby(p_tilde, p_j, -c, 1.0);
         }
     }
 
-    /// Copy the normalized `v` and `p_tilde * inv_alpha` (= `M · v_norm`)
-    /// into the paired next slots, advancing the ring index.
+    /// Copy the normalized `v` and `p_tilde * inv_alpha` (= `M · v_norm`) into
+    /// the paired next slots, advancing the ring.
     fn push(&mut self, v: &[f64], p_tilde_unscaled: &[f64], inv_alpha: f64) {
-        let cap = self.capacity();
-        let next = self.next;
-        self.v_slot_mut(next).copy_from_slice(v);
+        let slot = self.advance();
+        self.lane_mut(0, slot).copy_from_slice(v);
         for (dst, &src) in self
-            .p_slot_mut(next)
+            .lane_mut(1, slot)
             .iter_mut()
             .zip(p_tilde_unscaled.iter())
         {
             *dst = src * inv_alpha;
         }
-        self.next = (self.next + 1) % cap;
-        if self.count < cap {
-            self.count += 1;
-        }
-    }
-
-    #[inline]
-    fn capacity(&self) -> usize {
-        self.v.len() / self.n
-    }
-
-    #[inline]
-    fn v_slot(&self, slot: usize) -> &[f64] {
-        let start = slot * self.n;
-        &self.v[start..start + self.n]
-    }
-
-    #[inline]
-    fn p_slot(&self, slot: usize) -> &[f64] {
-        let start = slot * self.n;
-        &self.p_tilde[start..start + self.n]
-    }
-
-    #[inline]
-    fn v_slot_mut(&mut self, slot: usize) -> &mut [f64] {
-        let start = slot * self.n;
-        &mut self.v[start..start + self.n]
-    }
-
-    #[inline]
-    fn p_slot_mut(&mut self, slot: usize) -> &mut [f64] {
-        let start = slot * self.n;
-        &mut self.p_tilde[start..start + self.n]
     }
 }
 
@@ -345,62 +303,10 @@ impl<A: Operator + ?Sized, M: Operator + ?Sized> Bidiagonalization
         }
         let beta_inv = if beta > 0.0 { 1.0 / beta } else { 0.0 };
 
-        // Phase 2 — Aᵀ on unnormalized u: result is β · Aᵀ u_norm.
-        // Maintain the p̃ = α · M v invariant by scaling the running p̃ with
-        // β / α_k: the α_k in the denominator cancels the α_k factor stored
-        // in p̃ from the previous step, so the updated p̃ ends up as
-        // α_new · M v_new (up to MGS) on completion of this iteration.
-        // Precondition: α_k > 0 (the outer loop guard in lsmr_from_bidiag
-        // never calls step() once α has collapsed to zero).
-        self.operator
-            .apply_adjoint(&self.bufs.u, &mut self.bufs.atu)?;
-        debug_assert!(
-            self.alpha > 0.0,
-            "self.alpha must be > 0; lsmr_from_bidiag's loop guard prevents step() after alpha=0",
-        );
-        let p_coeff = beta / self.alpha;
-        axpby(&mut self.bufs.p_tilde, &self.bufs.atu, beta_inv, -p_coeff);
-
-        // Phase 3 — M-weighted MGS, then normalization, then push to ring.
-        // First recover v from p̃ via the preconditioner: ṽ_{k+1} = M⁻¹ p̃
-        // (equals α_new · v_norm before normalization). Then run modified
-        // Gram-Schmidt against past (v, p̃ = M v) pairs, mutating v and
-        // p_tilde in lockstep so the p̃ = M v invariant holds on the corrected
-        // pair. After MGS, α_{k+1} = √⟨ṽ, p̃⟩ is the corrected norm; we
-        // normalize v in place (p_tilde stays at α_new · p̃_norm for the next
-        // step), and push the normalized v_{k+1} and p̃_{k+1,norm} = p_tilde /
-        // α_new into the ring for the next step's MGS.
-        self.preconditioner
-            .apply(&self.bufs.p_tilde, &mut self.bufs.v)?;
-
-        if let Some(reorth) = &self.bufs.local_reorth {
-            reorth.reorthogonalize(&mut self.bufs.v, &mut self.bufs.p_tilde);
-        }
-
-        let vp = par_dot(&self.bufs.v, &self.bufs.p_tilde);
-        // vp = ⟨v, M v⟩. vp == 0 is a clean (lucky) breakdown; vp < 0 means
-        // the preconditioner is not positive definite, which would otherwise
-        // produce a silent premature "converged" at the wrong solution.
-        if vp < 0.0 {
-            return Err(SolveError::InvalidInput {
-                context: "mlsmr",
-                message: "preconditioner not positive definite (⟨v, Mv⟩ < 0)".to_string(),
-            });
-        }
-        let alpha_new = vp.sqrt();
-
-        if alpha_new > 0.0 {
-            scale_in_place(&mut self.bufs.v, 1.0 / alpha_new);
-        }
-
-        if let Some(reorth) = &mut self.bufs.local_reorth {
-            let inv_alpha = if alpha_new > 0.0 {
-                1.0 / alpha_new
-            } else {
-                0.0
-            };
-            reorth.push(&self.bufs.v, &self.bufs.p_tilde, inv_alpha);
-        }
+        // Phase 2 — fold the adjoint matvec into the p̃ recurrence.
+        self.update_p_tilde(beta, beta_inv)?;
+        // Phase 3 — recover v, M-weighted MGS, normalize, push to the ring.
+        let alpha_new = self.reorthonormalize_v()?;
 
         self.alpha = alpha_new;
         self.beta_prev_inv = beta_inv;
@@ -427,7 +333,7 @@ struct GolubKahanBuffers {
     /// Scratch for `Aᵀ · u` (length n).
     atu: Vec<f64>,
     /// Windowed reorthogonalization buffer; `None` disables it.
-    local_reorth: Option<LocalReorth>,
+    local_reorth: Option<WindowRing<1>>,
 }
 
 impl GolubKahanBuffers {
@@ -437,7 +343,7 @@ impl GolubKahanBuffers {
             v: vec![0.0; n],
             av: vec![0.0; m],
             atu: vec![0.0; n],
-            local_reorth: LocalReorth::new(m, n, local_size),
+            local_reorth: WindowRing::<1>::new(m, n, local_size),
         }
     }
 }
@@ -512,7 +418,7 @@ struct ModifiedGolubKahanBuffers {
     /// Scratch for `Aᵀ · u` (length n).
     atu: Vec<f64>,
     /// Windowed M-weighted reorthogonalization buffer; `None` disables it.
-    local_reorth: Option<ModifiedLocalReorth>,
+    local_reorth: Option<WindowRing<2>>,
 }
 
 impl ModifiedGolubKahanBuffers {
@@ -523,7 +429,7 @@ impl ModifiedGolubKahanBuffers {
             p_tilde: vec![0.0; n],
             av: vec![0.0; m],
             atu: vec![0.0; n],
-            local_reorth: ModifiedLocalReorth::new(m, n, local_size),
+            local_reorth: WindowRing::<2>::new(m, n, local_size),
         }
     }
 }
@@ -602,5 +508,75 @@ impl<'a, A: Operator + ?Sized, M: Operator + ?Sized> ModifiedGolubKahan<'a, A, M
             },
             BidiagStep { alpha, beta },
         ))
+    }
+
+    /// Phase 2 of [`step`](Bidiagonalization::step): fold the adjoint matvec
+    /// into the `p̃` recurrence.
+    ///
+    /// `apply_adjoint` on the unnormalized `u` yields `β · Aᵀ u_norm`. The
+    /// `p̃ = α · M v` invariant is maintained by scaling the running `p̃` with
+    /// `β / α_k`: the `α_k` in the denominator cancels the `α_k` factor stored
+    /// in `p̃` from the previous step, so the updated `p̃` ends up as
+    /// `α_new · M v_new` (up to MGS) on completion of this iteration.
+    /// Precondition: `α_k > 0` (the outer loop guard in `lsmr_from_bidiag`
+    /// never calls `step()` once `α` has collapsed to zero).
+    fn update_p_tilde(&mut self, beta: f64, beta_inv: f64) -> Result<(), SolveError> {
+        self.operator
+            .apply_adjoint(&self.bufs.u, &mut self.bufs.atu)?;
+        debug_assert!(
+            self.alpha > 0.0,
+            "self.alpha must be > 0; lsmr_from_bidiag's loop guard prevents step() after alpha=0",
+        );
+        let p_coeff = beta / self.alpha;
+        axpby(&mut self.bufs.p_tilde, &self.bufs.atu, beta_inv, -p_coeff);
+        Ok(())
+    }
+
+    /// Phase 3 of [`step`](Bidiagonalization::step): recover `v` from `p̃`, run
+    /// M-weighted MGS, normalize, and push the pair to the ring. Returns the
+    /// corrected `α_{k+1}`.
+    ///
+    /// First recover `v` from `p̃` via the preconditioner: `ṽ_{k+1} = M⁻¹ p̃`
+    /// (equals `α_new · v_norm` before normalization). Then run modified
+    /// Gram-Schmidt against past `(v, p̃ = M v)` pairs, mutating `v` and
+    /// `p_tilde` in lockstep so the `p̃ = M v` invariant holds on the corrected
+    /// pair. After MGS, `α_{k+1} = √⟨ṽ, p̃⟩` is the corrected norm; we normalize
+    /// `v` in place (`p_tilde` stays at `α_new · p̃_norm` for the next step),
+    /// and push the normalized `v_{k+1}` and `p̃_{k+1,norm} = p_tilde / α_new`
+    /// into the ring for the next step's MGS.
+    fn reorthonormalize_v(&mut self) -> Result<f64, SolveError> {
+        self.preconditioner
+            .apply(&self.bufs.p_tilde, &mut self.bufs.v)?;
+
+        if let Some(reorth) = &self.bufs.local_reorth {
+            reorth.reorthogonalize(&mut self.bufs.v, &mut self.bufs.p_tilde);
+        }
+
+        let vp = par_dot(&self.bufs.v, &self.bufs.p_tilde);
+        // vp = ⟨v, M v⟩. vp == 0 is a clean (lucky) breakdown; vp < 0 means
+        // the preconditioner is not positive definite, which would otherwise
+        // produce a silent premature "converged" at the wrong solution.
+        if vp < 0.0 {
+            return Err(SolveError::InvalidInput {
+                context: "mlsmr",
+                message: "preconditioner not positive definite (⟨v, Mv⟩ < 0)".to_string(),
+            });
+        }
+        let alpha_new = vp.sqrt();
+
+        if alpha_new > 0.0 {
+            scale_in_place(&mut self.bufs.v, 1.0 / alpha_new);
+        }
+
+        if let Some(reorth) = &mut self.bufs.local_reorth {
+            let inv_alpha = if alpha_new > 0.0 {
+                1.0 / alpha_new
+            } else {
+                0.0
+            };
+            reorth.push(&self.bufs.v, &self.bufs.p_tilde, inv_alpha);
+        }
+
+        Ok(alpha_new)
     }
 }

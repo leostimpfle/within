@@ -75,8 +75,13 @@ pub(crate) fn build_entry(
     domain: LocalDomain,
     config: &LocalSolverConfig,
 ) -> Result<SubdomainEntry<BlockElimSolver>, BuildError> {
-    let solver = BlockElimSolver::build(domain.cross_tab, config)?;
-    SubdomainEntry::try_new(domain.subdomain.core, solver).map_err(BuildError::Preconditioner)
+    let LocalDomain {
+        subdomain,
+        cross_tab,
+        block_diagonals,
+    } = domain;
+    let solver = BlockElimSolver::build(cross_tab, &block_diagonals, config)?;
+    SubdomainEntry::try_new(subdomain.core, solver).map_err(BuildError::Preconditioner)
 }
 
 // ---------------------------------------------------------------------------

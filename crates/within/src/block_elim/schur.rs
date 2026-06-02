@@ -308,7 +308,7 @@ impl SchurComplement for ApproxSchurComplement {
 mod tests {
     use super::*;
     use crate::csr_block::CsrBlock;
-    use crate::domain::CrossTab;
+    use crate::domain::{BlockDiagonals, CrossTab};
 
     fn make_cross_tab(
         c_dense: &[f64],
@@ -316,15 +316,16 @@ mod tests {
         n_r: usize,
         diag_q: Vec<f64>,
         diag_r: Vec<f64>,
-    ) -> CrossTab {
+    ) -> (CrossTab, BlockDiagonals) {
         let c = CsrBlock::from_dense_table(c_dense, n_q, n_r);
         let ct = c.transpose();
-        CrossTab {
-            c,
-            ct,
-            diag_q,
-            diag_r,
-        }
+        (
+            CrossTab { c, ct },
+            BlockDiagonals {
+                q: diag_q,
+                r: diag_r,
+            },
+        )
     }
 
     fn sparse_to_dense(matrix: &CsrMatrix) -> Vec<Vec<f64>> {
@@ -413,8 +414,8 @@ mod tests {
         let c_dense = vec![1.0, 2.0, 3.0, 0.0, 0.0, 4.0];
         let diag_q = vec![5.0, 6.0, 8.0];
         let diag_r = vec![7.0, 9.0];
-        let cross_tab = make_cross_tab(&c_dense, 3, 2, diag_q.clone(), diag_r.clone());
-        let elim = Elimination::new(&cross_tab).unwrap();
+        let (cross_tab, diagonals) = make_cross_tab(&c_dense, 3, 2, diag_q.clone(), diag_r.clone());
+        let elim = Elimination::new(&cross_tab, &diagonals).unwrap();
 
         assert!(elim.eliminate_q);
         assert_eq!(elim.inv_diag_elim.len(), 3);
@@ -439,9 +440,9 @@ mod tests {
         let c_dense = vec![2.0, 0.0, 1.0, 0.0, 3.0, 4.0];
         let diag_q = vec![8.0, 9.0];
         let diag_r = vec![5.0, 6.0, 0.0];
-        let cross_tab = make_cross_tab(&c_dense, 2, 3, diag_q, diag_r);
+        let (cross_tab, diagonals) = make_cross_tab(&c_dense, 2, 3, diag_q, diag_r);
 
-        let result = Elimination::new(&cross_tab);
+        let result = Elimination::new(&cross_tab, &diagonals);
         match result {
             Err(crate::BuildError::SingularDiagonal { index: 2, .. }) => {}
             Err(e) => panic!("expected SingularDiagonal at index 2, got: {e}"),
@@ -453,9 +454,10 @@ mod tests {
     fn approximate_schur_is_seed_deterministic_and_laplacian_like() {
         // Degree-3 star in eliminated block gives nontrivial sampled edges.
         let c_dense = vec![1.0, 2.0, 3.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0];
-        let cross_tab = make_cross_tab(&c_dense, 3, 3, vec![10.0, 4.0, 5.0], vec![2.0, 3.0, 4.0]);
-        let elim_a = Elimination::new(&cross_tab).unwrap();
-        let elim_b = Elimination::new(&cross_tab).unwrap();
+        let (cross_tab, diagonals) =
+            make_cross_tab(&c_dense, 3, 3, vec![10.0, 4.0, 5.0], vec![2.0, 3.0, 4.0]);
+        let elim_a = Elimination::new(&cross_tab, &diagonals).unwrap();
+        let elim_b = Elimination::new(&cross_tab, &diagonals).unwrap();
         let approx = ApproxSchurComplement::new(crate::config::ApproxSchurConfig {
             seed: 12345,
             ..Default::default()

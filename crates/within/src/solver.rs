@@ -315,8 +315,12 @@ impl<S: Store> Solver<S> {
         let t_start = Instant::now();
         let n_rhs = ys.len();
 
-        let results: Vec<Result<SolveResult, SolveError>> =
-            ys.par_iter().map(|y| self.solve(y, lsmr)).collect();
+        // Fail fast on the first per-RHS error rather than materializing a
+        // `Vec<Result<..>>` and only surfacing the failure during the fold.
+        let results: Vec<SolveResult> = ys
+            .par_iter()
+            .map(|y| self.solve(y, lsmr))
+            .collect::<Result<Vec<_>, _>>()?;
 
         let mut x = Vec::with_capacity(self.design.n_dofs * n_rhs);
         let mut demeaned = Vec::with_capacity(self.design.n_obs * n_rhs);
@@ -326,7 +330,6 @@ impl<S: Store> Solver<S> {
         let mut time_solve = Vec::with_capacity(n_rhs);
 
         for r in results {
-            let r = r?;
             x.extend_from_slice(&r.x);
             demeaned.extend_from_slice(&r.demeaned);
             converged.push(r.converged);
