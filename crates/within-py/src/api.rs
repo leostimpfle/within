@@ -85,8 +85,8 @@ pub fn solve_batch<'py>(
     }
 
     // The (single-column) weight copy requires the GIL token, so it stays
-    // GIL-held; the large O(n_obs·k) column copy (`extract_columns`) is
-    // deferred into the GIL-released closure below.
+    // GIL-held; `extract_columns` runs in the GIL-released closure below, where
+    // it borrows F-contiguous columns directly and copies only strided ones.
     let w_vec = extract_weight_vec(&weights);
     let params = resolve_lsmr_config(options)?;
 

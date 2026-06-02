@@ -227,11 +227,6 @@ impl BlockElimSolver {
 
     /// Eliminate one diagonal block and recover it by back-substitution.
     ///
-    /// `elim` names the orientation roles (eliminated vs kept block, and the
-    /// cross operators for each); the sequence below is the bipartite-SDDM
-    /// block-elimination kernel and runs unchanged for both orientations.
-    /// Eliminate one diagonal block and recover it by back-substitution.
-    ///
     /// `roles` assigns the q/r blocks and cross operators to the eliminated/kept
     /// roles; the sequence below is the bipartite-SDDM block-elimination kernel
     /// and runs unchanged for both orientations.
