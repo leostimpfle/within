@@ -23,12 +23,6 @@ impl std::fmt::Debug for FeSchwarz {
     }
 }
 
-impl FeSchwarz {
-    pub(crate) fn new(inner: SchwarzPreconditioner<BlockElimSolver>) -> Self {
-        Self(inner)
-    }
-}
-
 impl Operator for FeSchwarz {
     fn nrows(&self) -> usize {
         self.0.nrows()
@@ -61,9 +55,7 @@ pub(crate) fn build_additive_with_strategy(
         .into_par_iter()
         .map(|domain| build_entry(domain, config))
         .collect::<Result<Vec<_>, BuildError>>()?;
-    Ok(FeSchwarz::new(SchwarzPreconditioner::new(
-        entries, strategy,
-    )))
+    Ok(FeSchwarz(SchwarzPreconditioner::new(entries, strategy)))
 }
 
 // ---------------------------------------------------------------------------

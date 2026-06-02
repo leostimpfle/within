@@ -18,18 +18,6 @@ use crate::BuildError;
 pub(crate) type Edge = (u32, u32, f64);
 
 // ===========================================================================
-// EliminationInfo — handed to BlockElimSolver after Schur assembly
-// ===========================================================================
-
-/// Metadata from the block-elimination step needed by `BlockElimSolver`.
-pub(crate) struct EliminationInfo {
-    /// 1 / D_elim[k] for the eliminated diagonal block.
-    pub(crate) inv_diag_elim: Vec<f64>,
-    /// True if the q-block was eliminated (n_q >= n_r).
-    pub(crate) eliminate_q: bool,
-}
-
-// ===========================================================================
 // Star — zero-copy neighborhood view
 // ===========================================================================
 
@@ -198,14 +186,6 @@ impl<'a> Elimination<'a> {
                 edges
             })
             .reduce(Vec::new, Self::merge_dedup)
-    }
-
-    /// Package elimination metadata into [`EliminationInfo`] for the solver.
-    pub(crate) fn into_info(self) -> EliminationInfo {
-        EliminationInfo {
-            inv_diag_elim: self.inv_diag_elim,
-            eliminate_q: self.eliminate_q,
-        }
     }
 
     /// Sort edges by `(lo, hi)` and merge duplicates by summing weights.

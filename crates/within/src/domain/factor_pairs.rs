@@ -14,8 +14,6 @@ use crate::observation::Store;
 /// A local subdomain corresponding to a pair of factors.
 #[derive(Clone)]
 pub(crate) struct Subdomain {
-    /// Indices `(q, r)` of the two factors this subdomain covers.
-    pub factor_pair: (usize, usize),
     /// Generic subdomain core: global DOF indices, restriction, and partition-of-unity weights.
     pub core: SubdomainCore,
 }
@@ -23,7 +21,6 @@ pub(crate) struct Subdomain {
 impl std::fmt::Debug for Subdomain {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Subdomain")
-            .field("factor_pair", &self.factor_pair)
             .field("n_dofs", &self.core.n_local())
             .finish()
     }
@@ -72,7 +69,7 @@ pub(crate) fn build_local_domains<S: Store>(
                     None => return Vec::new(),
                 };
             let n_q_full = full_ct.n_q();
-            split_into_subdomains(full_ct, full_diag, &l2g, n_q_full, (q, r))
+            split_into_subdomains(full_ct, full_diag, &l2g, n_q_full)
         })
         .collect();
 
@@ -91,7 +88,6 @@ fn split_into_subdomains(
     full_diag: BlockDiagonals,
     l2g: &[u32],
     n_q_full: usize,
-    factor_pair: (usize, usize),
 ) -> Vec<LocalDomain> {
     let components = full_ct.bipartite_connected_components();
 
@@ -126,7 +122,7 @@ fn split_into_subdomains(
                 .collect();
             let core = schwarz_precond::SubdomainCore::uniform(comp_l2g);
             LocalDomain {
-                subdomain: Subdomain { factor_pair, core },
+                subdomain: Subdomain { core },
                 cross_tab: comp_ct,
                 block_diagonals: comp_diag,
             }

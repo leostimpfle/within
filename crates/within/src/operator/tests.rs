@@ -331,9 +331,7 @@ mod weighted_adjoint_proptests {
 // ===========================================================================
 
 mod schwarz_tests {
-    use std::cmp::Ordering;
     use std::env;
-    use std::hint::black_box;
     use std::process::Command;
     use std::thread;
     use std::time::{Duration, Instant};
@@ -344,14 +342,13 @@ mod schwarz_tests {
     use schwarz_precond::SubdomainCore;
 
     use crate::block_elim::factor::ReducedFactor;
-    use crate::block_elim::BlockElimSolver;
     use crate::csr_block::CsrBlock;
     use crate::domain::factor_pairs::Subdomain;
     use crate::domain::{build_local_domains, Design, LocalDomain};
     use crate::domain::{BlockDiagonals, CrossTab};
     use crate::observation::FactorMajorStore;
     use crate::operator::schwarz::{build_additive_with_strategy, build_entry};
-    use schwarz_precond::{LocalSolver, Operator, ReductionStrategy};
+    use schwarz_precond::{Operator, ReductionStrategy};
 
     const BLOCK_ELIM_NESTED_RAYON_CHILD_ENV: &str = "WITHIN_TEST_BLOCK_ELIM_NESTED_RAYON_CHILD";
 
@@ -361,43 +358,6 @@ mod schwarz_tests {
         let design = Design::from_store(store).expect("valid fixed-effects design");
         let domain_pairs = build_local_domains(&design, None);
         (design, domain_pairs)
-    }
-
-    fn synthetic_cross_tab(n_keep: usize, elim_ratio: usize) -> (CrossTab, BlockDiagonals) {
-        let n_q = n_keep * elim_ratio;
-        let n_r = n_keep;
-        let mut table = vec![0.0; n_q * n_r];
-
-        for i in 0..n_q {
-            let j0 = i % n_r;
-            let j1 = (i + 1) % n_r;
-            let j2 = (i.wrapping_mul(7).wrapping_add(3)) % n_r;
-            table[i * n_r + j0] += 1.0;
-            table[i * n_r + j1] += 0.8;
-            table[i * n_r + j2] += 0.6;
-        }
-
-        let mut diag_q = vec![0.0; n_q];
-        let mut diag_r = vec![0.0; n_r];
-        for i in 0..n_q {
-            let row = &table[i * n_r..(i + 1) * n_r];
-            let mut s = 0.0;
-            for (j, &w) in row.iter().enumerate() {
-                s += w;
-                diag_r[j] += w;
-            }
-            diag_q[i] = s;
-        }
-
-        let c = CsrBlock::from_dense_table(&table, n_q, n_r);
-        let ct = c.transpose();
-        (
-            CrossTab { c, ct },
-            BlockDiagonals {
-                q: diag_q,
-                r: diag_r,
-            },
-        )
     }
 
     fn synthetic_sparse_cross_tab(n_keep: usize, elim_ratio: usize) -> (CrossTab, BlockDiagonals) {
@@ -466,9 +426,8 @@ mod schwarz_tests {
         let global_indices: Vec<u32> = (0..n_local as u32).collect();
 
         let domain_pairs = (0..n_subdomains)
-            .map(|idx| LocalDomain {
+            .map(|_| LocalDomain {
                 subdomain: Subdomain {
-                    factor_pair: (idx, idx + 1),
                     core: SubdomainCore::uniform(global_indices.clone()),
                 },
                 cross_tab: cross_tab.clone(),
@@ -580,73 +539,6 @@ mod schwarz_tests {
         }
     }
 
-    fn benchmark_build_path(
-        cross_tab: &CrossTab,
-        diagonals: &BlockDiagonals,
-        approx_schur: Option<ApproxSchurConfig>,
-        dense_threshold: usize,
-        iters: usize,
-    ) -> f64 {
-        let config = LocalSolverConfig {
-            approx_chol: ApproxCholConfig {
-                split_merge: Some(8),
-                seed: 42,
-            },
-            approx_schur,
-            dense_threshold,
-        };
-        let mut samples = Vec::with_capacity(iters);
-        for _ in 0..iters {
-            let t0 = Instant::now();
-            let solver = BlockElimSolver::build(cross_tab.clone(), diagonals, &config)
-                .expect("block-elim build failed");
-            black_box(solver);
-            samples.push(t0.elapsed().as_secs_f64() * 1e6);
-        }
-        samples.sort_unstable_by(|a, b| a.partial_cmp(b).unwrap_or(Ordering::Equal));
-        samples[samples.len() / 2]
-    }
-
-    fn build_local_solver_for_bench(
-        n_keep: usize,
-        approx_schur: Option<ApproxSchurConfig>,
-        dense_threshold: usize,
-    ) -> BlockElimSolver {
-        let (cross_tab, diagonals) = synthetic_cross_tab(n_keep, 8);
-        let config = LocalSolverConfig {
-            approx_chol: ApproxCholConfig {
-                split_merge: Some(8),
-                seed: 42,
-            },
-            approx_schur,
-            dense_threshold,
-        };
-        BlockElimSolver::build(cross_tab, &diagonals, &config).expect("block-elim build failed")
-    }
-
-    fn benchmark_local_solve_path(solver: &BlockElimSolver, iters: usize) -> f64 {
-        let n_local = solver.n_local();
-        let scratch = solver.scratch_size();
-        let mut rhs_template = vec![0.0; n_local];
-        for (i, v) in rhs_template.iter_mut().enumerate() {
-            *v = ((i.wrapping_mul(13) % 31) as f64 - 15.0) * 0.1;
-        }
-
-        let mut rhs = vec![0.0; scratch];
-        let mut sol = vec![0.0; scratch];
-        let t0 = Instant::now();
-        let mut checksum = 0.0;
-        for _ in 0..iters {
-            rhs[..n_local].copy_from_slice(&rhs_template);
-            solver
-                .solve_local(&mut rhs, &mut sol, true)
-                .expect("benchmark local solve");
-            checksum += sol[0];
-        }
-        black_box(checksum);
-        (t0.elapsed().as_secs_f64() * 1e6) / iters as f64
-    }
-
     #[test]
     fn test_build_additive_with_strategy() {
         let (design, domain_pairs) = make_test_data();
@@ -711,79 +603,5 @@ mod schwarz_tests {
             entry.solver().reduced_factor,
             ReducedFactor::Dense(_)
         ));
-    }
-
-    #[test]
-    #[ignore]
-    fn bench_isolated_schur_dense_vs_sparse_paths() {
-        let sizes = [4usize, 8, 12, 16, 20, 24, 28, 32, 40, 48, 64];
-        println!(
-            "{:>5} | {:>11} {:>11} {:>7} | {:>11} {:>11} {:>7} | {:>10} {:>10} {:>7}",
-            "n_keep",
-            "exact_dense",
-            "exact_sparse",
-            "ratio",
-            "approx_dense",
-            "approx_sparse",
-            "ratio",
-            "solve_dense",
-            "solve_sparse",
-            "ratio"
-        );
-        println!("{}", "-".repeat(118));
-
-        for &n_keep in &sizes {
-            let (cross_tab, diagonals) = synthetic_cross_tab(n_keep, 8);
-            let build_iters = if n_keep <= 32 { 100 } else { 40 };
-
-            let exact_dense =
-                benchmark_build_path(&cross_tab, &diagonals, None, usize::MAX, build_iters);
-            let exact_sparse = benchmark_build_path(&cross_tab, &diagonals, None, 0, build_iters);
-            let approx_dense = benchmark_build_path(
-                &cross_tab,
-                &diagonals,
-                Some(ApproxSchurConfig {
-                    seed: 42,
-                    ..Default::default()
-                }),
-                usize::MAX,
-                build_iters,
-            );
-            let approx_sparse = benchmark_build_path(
-                &cross_tab,
-                &diagonals,
-                Some(ApproxSchurConfig {
-                    seed: 42,
-                    ..Default::default()
-                }),
-                0,
-                build_iters,
-            );
-
-            let solve_iters = if n_keep <= 32 { 8_000 } else { 3_000 };
-            let solver_dense = build_local_solver_for_bench(n_keep, None, usize::MAX);
-            let solver_sparse = build_local_solver_for_bench(n_keep, None, 0);
-            let solve_dense = benchmark_local_solve_path(&solver_dense, solve_iters);
-            let solve_sparse = benchmark_local_solve_path(&solver_sparse, solve_iters);
-
-            println!(
-                "{:>5} | {:>11.2} {:>11.2} {:>7.2} | {:>11.2} {:>11.2} {:>7.2} | {:>10.3} {:>10.3} {:>7.2}",
-                n_keep,
-                exact_dense,
-                exact_sparse,
-                exact_dense / exact_sparse,
-                approx_dense,
-                approx_sparse,
-                approx_dense / approx_sparse,
-                solve_dense,
-                solve_sparse,
-                solve_dense / solve_sparse
-            );
-        }
-
-        println!(
-            "\nDefault dense threshold currently: {}",
-            DEFAULT_DENSE_SCHUR_THRESHOLD
-        );
     }
 }

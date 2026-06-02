@@ -10,7 +10,7 @@ use crate::BuildError;
 
 use super::elimination::Elimination;
 use super::factor::{factor_sparse, ReducedFactor};
-use super::schur::{ApproxSchurComplement, ExactSchurComplement, SchurComplement};
+use super::schur::{ApproxSchurComplement, ExactSchurComplement, SchurComplement, SchurLaplacian};
 
 // ===========================================================================
 // Transform helpers — sign-flipping, mean subtraction, back-substitution
@@ -212,7 +212,7 @@ impl BlockElimSolver {
         // Below the dense threshold the reduced system is tiny — always use exact
         // Schur complement (cheap at this size) and dense Cholesky factorization.
         let dense_factor = if prefer_dense {
-            let anchored_minor = ExactSchurComplement.compute_dense_anchored(&elim);
+            let anchored_minor = SchurLaplacian::anchored_minor_from_elimination(&elim);
             ReducedFactor::try_dense_laplacian_minor(anchored_minor, n_keep)
         } else {
             None
@@ -231,23 +231,17 @@ impl BlockElimSolver {
             }
         };
 
-        let elim_info = elim.into_info();
+        let Elimination {
+            inv_diag_elim,
+            eliminate_q,
+            ..
+        } = elim;
         Ok(BlockElimSolver::new(
             cross_tab,
-            elim_info.inv_diag_elim,
+            inv_diag_elim,
             factor,
-            elim_info.eliminate_q,
+            eliminate_q,
         ))
-    }
-
-    fn estimated_inner_parallel_work(&self) -> usize {
-        let max_rows = self.cross_tab.n_q().max(self.cross_tab.n_r());
-        if max_rows <= PAR_BACKSUB_THRESHOLD.max(PAR_SPMV_THRESHOLD) {
-            return 0;
-        }
-
-        let cross_nnz = self.cross_tab.c.nnz();
-        (2 * cross_nnz) + self.n_local
     }
 
     /// Eliminate one diagonal block and recover it by back-substitution.
@@ -312,7 +306,13 @@ impl LocalSolver for BlockElimSolver {
     }
 
     fn inner_parallelism_work_estimate(&self) -> usize {
-        self.estimated_inner_parallel_work()
+        let max_rows = self.cross_tab.n_q().max(self.cross_tab.n_r());
+        if max_rows <= PAR_BACKSUB_THRESHOLD.max(PAR_SPMV_THRESHOLD) {
+            return 0;
+        }
+
+        let cross_nnz = self.cross_tab.c.nnz();
+        (2 * cross_nnz) + self.n_local
     }
 
     fn solve_local(

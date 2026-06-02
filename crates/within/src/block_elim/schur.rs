@@ -25,11 +25,6 @@ fn to_u32(x: usize) -> u32 {
 pub(crate) struct SchurLaplacian;
 
 impl SchurLaplacian {
-    /// Build a symmetric CSR Laplacian from pre-sorted, deduplicated fill edges.
-    fn from_edges(edges: Vec<Edge>, n_keep: usize) -> CsrMatrix {
-        Self::build_laplacian_csr(&edges, n_keep)
-    }
-
     /// Build the Schur complement via row-workspace accumulation (exact path).
     ///
     /// Computes `S = D_keep − keep_to_elim · diag(inv_diag_elim) · elim_to_keep`
@@ -73,7 +68,7 @@ impl SchurLaplacian {
     ///
     /// This is the matrix actually factored by dense anchored Cholesky, so building
     /// it directly avoids allocating a full `n_keep x n_keep` dense Schur matrix.
-    fn anchored_minor_from_elimination(elim: &Elimination) -> Vec<f64> {
+    pub(crate) fn anchored_minor_from_elimination(elim: &Elimination) -> Vec<f64> {
         let n_keep = elim.n_keep;
         if n_keep <= 1 {
             return Vec::new();
@@ -281,17 +276,6 @@ impl SchurComplement for ExactSchurComplement {
     }
 }
 
-impl ExactSchurComplement {
-    /// Compute the exact Schur anchored dense minor directly.
-    ///
-    /// The anchored top-left principal minor is what dense Cholesky factors, so
-    /// this avoids allocating the full dense Schur matrix. The caller already
-    /// holds the [`Elimination`] and knows `n_keep`.
-    pub(crate) fn compute_dense_anchored(&self, elim: &Elimination) -> Vec<f64> {
-        SchurLaplacian::anchored_minor_from_elimination(elim)
-    }
-}
-
 impl SchurComplement for ApproxSchurComplement {
     /// Compute an approximate Schur complement by sampling clique-trees.
     ///
@@ -300,7 +284,7 @@ impl SchurComplement for ApproxSchurComplement {
     fn compute(&self, elim: &Elimination) -> CsrMatrix {
         let emitter = SampledCliqueEmitter::new(&self.config);
         let edges = elim.par_emit(&emitter);
-        SchurLaplacian::from_edges(edges, elim.n_keep)
+        SchurLaplacian::build_laplacian_csr(&edges, elim.n_keep)
     }
 }
 
