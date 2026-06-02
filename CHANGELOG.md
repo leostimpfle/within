@@ -15,7 +15,6 @@ Modified LSMR is now the sole iterative solver, replacing CG and GMRES.
 - `PreconditionerConfig::Off` variant — explicit identity preconditioner.
 - Python `within.config` submodule: `AdditiveSchwarz`, `LocalSolverConfig`, `ApproxCholConfig`, `ApproxSchurConfig`, `ReductionStrategy`.
 - Python `Solver` / `solve` / `solve_batch` accept a 4-form preconditioner: `None`, `PreconditionerConfig.{Off, Additive}`, `AdditiveSchwarz(...)`, or a pre-built `Preconditioner` (reuse path).
-- Python: all config and result classes are picklable.
 - `From<&Preconditioner> for PreconditionerInput`: `Solver::new(.., &precond)` now works alongside the owned form. Cloning a `Preconditioner` is O(1) (refcount-only), so this is a cheap reuse path.
 - `BuildError::PreconditionerDimensionMismatch { expected, actual_rows, actual_cols }`: `Solver::new` fails fast when a reused preconditioner's shape does not match the design's DOF count, instead of bubbling up an opaque error from inside the iterative solver.
 

@@ -1,7 +1,7 @@
 //! PyO3 config wrapper classes exposed via `within._within`.
 //!
-//! These mirror the native [`within::config`] types, provide pickle support,
-//! and host the Python→native config conversions (`to_native`,
+//! These mirror the native [`within::config`] types and host the
+//! Python→native config conversions (`to_native`,
 //! `resolve_precond_input`, `resolve_lsmr_config`).
 
 use pyo3::prelude::*;
@@ -33,15 +33,6 @@ impl PyApproxCholConfig {
     #[pyo3(signature = (seed=0, split_merge=None))]
     fn new(seed: u64, split_merge: Option<u32>) -> Self {
         Self { seed, split_merge }
-    }
-
-    /// Pickle support: serialize to ``(class, (seed, split_merge))``.
-    fn __reduce__<'py>(
-        &self,
-        py: Python<'py>,
-    ) -> PyResult<(Bound<'py, PyAny>, (u64, Option<u32>))> {
-        let cls = py.get_type::<Self>();
-        Ok((cls.into_any(), (self.seed, self.split_merge)))
     }
 }
 
@@ -75,12 +66,6 @@ impl PyApproxSchurConfig {
         }
         Ok(Self { seed, split })
     }
-
-    /// Pickle support: serialize to ``(class, (seed, split))``.
-    fn __reduce__<'py>(&self, py: Python<'py>) -> PyResult<(Bound<'py, PyAny>, (u64, u32))> {
-        let cls = py.get_type::<Self>();
-        Ok((cls.into_any(), (self.seed, self.split)))
-    }
 }
 
 impl PyApproxSchurConfig {
@@ -108,27 +93,6 @@ pub enum PyPreconditionerConfig {
     Off = 1,
 }
 
-#[pymethods]
-impl PyPreconditionerConfig {
-    /// Internal: int-to-variant constructor used by ``__reduce__``.
-    #[staticmethod]
-    fn _from_int(val: i32) -> PyResult<Self> {
-        match val {
-            0 => Ok(Self::Additive),
-            1 => Ok(Self::Off),
-            _ => Err(pyo3::exceptions::PyValueError::new_err(format!(
-                "invalid PreconditionerConfig discriminant: {val}"
-            ))),
-        }
-    }
-
-    fn __reduce__<'py>(&self, py: Python<'py>) -> PyResult<(Bound<'py, PyAny>, (i32,))> {
-        let cls = py.get_type::<Self>();
-        let from_int = cls.getattr("_from_int")?;
-        Ok((from_int, (*self as i32,)))
-    }
-}
-
 #[pyclass(frozen, eq, eq_int, module = "within._within")]
 #[pyo3(name = "ReductionStrategy")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -145,28 +109,6 @@ impl PyReductionStrategy {
             Self::AtomicScatter => ReductionStrategy::AtomicScatter,
             Self::ParallelReduction => ReductionStrategy::ParallelReduction,
         }
-    }
-}
-
-#[pymethods]
-impl PyReductionStrategy {
-    /// Internal: int-to-variant constructor used by ``__reduce__``.
-    #[staticmethod]
-    fn _from_int(val: i32) -> PyResult<Self> {
-        match val {
-            0 => Ok(Self::Auto),
-            1 => Ok(Self::AtomicScatter),
-            2 => Ok(Self::ParallelReduction),
-            _ => Err(pyo3::exceptions::PyValueError::new_err(format!(
-                "invalid ReductionStrategy discriminant: {val}"
-            ))),
-        }
-    }
-
-    fn __reduce__<'py>(&self, py: Python<'py>) -> PyResult<(Bound<'py, PyAny>, (i32,))> {
-        let cls = py.get_type::<Self>();
-        let from_int = cls.getattr("_from_int")?;
-        Ok((from_int, (*self as i32,)))
     }
 }
 
@@ -201,31 +143,6 @@ impl PyLocalSolverConfig {
                 .unwrap_or_else(|| LocalSolverConfig::default().dense_threshold),
         }
     }
-
-    /// Pickle support: serialize to ``(class, (approx_chol, approx_schur, dense_threshold))``.
-    ///
-    /// Nested ``Py<...>`` fields ride through via their own ``__reduce__``.
-    fn __reduce__<'py>(
-        &self,
-        py: Python<'py>,
-    ) -> PyResult<(
-        Bound<'py, PyAny>,
-        (
-            Option<Py<PyApproxCholConfig>>,
-            Option<Py<PyApproxSchurConfig>>,
-            usize,
-        ),
-    )> {
-        let cls = py.get_type::<Self>();
-        Ok((
-            cls.into_any(),
-            (
-                self.approx_chol.as_ref().map(|c| c.clone_ref(py)),
-                self.approx_schur.as_ref().map(|c| c.clone_ref(py)),
-                self.dense_threshold,
-            ),
-        ))
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -250,21 +167,6 @@ impl PyAdditiveSchwarz {
             local_solver,
             reduction,
         }
-    }
-
-    /// Pickle support: serialize to ``(class, (local_solver, reduction))``.
-    fn __reduce__<'py>(
-        &self,
-        py: Python<'py>,
-    ) -> PyResult<(Bound<'py, PyAny>, (Option<PyObject>, PyReductionStrategy))> {
-        let cls = py.get_type::<Self>();
-        Ok((
-            cls.into_any(),
-            (
-                self.local_solver.as_ref().map(|o| o.clone_ref(py)),
-                self.reduction,
-            ),
-        ))
     }
 }
 
@@ -293,15 +195,6 @@ impl PyLsmrOptions {
             maxiter,
             local_size,
         }
-    }
-
-    /// Pickle support: serialize to ``(class, (tol, maxiter, local_size))``.
-    fn __reduce__<'py>(
-        &self,
-        py: Python<'py>,
-    ) -> PyResult<(Bound<'py, PyAny>, (f64, usize, Option<usize>))> {
-        let cls = py.get_type::<Self>();
-        Ok((cls.into_any(), (self.tol, self.maxiter, self.local_size)))
     }
 }
 
