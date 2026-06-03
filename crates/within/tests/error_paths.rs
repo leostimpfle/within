@@ -111,12 +111,13 @@ fn test_build_error_display_local_solver_build() {
 
 #[test]
 fn test_build_error_display_preconditioner() {
-    let inner = schwarz_precond::BuildError::InvalidCsr {
-        reason: "out of bounds",
+    let inner = schwarz_precond::BuildError::ScratchSizeTooSmall {
+        scratch_size: 1,
+        required_min: 2,
     };
     let e = BuildError::Preconditioner(inner);
     let s = e.to_string();
-    assert!(s.contains("out of bounds"));
+    assert!(s.contains("scratch size"));
 }
 
 // ---------------------------------------------------------------------------
@@ -166,8 +167,9 @@ fn test_build_error_source_leaf_variants_have_no_source() {
 
 #[test]
 fn test_build_error_source_preconditioner_chains() {
-    let inner = schwarz_precond::BuildError::InvalidCsr {
-        reason: "out of bounds",
+    let inner = schwarz_precond::BuildError::ScratchSizeTooSmall {
+        scratch_size: 1,
+        required_min: 2,
     };
     let e = BuildError::Preconditioner(inner);
     assert!(e.source().is_some());
@@ -184,8 +186,9 @@ fn test_within_error_build_leaf_variant_has_no_source() {
 #[test]
 fn test_within_error_build_preconditioner_chains_through_transparent_wrapper() {
     // Transparent: WithinError -> (BuildError::Preconditioner via #[source]) -> schwarz_precond::BuildError
-    let inner = schwarz_precond::BuildError::InvalidCsr {
-        reason: "out of bounds",
+    let inner = schwarz_precond::BuildError::ScratchSizeTooSmall {
+        scratch_size: 1,
+        required_min: 2,
     };
     let e = WithinError::Build(BuildError::Preconditioner(inner));
     assert!(e.source().is_some());

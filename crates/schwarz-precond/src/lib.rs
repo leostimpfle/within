@@ -34,7 +34,6 @@ pub trait Operator: Send + Sync {
     fn apply_adjoint(&self, x: &[f64], y: &mut [f64]) -> Result<(), error::SolveError>;
 }
 
-mod csr_matrix;
 /// Domain decomposition primitives: subdomain cores and partition weights.
 pub mod domain;
 /// Typed errors for build and runtime failures.
@@ -43,7 +42,6 @@ mod local_solve;
 mod lsmr;
 mod schwarz;
 
-pub use csr_matrix::CsrMatrix;
 pub use domain::{PartitionWeights, SubdomainCore};
 pub use error::{BuildError, LocalSolveError, SolveError};
 pub use local_solve::{LocalSolver, SubdomainEntry};

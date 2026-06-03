@@ -7,8 +7,8 @@
 //! - [`ApproxSchurComplement`] — clique-tree sampling, keeping `S` sparse for
 //!   high-degree eliminated levels.
 
+use super::csr_matrix::CsrMatrix;
 use rayon::prelude::*;
-use schwarz_precond::CsrMatrix;
 
 use super::elimination::{Edge, Elimination, SampledCliqueEmitter};
 use crate::config::ApproxSchurConfig;
@@ -178,7 +178,6 @@ impl SchurLaplacian {
             s_indptr[i + 1] = to_u32(s_indices.len());
         }
         CsrMatrix::new(s_indptr, s_indices, s_data, n_keep)
-            .expect("schur rows are well-formed by construction")
     }
 
     /// Build symmetric CSR Laplacian from sorted upper-triangular edges.
@@ -238,7 +237,6 @@ impl SchurLaplacian {
         }
 
         CsrMatrix::new(offsets, indices, data, n_keep)
-            .expect("schur rows are well-formed by construction")
     }
 }
 

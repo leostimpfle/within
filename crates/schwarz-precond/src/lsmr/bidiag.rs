@@ -12,8 +12,7 @@ use rayon::iter::{IndexedParallelIterator, ParallelIterator};
 use rayon::prelude::{ParallelSlice, ParallelSliceMut};
 
 /// Below this count the per-iteration vector kernels run sequentially —
-/// rayon wake/steal overhead would dominate otherwise. Matches the threshold
-/// used by `csr_matrix::CsrMatrix::matvec_add`.
+/// rayon wake/steal overhead would dominate otherwise.
 pub(super) const LSMR_PAR_THRESHOLD: usize = 10_000;
 /// Per-worker chunk size for the parallel vector kernels: large enough to clear
 /// rayon dispatch overhead, small enough to stay L1-resident.

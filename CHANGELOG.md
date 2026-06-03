@@ -20,7 +20,7 @@ Modified LSMR is now the sole iterative solver, replacing CG and GMRES.
 
 ### Changed
 
-- **BREAKING:** Renamed (Rust + Python): `SolverParams` → `LsmrOptions`, `Preconditioner` config enum → `PreconditionerConfig`, `FePreconditioner` → `Preconditioner`, `SchurComplement` → `LocalSolverConfig`, `SparseMatrix` → `CsrMatrix`.
+- **BREAKING:** Renamed (Rust + Python): `SolverParams` → `LsmrOptions`, `Preconditioner` config enum → `PreconditionerConfig`, `FePreconditioner` → `Preconditioner`, `SchurComplement` → `LocalSolverConfig`.
 - **BREAKING:** `Preconditioner` is an opaque struct (was an enum); `#[non_exhaustive]` removed; `#[serde(transparent)]` pins the wire format (future variants must be append-only).
 - **BREAKING:** The internal `CrossTab` no longer stores or serializes the factor-pair diagonal blocks (`D_q`, `D_r`) — they are build-time-only inputs, folded into the local factor and dropped after build. This shrinks the serialized `Preconditioner` payload (wire-format fixture bumped v2 → v3).
 - **BREAKING:** `within::{domain, operator, orchestrate, solver}` are `pub(crate)`; public items remain re-exported from the crate root.
@@ -43,9 +43,7 @@ Modified LSMR is now the sole iterative solver, replacing CG and GMRES.
 - **BREAKING:** `Design::n_rows` renamed to `n_obs`; new `Design::n_obs()` / `n_dofs()` accessors.
 - **BREAKING:** `Design` fields are `pub(crate)`.
 - **BREAKING:** `DesignOperator` is `pub(crate)`.
-- **BREAKING:** `SolveResult.final_residual` / `BatchSolveResult.final_residual` renamed to `residual` (Rust + Python).
-- **BREAKING:** `CsrMatrix::new` validates CSR invariants, returns `Result<_, BuildError::InvalidCsr>`.
-- **BREAKING:** `SchwarzPreconditioner::new(entries, strategy)` replaces `new(entries, n_dofs)` / `with_strategy(entries, n_dofs, strategy)`; `n_dofs` derived from entries. `resolved_reduction_strategy()` renamed to `reduction_strategy()`; dead `with_reduction_strategy` + configured getter removed. `BuildError::GlobalIndexOutOfBounds` removed.
+- **BREAKING:** `SolveResult.final_residual` / `BatchSolveResult.final_residual` renamed to `residual` (Rust + Python).- **BREAKING:** `SchwarzPreconditioner::new(entries, strategy)` replaces `new(entries, n_dofs)` / `with_strategy(entries, n_dofs, strategy)`; `n_dofs` derived from entries. `resolved_reduction_strategy()` renamed to `reduction_strategy()`; dead `with_reduction_strategy` + configured getter removed. `BuildError::GlobalIndexOutOfBounds` removed.
 - **BREAKING (Python):** `ApproxCholConfig.split: int (1=off)` → `split_merge: int | None (None=off)`, matching Rust. Pickle payload shape changed.
 - **BREAKING:** `Solver::new` accepts `Option<impl Into<Vec<f64>>>` for weights; `WithinError` is `#[non_exhaustive]`.
 - Free `solve()` / `solve_batch()` accept `impl Into<PreconditionerInput>` (same shapes as `Solver::new`).
@@ -66,6 +64,7 @@ Modified LSMR is now the sole iterative solver, replacing CG and GMRES.
 
 ### Removed
 
+- **BREAKING:** `schwarz_precond::SparseMatrix` removed from the public surface (it was renamed `CsrMatrix` earlier this cycle), along with its `From<faer::SparseRowMatRef>` conversion. The reduced Schur / Laplacian CSR representation is now internal to `within`'s `block_elim` module; `schwarz-precond`'s public API narrows to its `Operator` / `LocalSolver` traits and solvers (#52).
 - **BREAKING:** Top-level Rust re-exports: `within::Operator` (use `schwarz_precond::Operator`), `within::DEFAULT_DENSE_SCHUR_THRESHOLD`, `within::Subdomain`, `within::domain::{PartitionWeights, SubdomainCore}`.
 - **BREAKING:** `LocalSolverConfig::solver_default()` (the single `default()` now serves both paths).
 - **BREAKING:** CG, GMRES, multiplicative Schwarz, iterative refinement, and support types: `KrylovMethod`, `OperatorRepr`, `Multiplicative` variants, `SolverParams.max_refinements`, Python `CG` / `GMRES` / `MultiplicativeSchwarz`, `ResidualUpdater`, `OperatorResidualUpdater`, `IdentityOperator`.
