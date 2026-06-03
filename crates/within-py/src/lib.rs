@@ -11,15 +11,13 @@ use pyo3::prelude::*;
 mod api;
 mod config;
 mod convert;
-mod objects;
 mod results;
 
-use api::{solve, solve_batch};
+use api::{solve, solve_batch, PySolver};
 use config::{
     PyAdditiveSchwarz, PyApproxCholConfig, PyApproxSchurConfig, PyLocalSolverConfig, PyLsmrOptions,
-    PyPreconditionerConfig, PyReductionStrategy,
+    PyPreconditioner, PyPreconditionerConfig, PyReductionStrategy,
 };
-use objects::{PyPreconditioner, PySolver};
 use results::{PyBatchSolveResult, PySolveResult};
 
 // ---------------------------------------------------------------------------

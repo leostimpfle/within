@@ -4,7 +4,7 @@ use numpy::ndarray::{Array2, ShapeBuilder};
 use numpy::IntoPyArray;
 use pyo3::prelude::*;
 
-use within::SolveResult;
+use within::{BatchSolveResult, SolveResult};
 
 use crate::convert::value_err;
 
@@ -90,4 +90,35 @@ pub(crate) fn into_py_batch_result(
         time_solve: result.time_solve,
         time_total: result.time_total,
     })
+}
+
+// ---------------------------------------------------------------------------
+// Off-GIL solve orchestration
+// ---------------------------------------------------------------------------
+
+/// Run a native single-response solve with the GIL released, then convert.
+///
+/// The closure produces a [`SolveResult`] off-GIL (`allow_threads`); its native
+/// error is mapped to a `PyValueError` and the result to its Python wrapper.
+/// Shared by the free `solve` function and the persistent `Solver.solve`.
+pub(crate) fn run_solve<E, F>(py: Python<'_>, solve: F) -> PyResult<PySolveResult>
+where
+    E: std::fmt::Display + Send,
+    F: Send + FnOnce() -> Result<SolveResult, E>,
+{
+    let result = py.allow_threads(solve).map_err(value_err)?;
+    Ok(into_py_result(py, result))
+}
+
+/// Run a native batch solve with the GIL released, then convert.
+///
+/// Batch counterpart to [`run_solve`]; the conversion itself is fallible
+/// (re-shaping the flat column buffers into 2-D arrays).
+pub(crate) fn run_batch<E, F>(py: Python<'_>, solve: F) -> PyResult<PyBatchSolveResult>
+where
+    E: std::fmt::Display + Send,
+    F: Send + FnOnce() -> Result<BatchSolveResult, E>,
+{
+    let result = py.allow_threads(solve).map_err(value_err)?;
+    into_py_batch_result(py, result)
 }
