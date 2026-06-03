@@ -3,42 +3,35 @@
 pub(crate) mod cross_tab;
 pub(crate) mod factor_pairs;
 
-pub(crate) use cross_tab::{find_all_active_levels, CrossTab};
+pub(crate) use cross_tab::{find_all_active_levels, BlockDiagonals, CrossTab};
 
-pub(crate) use factor_pairs::build_local_domains;
-
-use schwarz_precond::SubdomainCore;
-
-/// A local subdomain corresponding to a pair of factors.
-#[derive(Clone)]
-pub(crate) struct Subdomain {
-    /// Indices `(q, r)` of the two factors this subdomain covers.
-    pub factor_pair: (usize, usize),
-    /// Generic subdomain core: global DOF indices, restriction, and partition-of-unity weights.
-    pub core: SubdomainCore,
-}
-
-impl std::fmt::Debug for Subdomain {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("Subdomain")
-            .field("factor_pair", &self.factor_pair)
-            .field("n_dofs", &self.core.n_local())
-            .finish()
-    }
-}
+pub(crate) use factor_pairs::{build_local_domains, LocalDomain};
 
 // ===========================================================================
 // Design — categorical fixed-effects design (data + layout)
 // ===========================================================================
 
-use crate::observation::{FactorMeta, Store};
+use crate::observation::{factor_columns, level_at, Store};
 use crate::BuildError;
+
+/// Per-factor metadata: level count and global DOF offset.
+///
+/// Pure design-space layout derived from the store's raw levels — the store
+/// holds categories, this records where each factor lands in coefficient space.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct FactorMeta {
+    /// Number of levels (groups) in this factor.
+    pub n_levels: usize,
+    /// Starting index in coefficient space for this factor.
+    pub offset: usize,
+}
 
 /// Fixed-effects design, generic over observation storage.
 ///
 /// `store` holds per-observation factor levels; `factors` holds per-factor
 /// metadata (n_levels, offset). The `Design` itself is pure data + layout —
 /// matrix-vector products live in the internal operator layer.
+#[derive(Clone, Debug)]
 pub struct Design<S: Store> {
     /// Observation storage backend (owns or borrows the raw factor levels).
     pub(crate) store: S,
@@ -50,28 +43,6 @@ pub struct Design<S: Store> {
     pub(crate) n_dofs: usize,
 }
 
-impl<S: Store + Clone> Clone for Design<S> {
-    fn clone(&self) -> Self {
-        Self {
-            store: self.store.clone(),
-            factors: self.factors.clone(),
-            n_obs: self.n_obs,
-            n_dofs: self.n_dofs,
-        }
-    }
-}
-
-impl<S: Store + std::fmt::Debug> std::fmt::Debug for Design<S> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("Design")
-            .field("store", &self.store)
-            .field("factors", &self.factors)
-            .field("n_obs", &self.n_obs)
-            .field("n_dofs", &self.n_dofs)
-            .finish()
-    }
-}
-
 impl<S: Store> Design<S> {
     /// Construct from a store, inferring the number of levels per factor
     /// from the maximum observed level in each column (`max + 1`).
@@ -80,11 +51,12 @@ impl<S: Store> Design<S> {
             return Err(BuildError::EmptyObservations);
         }
 
+        let cols = factor_columns(&store);
         let mut factors = Vec::with_capacity(store.n_factors());
         let mut offset = 0;
-        for q in 0..store.n_factors() {
+        for (q, &cols_q) in cols.iter().enumerate() {
             let n_levels = (0..store.n_obs())
-                .map(|uid| store.level(uid, q) as usize + 1)
+                .map(|uid| level_at(&store, cols_q, uid, q) + 1)
                 .max()
                 .unwrap(); // safe: n_obs > 0
             factors.push(FactorMeta { n_levels, offset });

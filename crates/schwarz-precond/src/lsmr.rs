@@ -14,12 +14,6 @@ use crate::{Operator, SolveError};
 use bidiag::{BidiagStep, Bidiagonalization, GolubKahan, ModifiedGolubKahan};
 use recurrence::{ConvergenceState, LsmrRecurrenceState, RotationStep, SolutionState, Stop};
 
-/// Inner product of two vectors.
-#[inline]
-pub(crate) fn dot(a: &[f64], b: &[f64]) -> f64 {
-    a.iter().zip(b).map(|(a, b)| a * b).sum()
-}
-
 /// Euclidean norm of a vector.
 #[inline]
 pub(crate) fn vec_norm(v: &[f64]) -> f64 {
@@ -29,16 +23,6 @@ pub(crate) fn vec_norm(v: &[f64]) -> f64 {
     }
     s.sqrt()
 }
-
-/// Below this count the per-iteration vector kernels run sequentially —
-/// rayon wake/steal overhead would dominate otherwise. Matches the threshold
-/// used by `sparse_matrix::CsrMatrix::matvec_add`.
-const LSMR_PAR_THRESHOLD: usize = 10_000;
-/// Per-worker chunk size for the parallel vector kernels. Tuned to keep each
-/// chunk's work above rayon dispatch overhead while staying L1-resident —
-/// sizing chunks to `n / n_threads` instead regresses at 5M+ DOFs because
-/// per-thread chunks blow L1/L2 and workers stream at DRAM bandwidth.
-const LSMR_UPDATE_CHUNK: usize = 4096;
 
 /// Result of an LSMR solve.
 #[must_use]
@@ -88,7 +72,13 @@ pub fn lsmr<A: Operator + ?Sized>(
 
     let b_norm = vec_norm(b);
     if b_norm == 0.0 {
-        return Ok(zero_rhs_result(n));
+        return Ok(LsmrResult {
+            x: vec![0.0; n],
+            converged: true,
+            iterations: 0,
+            residual_norm: 0.0,
+            stop_reason: LsmrStopReason::ZeroRhs,
+        });
     }
 
     let local_size = local_size.unwrap_or(0);
@@ -123,22 +113,18 @@ pub fn mlsmr<A: Operator + ?Sized, M: Operator + ?Sized>(
 
     let b_norm = vec_norm(b);
     if b_norm == 0.0 {
-        return Ok(zero_rhs_result(n));
+        return Ok(LsmrResult {
+            x: vec![0.0; n],
+            converged: true,
+            iterations: 0,
+            residual_norm: 0.0,
+            stop_reason: LsmrStopReason::ZeroRhs,
+        });
     }
 
     let local_size = local_size.unwrap_or(0);
     let (bidiag, step1) = ModifiedGolubKahan::init(operator, preconditioner, b, local_size)?;
     lsmr_from_bidiag(bidiag, step1, b_norm, tol, maxiter)
-}
-
-fn zero_rhs_result(n: usize) -> LsmrResult {
-    LsmrResult {
-        x: vec![0.0; n],
-        converged: true,
-        iterations: 0,
-        residual_norm: 0.0,
-        stop_reason: LsmrStopReason::ZeroRhs,
-    }
 }
 
 /// Run the LSMR scalar/vector recurrences over a bidiagonalization stream.

@@ -5,12 +5,12 @@ use schwarz_precond::{LocalSolveError, LocalSolver};
 
 use crate::config::LocalSolverConfig;
 use crate::csr_block::{CsrBlock, PAR_SPMV_THRESHOLD};
-use crate::domain::CrossTab;
+use crate::domain::{BlockDiagonals, CrossTab};
 use crate::BuildError;
 
 use super::elimination::Elimination;
 use super::factor::{factor_sparse, ReducedFactor};
-use super::schur::{ApproxSchurComplement, ExactSchurComplement, SchurComplement};
+use super::schur::{ApproxSchurComplement, ExactSchurComplement, SchurComplement, SchurLaplacian};
 
 // ===========================================================================
 // Transform helpers — sign-flipping, mean subtraction, back-substitution
@@ -34,7 +34,21 @@ fn subtract_mean(slice: &mut [f64], n: usize) {
     if n == 0 {
         return;
     }
-    let mean: f64 = slice[..n].iter().sum::<f64>() / n as f64;
+    // Neumaier compensated summation: a flat `iter().sum()` loses precision for
+    // large `n`, which biases the mean we subtract. The running compensation
+    // recovers the low-order bits dropped on each addition.
+    let mut sum = 0.0_f64;
+    let mut comp = 0.0_f64;
+    for &val in &slice[..n] {
+        let t = sum + val;
+        if sum.abs() >= val.abs() {
+            comp += (sum - t) + val;
+        } else {
+            comp += (val - t) + sum;
+        }
+        sum = t;
+    }
+    let mean = (sum + comp) / n as f64;
     for val in slice[..n].iter_mut() {
         *val -= mean;
     }
@@ -99,7 +113,8 @@ fn backsub_block_from_scaled_rhs(
 /// Local subdomain solver using block elimination on the bipartite SDDM.
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub struct BlockElimSolver {
-    /// Bipartite Gramian structure: C, C^T, diag_q, diag_r.
+    /// Bipartite Gramian structure: C and C^T (diagonals are folded into
+    /// `inv_diag_elim`/`reduced_factor` at build time and not retained).
     cross_tab: Arc<CrossTab>,
     /// `1 / D_elim[k]` for the eliminated (larger) diagonal block.
     inv_diag_elim: Vec<f64>,
@@ -111,6 +126,48 @@ pub struct BlockElimSolver {
     n_local: usize,
     /// Factor dimension for the reduced solve (may be `n_keep + 1` for sparse AC).
     n_reduced: usize,
+}
+
+/// The q/r blocks assigned to their eliminated/kept roles for one solve.
+///
+/// `BlockElimSolver` eliminates one diagonal block and solves a reduced system
+/// on the other; `eliminate_q` fixes which is which at construction. This bundles
+/// the per-orientation block ranges and cross operators under named roles —
+/// reusing [`super::elimination::Elimination`]'s `keep_to_elim` / `elim_to_keep`
+/// vocabulary — so [`BlockElimSolver::eliminate_and_recover`] stays
+/// orientation-agnostic.
+struct BlockRoles<'a> {
+    /// Index range of the eliminated block within the `[q | r]` layout.
+    elim: std::ops::Range<usize>,
+    /// Index range of the kept (reduced) block.
+    keep: std::ops::Range<usize>,
+    /// Cross block with kept rows / eliminated columns; applied to the eliminated
+    /// block to form the reduced RHS (`Cᵀ` when eliminating q, `C` when r).
+    keep_to_elim: &'a CsrBlock,
+    /// Cross block with eliminated rows / kept columns; used in back-substitution
+    /// to recover the eliminated block (`C` when eliminating q, `Cᵀ` when r).
+    elim_to_keep: &'a CsrBlock,
+}
+
+impl BlockRoles<'_> {
+    /// Borrow the eliminated block (mutable, the back-substitution output) and
+    /// the kept block (immutable source) out of `sol`. The two blocks meet at
+    /// the q/r boundary; `sol`'s tail past `n_local` is reduced-solve scratch,
+    /// so the kept side is clamped to `keep`'s length.
+    fn split_sol<'s>(&self, sol: &'s mut [f64]) -> (&'s mut [f64], &'s [f64]) {
+        // The split relies on the two blocks being adjacent: the lower one ends
+        // exactly where the upper one begins (they meet at the q/r boundary).
+        debug_assert!(
+            self.elim.end == self.keep.start || self.keep.end == self.elim.start,
+            "elim and keep blocks must be adjacent",
+        );
+        let (lo, hi) = sol.split_at_mut(self.elim.start.max(self.keep.start));
+        if self.elim.start < self.keep.start {
+            (&mut lo[self.elim.clone()], &hi[..self.keep.len()])
+        } else {
+            (&mut hi[..self.elim.len()], &lo[self.keep.clone()])
+        }
+    }
 }
 
 impl BlockElimSolver {
@@ -140,18 +197,22 @@ impl BlockElimSolver {
     /// failure) assemble the sparse Schur complement and factor it via
     /// `approx_chol`. The `Elimination` is consumed at the end to produce
     /// `inv_diag_elim` and `eliminate_q`.
+    ///
+    /// `diagonals` are the build-time-only diagonal blocks; they are read by
+    /// [`Elimination::new`] and dropped once the factor is built.
     pub(crate) fn build(
         cross_tab: CrossTab,
+        diagonals: &BlockDiagonals,
         config: &LocalSolverConfig,
     ) -> Result<Self, BuildError> {
-        let elim = Elimination::new(&cross_tab)?;
+        let elim = Elimination::new(&cross_tab, diagonals)?;
         let n_keep = elim.n_keep;
         let prefer_dense = config.dense_threshold > 0 && n_keep <= config.dense_threshold;
 
         // Below the dense threshold the reduced system is tiny — always use exact
         // Schur complement (cheap at this size) and dense Cholesky factorization.
         let dense_factor = if prefer_dense {
-            let anchored_minor = ExactSchurComplement.compute_dense_anchored(&elim);
+            let anchored_minor = SchurLaplacian::anchored_minor_from_elimination(&elim);
             ReducedFactor::try_dense_laplacian_minor(anchored_minor, n_keep)
         } else {
             None
@@ -162,31 +223,76 @@ impl BlockElimSolver {
         let factor = match dense_factor {
             Some(f) => f,
             None => {
-                let matrix = match config.approx_schur {
+                let schur_csr = match config.approx_schur {
                     None => ExactSchurComplement.compute(&elim),
                     Some(cfg) => ApproxSchurComplement::new(cfg).compute(&elim),
                 };
-                factor_sparse(&matrix, config.approx_chol)?
+                factor_sparse(&schur_csr, config.approx_chol)?
             }
         };
 
-        let info = elim.into_info();
+        let Elimination {
+            inv_diag_elim,
+            eliminate_q,
+            ..
+        } = elim;
         Ok(BlockElimSolver::new(
             cross_tab,
-            info.inv_diag_elim,
+            inv_diag_elim,
             factor,
-            info.eliminate_q,
+            eliminate_q,
         ))
     }
 
-    fn estimated_inner_parallel_work(&self) -> usize {
-        let max_rows = self.cross_tab.n_q().max(self.cross_tab.n_r());
-        if max_rows <= PAR_BACKSUB_THRESHOLD.max(PAR_SPMV_THRESHOLD) {
-            return 0;
-        }
+    /// Eliminate one diagonal block and recover it by back-substitution.
+    ///
+    /// `roles` assigns the q/r blocks and cross operators to the eliminated/kept
+    /// roles; the sequence below is the bipartite-SDDM block-elimination kernel
+    /// and runs unchanged for both orientations.
+    fn eliminate_and_recover(
+        &self,
+        roles: &BlockRoles,
+        rhs: &mut [f64],
+        sol: &mut [f64],
+        allow_inner_parallelism: bool,
+    ) -> Result<(), LocalSolveError> {
+        let n = self.n_local;
+        let n_keep = roles.keep.len();
 
-        let cross_nnz = self.cross_tab.c.nnz();
-        (2 * cross_nnz) + self.n_local
+        // Scale the eliminated block by its inverse diagonal.
+        scale_by_diag_in_place(&mut rhs[roles.elim.clone()], &self.inv_diag_elim);
+
+        // Apply `keep_to_elim` into the scratch tail to form the reduced RHS.
+        {
+            let (main, scratch) = rhs.split_at_mut(n);
+            roles.keep_to_elim.spmv_assign_add(
+                &main[roles.elim.clone()],
+                &main[roles.keep.clone()],
+                &mut scratch[..n_keep],
+                allow_inner_parallelism,
+            );
+        }
+        if self.n_reduced > n_keep {
+            rhs[n + n_keep] = 0.0;
+        }
+        subtract_mean(&mut rhs[n..], self.n_reduced);
+
+        // Solve the reduced system in place.
+        let reduced = roles.keep.start..roles.keep.start + self.n_reduced;
+        sol[reduced.clone()].copy_from_slice(&rhs[n..n + self.n_reduced]);
+        self.reduced_factor.solve_in_place(&mut sol[reduced])?;
+
+        // Back-substitute to recover the eliminated block.
+        let (sol_output, sol_source) = roles.split_sol(sol);
+        backsub_block_from_scaled_rhs(
+            sol_output,
+            &rhs[roles.elim.clone()],
+            roles.elim_to_keep,
+            &self.inv_diag_elim,
+            sol_source,
+            allow_inner_parallelism,
+        );
+        Ok(())
     }
 }
 
@@ -200,7 +306,13 @@ impl LocalSolver for BlockElimSolver {
     }
 
     fn inner_parallelism_work_estimate(&self) -> usize {
-        self.estimated_inner_parallel_work()
+        let max_rows = self.cross_tab.n_q().max(self.cross_tab.n_r());
+        if max_rows <= PAR_BACKSUB_THRESHOLD.max(PAR_SPMV_THRESHOLD) {
+            return 0;
+        }
+
+        let cross_nnz = self.cross_tab.c.nnz();
+        (2 * cross_nnz) + self.n_local
     }
 
     fn solve_local(
@@ -211,83 +323,32 @@ impl LocalSolver for BlockElimSolver {
     ) -> Result<(), LocalSolveError> {
         let n = self.n_local;
         let n_q = self.cross_tab.n_q();
-        let n_r = self.cross_tab.n_r();
         let ct = &self.cross_tab;
 
         // Block elimination for the bipartite SDDM system [D_q, C; C^T, D_r]:
-        // Step 1: Negate the q-block of rhs to convert from SDDM form to the
-        //         signed Laplacian form where C carries a negative sign.
-        //         This is equivalent to solving [-D_q, C; C^T, D_r] x = rhs'.
+        // negate the q-block to convert from SDDM form to the signed-Laplacian
+        // form where C carries a negative sign (equivalent to solving
+        // [-D_q, C; C^T, D_r] x = rhs').
         negate_block(&mut rhs[..n], n_q);
         subtract_mean(rhs, n);
 
-        if self.eliminate_q {
-            let n_keep = n_r;
-            scale_by_diag_in_place(&mut rhs[..n_q], &self.inv_diag_elim);
-
-            {
-                let (main, scratch) = rhs.split_at_mut(n);
-                ct.ct.spmv_assign_add(
-                    &main[..n_q],
-                    &main[n_q..n_q + n_keep],
-                    &mut scratch[..n_keep],
-                    allow_inner_parallelism,
-                );
-            }
-            if self.n_reduced > n_keep {
-                rhs[n + n_keep] = 0.0;
-            }
-            subtract_mean(&mut rhs[n..], self.n_reduced);
-
-            sol[n_q..n_q + self.n_reduced].copy_from_slice(&rhs[n..n + self.n_reduced]);
-            self.reduced_factor
-                .solve_in_place(&mut sol[n_q..n_q + self.n_reduced])?;
-
-            {
-                let (sol_q, sol_r) = sol.split_at_mut(n_q);
-                backsub_block_from_scaled_rhs(
-                    sol_q,
-                    &rhs[..n_q],
-                    &ct.c,
-                    &self.inv_diag_elim,
-                    sol_r,
-                    allow_inner_parallelism,
-                );
+        // The eliminated/kept roles are fixed by `eliminate_q`; name the swap once.
+        let roles = if self.eliminate_q {
+            BlockRoles {
+                elim: 0..n_q,
+                keep: n_q..n,
+                keep_to_elim: &ct.ct,
+                elim_to_keep: &ct.c,
             }
         } else {
-            let n_keep = n_q;
-            scale_by_diag_in_place(&mut rhs[n_q..n_q + n_r], &self.inv_diag_elim);
-
-            {
-                let (main, scratch) = rhs.split_at_mut(n);
-                ct.c.spmv_assign_add(
-                    &main[n_q..n_q + n_r],
-                    &main[..n_q],
-                    &mut scratch[..n_keep],
-                    allow_inner_parallelism,
-                );
+            BlockRoles {
+                elim: n_q..n,
+                keep: 0..n_q,
+                keep_to_elim: &ct.c,
+                elim_to_keep: &ct.ct,
             }
-            if self.n_reduced > n_keep {
-                rhs[n + n_keep] = 0.0;
-            }
-            subtract_mean(&mut rhs[n..], self.n_reduced);
-
-            sol[..self.n_reduced].copy_from_slice(&rhs[n..n + self.n_reduced]);
-            self.reduced_factor
-                .solve_in_place(&mut sol[..self.n_reduced])?;
-
-            {
-                let (sol_q, sol_r) = sol.split_at_mut(n_q);
-                backsub_block_from_scaled_rhs(
-                    &mut sol_r[..n_r],
-                    &rhs[n_q..n_q + n_r],
-                    &ct.ct,
-                    &self.inv_diag_elim,
-                    sol_q,
-                    allow_inner_parallelism,
-                );
-            }
-        }
+        };
+        self.eliminate_and_recover(&roles, rhs, sol, allow_inner_parallelism)?;
 
         subtract_mean(sol, n);
         negate_block(&mut sol[..n], n_q);
@@ -337,28 +398,26 @@ mod tests {
         assert_eq!(data, vec![1.0, -2.0, -3.0, 4.0]);
     }
 
-    /// Build a CrossTab with `n_q < n_r` so that `eliminate_q == false`.
-    fn make_cross_tab_q_lt_r() -> CrossTab {
+    /// Build a CrossTab with `n_q < r` so that `eliminate_q == false`, plus its
+    /// build-time diagonals.
+    fn make_cross_tab_q_lt_r() -> (CrossTab, BlockDiagonals) {
         let c_dense = vec![
             // row 0
             1.0, 0.0, 0.0, 0.0, 0.0, // row 1
             0.0, 1.0, 0.0, 0.0, 0.0,
         ];
-        let diag_q = vec![2.0, 3.0];
-        let diag_r = vec![2.0, 3.0, 1.0, 1.0, 1.0];
         let c = CsrBlock::from_dense_table(&c_dense, 2, 5);
         let ct = c.transpose();
-        CrossTab {
-            c,
-            ct,
-            diag_q,
-            diag_r,
-        }
+        let diagonals = BlockDiagonals {
+            q: vec![2.0, 3.0],
+            r: vec![2.0, 3.0, 1.0, 1.0, 1.0],
+        };
+        (CrossTab { c, ct }, diagonals)
     }
 
     #[test]
     fn test_block_elim_solver_eliminate_q_false() {
-        let cross_tab = make_cross_tab_q_lt_r();
+        let (cross_tab, diagonals) = make_cross_tab_q_lt_r();
         assert_eq!(cross_tab.n_q(), 2);
         assert_eq!(cross_tab.n_r(), 5);
 
@@ -367,7 +426,8 @@ mod tests {
             approx_schur: None,
             dense_threshold: 0, // disable dense fast path to ensure sparse path is covered
         };
-        let solver = BlockElimSolver::build(cross_tab, &config).expect("block-elim build failed");
+        let solver = BlockElimSolver::build(cross_tab, &diagonals, &config)
+            .expect("block-elim build failed");
 
         assert!(
             !solver.eliminate_q,
@@ -379,7 +439,7 @@ mod tests {
 
     #[test]
     fn test_block_elim_solver_eliminate_q_false_solve_residual() {
-        let cross_tab = make_cross_tab_q_lt_r();
+        let (cross_tab, diagonals) = make_cross_tab_q_lt_r();
         let n_local = cross_tab.n_q() + cross_tab.n_r(); // 7
 
         let config = LocalSolverConfig {
@@ -387,7 +447,8 @@ mod tests {
             approx_schur: None,
             dense_threshold: 0,
         };
-        let solver = BlockElimSolver::build(cross_tab, &config).expect("block-elim build failed");
+        let solver = BlockElimSolver::build(cross_tab, &diagonals, &config)
+            .expect("block-elim build failed");
         assert!(!solver.eliminate_q);
 
         let scratch_sz = solver.scratch_size();

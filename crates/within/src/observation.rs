@@ -5,21 +5,6 @@ use ndarray::ArrayView2;
 use crate::error::BuildError;
 
 // ---------------------------------------------------------------------------
-// FactorMeta — per-factor metadata (no observation data)
-// ---------------------------------------------------------------------------
-
-/// Per-factor metadata: level count and global DOF offset.
-///
-/// Separated from observation data — the factor no longer "owns" categories.
-#[derive(Debug, Clone, Copy)]
-pub struct FactorMeta {
-    /// Number of levels (groups) in this factor.
-    pub n_levels: usize,
-    /// Starting index in coefficient space for this factor.
-    pub offset: usize,
-}
-
-// ---------------------------------------------------------------------------
 // Store trait
 // ---------------------------------------------------------------------------
 
@@ -45,6 +30,26 @@ pub trait Store: Send + Sync {
     fn factor_column(&self, _factor: usize) -> Option<&[u32]> {
         None
     }
+}
+
+/// Resolve the level for row `i` in factor `q`.
+///
+/// `levels` is the optional fast-path column (a contiguous `&[u32]` view of the
+/// factor's levels); when `None`, fall back to the store's virtual lookup.
+/// Hoisted out of inner loops so the compiler keeps the row body branch-free.
+#[inline]
+pub(crate) fn level_at<S: Store>(store: &S, levels: Option<&[u32]>, i: usize, q: usize) -> usize {
+    match levels {
+        Some(col) => col[i] as usize,
+        None => store.level(i, q) as usize,
+    }
+}
+
+/// Pre-compute the factor-column fast-path slices for every factor of `store`.
+pub(crate) fn factor_columns<S: Store>(store: &S) -> Vec<Option<&[u32]>> {
+    (0..store.n_factors())
+        .map(|q| store.factor_column(q))
+        .collect()
 }
 
 // ---------------------------------------------------------------------------
@@ -80,12 +85,6 @@ impl FactorMajorStore {
             n_obs,
         })
     }
-
-    /// Direct access to the level column for a factor (contiguous slice).
-    #[inline]
-    pub fn factor_column(&self, factor: usize) -> &[u32] {
-        &self.factor_levels[factor]
-    }
 }
 
 impl Store for FactorMajorStore {
@@ -106,7 +105,7 @@ impl Store for FactorMajorStore {
 
     #[inline]
     fn factor_column(&self, factor: usize) -> Option<&[u32]> {
-        Some(self.factor_column(factor))
+        Some(&self.factor_levels[factor])
     }
 }
 
@@ -154,8 +153,13 @@ impl Store for ArrayStore<'_> {
 
     fn factor_column(&self, factor: usize) -> Option<&[u32]> {
         let strides = self.categories.strides();
-        // Columns are contiguous only when the row stride is 1 (F-order).
-        if strides[0] != 1 {
+        // Columns are contiguous only when the row stride is 1 (F-order). The
+        // column stride must additionally be positive: a column-reversed view
+        // (e.g. `cats[:, ::-1]` of an F-order array) keeps `strides[0] == 1`
+        // but has `strides[1] < 1`, which would wrap to a huge `usize` below
+        // and produce an out-of-bounds `from_raw_parts`. Fall back to the safe
+        // per-element `level()` path in that case.
+        if strides[0] != 1 || strides[1] < 1 {
             return None;
         }
         let n_obs = self.categories.nrows();
@@ -183,6 +187,17 @@ pub(crate) fn validate_weights(weights: Option<&[f64]>, n_obs: usize) -> Result<
                 got: w.len(),
             });
         }
+        // `W^{1/2}` is applied to the design, so each weight must be finite and
+        // non-negative; otherwise `sqrt(w)` is NaN and the solution is silently
+        // corrupted. `wi >= 0.0` already rejects NaN (comparisons with NaN are
+        // false); `is_finite` additionally rejects `+∞`.
+        if let Some((index, &value)) = w
+            .iter()
+            .enumerate()
+            .find(|&(_, &wi)| !(wi >= 0.0 && wi.is_finite()))
+        {
+            return Err(BuildError::InvalidWeight { index, value });
+        }
     }
     Ok(())
 }
@@ -206,14 +221,30 @@ mod tests {
     fn test_factor_column() {
         let store = FactorMajorStore::new(vec![vec![0u32, 1, 2, 0], vec![3, 2, 1, 0]], 4)
             .expect("valid factor-major store");
-        assert_eq!(store.factor_column(0), &[0u32, 1, 2, 0]);
-        assert_eq!(store.factor_column(1), &[3u32, 2, 1, 0]);
+        assert_eq!(store.factor_column(0).unwrap(), &[0u32, 1, 2, 0]);
+        assert_eq!(store.factor_column(1).unwrap(), &[3u32, 2, 1, 0]);
     }
 
     #[test]
     fn test_validate_weights() {
         assert!(validate_weights(None, 5).is_ok());
         assert!(validate_weights(Some(&[1.0, 2.0, 3.0, 4.0, 5.0]), 5).is_ok());
+        // Zero weights are valid (an excluded observation).
+        assert!(validate_weights(Some(&[0.0, 1.0, 2.0, 3.0, 4.0]), 5).is_ok());
+        // Length mismatch.
         assert!(validate_weights(Some(&[1.0, 2.0]), 5).is_err());
+        // Negative / non-finite weights are rejected with the offending index.
+        assert!(matches!(
+            validate_weights(Some(&[1.0, -2.0, 3.0, 4.0, 5.0]), 5),
+            Err(BuildError::InvalidWeight { index: 1, .. })
+        ));
+        assert!(matches!(
+            validate_weights(Some(&[1.0, 2.0, f64::NAN, 4.0, 5.0]), 5),
+            Err(BuildError::InvalidWeight { index: 2, .. })
+        ));
+        assert!(matches!(
+            validate_weights(Some(&[1.0, 2.0, 3.0, f64::INFINITY, 5.0]), 5),
+            Err(BuildError::InvalidWeight { index: 3, .. })
+        ));
     }
 }

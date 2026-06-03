@@ -203,11 +203,22 @@ def standard_solver_configs(
         approx_chol=ApproxCholConfig(seed=opts.seed),
         approx_schur=ApproxSchurConfig(seed=opts.seed),
     )
+    # "2-2": both densification knobs on — split_merge=2 (AC2 reduced-system
+    # factorization) and split=2 (denser Schur clique-tree sampling).
+    schur_2_2 = LocalSolverConfig(
+        approx_chol=ApproxCholConfig(seed=opts.seed, split_merge=2),
+        approx_schur=ApproxSchurConfig(seed=opts.seed, split=2),
+    )
     return [
         SolverConfig(
             "LSMR(Schwarz)",
             benchmark_lsmr(opts, maxiter=maxiter),
             preconditioner=make_additive_schwarz(local_solver=schur),
+        ),
+        SolverConfig(
+            "LSMR(Schwarz,2-2)",
+            benchmark_lsmr(opts, maxiter=maxiter),
+            preconditioner=make_additive_schwarz(local_solver=schur_2_2),
         ),
     ]
 

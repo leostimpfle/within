@@ -8,8 +8,9 @@
 use approx_chol::low_level::Builder;
 use approx_chol::{CsrRef, Factor};
 use faer::{MatRef, Side};
-use schwarz_precond::{CsrMatrix, LocalSolveError};
+use schwarz_precond::LocalSolveError;
 
+use super::csr_matrix::CsrMatrix;
 use crate::config::ApproxCholConfig;
 use crate::BuildError;
 
@@ -172,7 +173,7 @@ pub(crate) fn factor_sparse(
         matrix.indptr(),
         matrix.indices(),
         matrix.data(),
-        matrix.n() as u32,
+        u32::try_from(matrix.n()).expect("Schur complement dimension exceeds u32::MAX"),
     )
     .map_err(|e| BuildError::LocalSolverBuild(format!("invalid Schur complement CSR: {e}")))?;
     schur_builder

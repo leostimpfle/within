@@ -6,26 +6,24 @@
 //! Levels are stored compactly with a `local_to_global` map for active levels only.
 
 use crate::csr_block::CsrBlock;
-use crate::domain::Design;
-use crate::observation::Store;
+use crate::domain::{Design, FactorMeta};
+use crate::observation::{factor_columns, level_at, Store};
 
-/// Max entries in a flat dense cross-tab accumulator (~40 MB at 8 bytes each).
-const DENSE_TABLE_MAX_ENTRIES: usize = 5_000_000;
+mod accumulate;
+use accumulate::accumulate_cross_block;
+
+/// Checked `usize -> u32` for CSR indptr/index and compact-level values. A
+/// silent `as u32` truncation above `u32::MAX` would corrupt the assembled
+/// cross-tab with no diagnostic; these are build-path invariants, so panic
+/// loudly instead.
+#[inline]
+fn to_u32(x: usize) -> u32 {
+    u32::try_from(x).expect("CSR index exceeds u32::MAX")
+}
 
 // ---------------------------------------------------------------------------
 // BipartiteComponent / SchurData — supporting types for CrossTab
 // ---------------------------------------------------------------------------
-
-/// Borrowed view of compact mapping parameters for a factor pair.
-///
-/// Bundles the global-to-compact index maps and compact dimensions,
-/// reducing the parameter count of `accumulate_cross_block`.
-struct CompactPair<'a> {
-    q_map: &'a [u32],
-    r_map: &'a [u32],
-    n_q: usize,
-    n_r: usize,
-}
 
 /// Compact mapping of active levels for a factor pair.
 ///
@@ -39,66 +37,56 @@ struct ActiveLevels {
     local_to_global: Vec<u32>,
 }
 
-impl ActiveLevels {
-    fn as_compact_pair(&self) -> CompactPair<'_> {
-        CompactPair {
-            q_map: &self.q_map,
-            r_map: &self.r_map,
-            n_q: self.n_q,
-            n_r: self.n_r,
-        }
-    }
-}
-
 /// Scan all observations once and mark which levels are active for each factor.
 ///
 /// Returns `active[f][level]` = true if any observation uses that level of factor f.
 pub(crate) fn find_all_active_levels<S: Store>(design: &Design<S>) -> Vec<Vec<bool>> {
-    let n_factors = design.factors.len();
     let n_obs = design.store.n_obs();
+    let cols = factor_columns(&design.store);
     let mut active: Vec<Vec<bool>> = design
         .factors
         .iter()
         .map(|f| vec![false; f.n_levels])
         .collect();
-    for uid in 0..n_obs {
-        for f in 0..n_factors {
-            active[f][design.store.level(uid, f) as usize] = true;
+    // Factor-outer / obs-inner: all writes for a factor land in one `active[f]`
+    // buffer before moving on, instead of hopping between `n_factors` buffers
+    // on every observation.
+    for (f, col) in active.iter_mut().enumerate() {
+        let levels = cols[f];
+        for uid in 0..n_obs {
+            col[level_at(&design.store, levels, uid, f)] = true;
         }
     }
     active
 }
 
+/// Compact mapping of active levels: assigns each active level a 0-based compact
+/// index. Returns the global-to-compact map (`u32::MAX` for inactive levels) and
+/// the number of active levels.
+fn compact_map(active: &[bool]) -> (Vec<u32>, usize) {
+    let mut map = vec![u32::MAX; active.len()];
+    let mut n = 0u32;
+    for (j, &a) in active.iter().enumerate() {
+        if a {
+            map[j] = n;
+            n += 1;
+        }
+    }
+    (map, n as usize)
+}
+
 /// Build compact mapping for a factor pair using pre-computed active level flags.
 ///
-/// Extracts the mapping logic from `find_active_levels`, taking pre-computed
+/// Extracts the mapping logic from `find_all_active_levels`, taking pre-computed
 /// active booleans instead of scanning observations.
 fn build_compact_mapping(
     active_q: &[bool],
     active_r: &[bool],
-    fq: &crate::observation::FactorMeta,
-    fr: &crate::observation::FactorMeta,
+    fq: &FactorMeta,
+    fr: &FactorMeta,
 ) -> Option<ActiveLevels> {
-    let mut q_map = vec![u32::MAX; fq.n_levels];
-    let mut n_q = 0u32;
-    for (j, &a) in active_q.iter().enumerate() {
-        if a {
-            q_map[j] = n_q;
-            n_q += 1;
-        }
-    }
-
-    let mut r_map = vec![u32::MAX; fr.n_levels];
-    let mut n_r = 0u32;
-    for (k, &a) in active_r.iter().enumerate() {
-        if a {
-            r_map[k] = n_r;
-            n_r += 1;
-        }
-    }
-
-    let n_q = n_q as usize;
-    let n_r = n_r as usize;
+    let (q_map, n_q) = compact_map(active_q);
+    let (r_map, n_r) = compact_map(active_r);
 
     if n_q == 0 || n_r == 0 {
         return None;
@@ -107,12 +95,12 @@ fn build_compact_mapping(
     let mut local_to_global = Vec::with_capacity(n_q + n_r);
     for (j, &a) in active_q.iter().enumerate() {
         if a {
-            local_to_global.push((fq.offset + j) as u32);
+            local_to_global.push(to_u32(fq.offset + j));
         }
     }
     for (k, &a) in active_r.iter().enumerate() {
         if a {
-            local_to_global.push((fr.offset + k) as u32);
+            local_to_global.push(to_u32(fr.offset + k));
         }
     }
 
@@ -129,8 +117,8 @@ fn build_compact_mapping(
 ///
 /// Indices are compact (0-based into the parent CrossTab's n_q / n_r).
 pub(crate) struct BipartiteComponent {
-    pub q_indices: Vec<usize>,
-    pub r_indices: Vec<usize>,
+    pub(crate) q_indices: Vec<usize>,
+    pub(crate) r_indices: Vec<usize>,
 }
 
 // ---------------------------------------------------------------------------
@@ -139,10 +127,11 @@ pub(crate) struct BipartiteComponent {
 
 /// Bipartite block representation of a local Gramian for a single factor pair.
 ///
-/// Stores the cross-tabulation C (and its precomputed transpose C^T) plus
-/// diagonal blocks, avoiding construction of the full symmetric Gramian CSR.
-/// The Gramian has structure `G = [D_q, C; C^T, D_r]` where D_q and D_r are
-/// diagonal.
+/// Stores the cross-tabulation C (and its precomputed transpose C^T),
+/// avoiding construction of the full symmetric Gramian CSR. The Gramian has
+/// structure `G = [D_q, C; C^T, D_r]` where D_q and D_r are diagonal; those
+/// diagonals are build-time-only (see [`BlockDiagonals`]) and are not stored
+/// here, since the solve path never reads them.
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub(crate) struct CrossTab {
     /// CSR(C): q-block rows (n_q) x r-block cols (n_r).
@@ -150,53 +139,77 @@ pub(crate) struct CrossTab {
     /// CSR(C^T): r-block rows (n_r) x q-block cols (n_q). Precomputed via
     /// `c.transpose()`.
     pub(crate) ct: CsrBlock,
+}
+
+/// Diagonal blocks `D_q`, `D_r` of a factor-pair Gramian.
+///
+/// These are consumed only during preconditioner assembly: [`Elimination::new`]
+/// folds them into the reduced factor, after which they are never read again.
+/// They therefore travel alongside the [`CrossTab`] through the build step
+/// rather than being stored on (and serialized with) it.
+///
+/// [`Elimination::new`]: crate::block_elim
+#[derive(Clone)]
+pub(crate) struct BlockDiagonals {
     /// Diagonal block for factor q (length n_q).
-    pub(crate) diag_q: Vec<f64>,
+    pub(crate) q: Vec<f64>,
     /// Diagonal block for factor r (length n_r).
-    pub(crate) diag_r: Vec<f64>,
+    pub(crate) r: Vec<f64>,
+}
+
+impl BlockDiagonals {
+    /// Slice the diagonals for a single bipartite component, mirroring the CSR
+    /// extraction in [`CrossTab::extract_component`].
+    pub(crate) fn extract_component(&self, comp: &BipartiteComponent) -> Self {
+        Self {
+            q: comp.q_indices.iter().map(|&i| self.q[i]).collect(),
+            r: comp.r_indices.iter().map(|&i| self.r[i]).collect(),
+        }
+    }
 }
 
 impl CrossTab {
     /// Number of rows in the q-block.
-    pub fn n_q(&self) -> usize {
+    pub(crate) fn n_q(&self) -> usize {
         self.c.nrows
     }
 
     /// Number of rows in the r-block.
-    pub fn n_r(&self) -> usize {
+    pub(crate) fn n_r(&self) -> usize {
         self.c.ncols
     }
 
     /// Total number of DOFs (n_q + n_r).
-    pub fn n_local(&self) -> usize {
+    pub(crate) fn n_local(&self) -> usize {
         self.c.nrows + self.c.ncols
     }
 
     /// Build a CrossTab using pre-computed active level flags.
     ///
-    /// Like `build_for_pair` but avoids redundant observation scans when
-    /// active levels have already been determined via `find_all_active_levels`.
-    pub fn build_for_pair_with_active<S: Store>(
+    /// Reuses active levels already determined via `find_all_active_levels`,
+    /// avoiding a redundant observation scan.
+    ///
+    /// Returns the diagonal blocks separately ([`BlockDiagonals`]): they are
+    /// build-time-only and so are not stored on the `CrossTab`.
+    pub(crate) fn build_for_pair_with_active<S: Store>(
         design: &Design<S>,
         weights: Option<&[f64]>,
         q: usize,
         r: usize,
         all_active: &[Vec<bool>],
-    ) -> Option<(Self, Vec<u32>)> {
+    ) -> Option<(Self, BlockDiagonals, Vec<u32>)> {
         let fq = &design.factors[q];
         let fr = &design.factors[r];
         let active = build_compact_mapping(&all_active[q], &all_active[r], fq, fr)?;
 
-        let (c, diag_q, diag_r) =
-            accumulate_cross_block(design, weights, q, r, &active.as_compact_pair());
+        let (c, diag_q, diag_r) = accumulate_cross_block(design, weights, q, r, &active);
         let ct = c.transpose();
-        let cross_tab = CrossTab {
-            c,
-            ct,
-            diag_q,
-            diag_r,
+        let cross_tab = CrossTab { c, ct };
+        let diagonals = BlockDiagonals {
+            q: diag_q,
+            r: diag_r,
         };
-        Some((cross_tab, active.local_to_global))
+        Some((cross_tab, diagonals, active.local_to_global))
     }
 
     /// Find connected components in the bipartite graph defined by C.
@@ -204,7 +217,7 @@ impl CrossTab {
     /// Uses DFS on CSR(C) (q->r edges) and CSR(C^T) (r->q edges).
     /// Returns components as vectors of compact q-indices and r-indices.
     /// O(n_q + n_r + nnz_C).
-    pub fn bipartite_connected_components(&self) -> Vec<BipartiteComponent> {
+    pub(crate) fn bipartite_connected_components(&self) -> Vec<BipartiteComponent> {
         let n_q = self.n_q();
         let n_r = self.n_r();
         let n = n_q + n_r;
@@ -273,23 +286,29 @@ impl CrossTab {
     ///
     /// Remaps q/r indices to the component's local 0-based indexing.
     /// O(nnz in the component).
-    pub fn extract_component(&self, comp: &BipartiteComponent) -> Self {
+    ///
+    /// `q_remap`/`r_remap` are parent-sized scratch buffers (length `n_q()` /
+    /// `n_r()`). They must arrive all-`u32::MAX` and are reset to that on exit,
+    /// so a single pair can be reused across every component of one parent
+    /// instead of allocating fresh per component.
+    pub(crate) fn extract_component(
+        &self,
+        comp: &BipartiteComponent,
+        q_remap: &mut [u32],
+        r_remap: &mut [u32],
+    ) -> Self {
         let n_q = comp.q_indices.len();
         let n_r = comp.r_indices.len();
+        debug_assert_eq!(q_remap.len(), self.n_q());
+        debug_assert_eq!(r_remap.len(), self.n_r());
 
-        // Build reverse maps: parent compact index -> component compact index
-        let mut q_remap = vec![u32::MAX; self.n_q()];
+        // Build reverse maps: parent compact index -> component compact index.
         for (new_idx, &old_idx) in comp.q_indices.iter().enumerate() {
-            q_remap[old_idx] = new_idx as u32;
+            q_remap[old_idx] = to_u32(new_idx);
         }
-        let mut r_remap = vec![u32::MAX; self.n_r()];
         for (new_idx, &old_idx) in comp.r_indices.iter().enumerate() {
-            r_remap[old_idx] = new_idx as u32;
+            r_remap[old_idx] = to_u32(new_idx);
         }
-
-        // Extract diagonals
-        let diag_q: Vec<f64> = comp.q_indices.iter().map(|&i| self.diag_q[i]).collect();
-        let diag_r: Vec<f64> = comp.r_indices.iter().map(|&i| self.diag_r[i]).collect();
 
         // Extract CSR(C): only rows in comp.q_indices, remap columns
         let mut c_indptr = vec![0u32; n_q + 1];
@@ -306,7 +325,7 @@ impl CrossTab {
                     c_data.push(self.c.data[idx]);
                 }
             }
-            c_indptr[new_qi + 1] = c_indices.len() as u32;
+            c_indptr[new_qi + 1] = to_u32(c_indices.len());
         }
 
         let c = CsrBlock {
@@ -318,181 +337,18 @@ impl CrossTab {
         };
         let ct = c.transpose();
 
-        CrossTab {
-            c,
-            ct,
-            diag_q,
-            diag_r,
+        // Reset only the touched entries so the buffers are all-`u32::MAX` again
+        // for the next component.
+        for &old_idx in &comp.q_indices {
+            q_remap[old_idx] = u32::MAX;
         }
-    }
-}
-
-// ---------------------------------------------------------------------------
-// accumulate_cross_block — shared observation accumulation for CrossTab
-// ---------------------------------------------------------------------------
-
-/// Accumulate observation weights into a cross-tabulation block C plus diagonals.
-///
-/// Used by `CrossTab::build_for_pair`. Observations whose compact index is
-/// `u32::MAX` are skipped.
-///
-/// Dispatches to a dense or sparse path based on the table size.
-fn accumulate_cross_block<S: Store>(
-    design: &Design<S>,
-    weights: Option<&[f64]>,
-    q: usize,
-    r: usize,
-    compact: &CompactPair<'_>,
-) -> (CsrBlock, Vec<f64>, Vec<f64>) {
-    let table_size = compact.n_q * compact.n_r;
-    if table_size <= DENSE_TABLE_MAX_ENTRIES {
-        accumulate_dense_cross_block(design, weights, q, r, compact)
-    } else {
-        accumulate_sparse_cross_block(design, weights, q, r, compact)
-    }
-}
-
-/// Dense path: flat table with O(1) accumulation per observation (n_q * n_r <= 5M).
-fn accumulate_dense_cross_block<S: Store>(
-    design: &Design<S>,
-    weights: Option<&[f64]>,
-    q: usize,
-    r: usize,
-    compact: &CompactPair<'_>,
-) -> (CsrBlock, Vec<f64>, Vec<f64>) {
-    let n_obs = design.store.n_obs();
-    let n_q = compact.n_q;
-    let n_r = compact.n_r;
-    let q_compact = compact.q_map;
-    let r_compact = compact.r_map;
-    let mut diag_q = vec![0.0f64; n_q];
-    let mut diag_r = vec![0.0f64; n_r];
-    let mut table = vec![0.0f64; n_q * n_r];
-
-    for uid in 0..n_obs {
-        let j = design.store.level(uid, q) as usize;
-        let k = design.store.level(uid, r) as usize;
-        let cj = q_compact[j];
-        let ck = r_compact[k];
-        if cj == u32::MAX || ck == u32::MAX {
-            continue;
+        for &old_idx in &comp.r_indices {
+            r_remap[old_idx] = u32::MAX;
         }
-        let w = weights.map_or(1.0, |w| w[uid]);
-        debug_assert!((cj as usize) < n_q && (ck as usize) < n_r);
-        diag_q[cj as usize] += w;
-        diag_r[ck as usize] += w;
-        table[cj as usize * n_r + ck as usize] += w;
+
+        CrossTab { c, ct }
     }
-
-    let c = CsrBlock::from_dense_table(&table, n_q, n_r);
-    (c, diag_q, diag_r)
-}
-
-/// Sparse path: two-pass bucket + workspace-based dedup per row.
-///
-/// Bucket observations by row in two passes (count + fill), then use
-/// a dense workspace of size n_r to accumulate and deduplicate each
-/// row. The workspace sort is on unique columns only (n_r_active << len).
-fn accumulate_sparse_cross_block<S: Store>(
-    design: &Design<S>,
-    weights: Option<&[f64]>,
-    q: usize,
-    r: usize,
-    compact: &CompactPair<'_>,
-) -> (CsrBlock, Vec<f64>, Vec<f64>) {
-    let n_obs = design.store.n_obs();
-    let n_q = compact.n_q;
-    let n_r = compact.n_r;
-    let q_compact = compact.q_map;
-    let r_compact = compact.r_map;
-    let mut diag_q = vec![0.0f64; n_q];
-    let mut diag_r = vec![0.0f64; n_r];
-
-    // Pass 1: accumulate diags + count entries per row
-    let mut row_counts = vec![0u32; n_q];
-    for uid in 0..n_obs {
-        let j = design.store.level(uid, q) as usize;
-        let k = design.store.level(uid, r) as usize;
-        let cj = q_compact[j];
-        let ck = r_compact[k];
-        if cj == u32::MAX || ck == u32::MAX {
-            continue;
-        }
-        let w = weights.map_or(1.0, |w| w[uid]);
-        diag_q[cj as usize] += w;
-        diag_r[ck as usize] += w;
-        row_counts[cj as usize] += 1;
-    }
-
-    // Build row-pointer array for the unsorted bucket CSR
-    let mut bucket_indptr = vec![0u32; n_q + 1];
-    for i in 0..n_q {
-        bucket_indptr[i + 1] = bucket_indptr[i] + row_counts[i];
-    }
-    let total_entries = bucket_indptr[n_q] as usize;
-
-    // Pass 2: fill per-row buckets (col + weight only, no row index)
-    let mut bucket_cols = vec![0u32; total_entries];
-    let mut bucket_vals = vec![0.0f64; total_entries];
-    let mut cursor = bucket_indptr[..n_q].to_vec();
-    for uid in 0..n_obs {
-        let j = design.store.level(uid, q) as usize;
-        let k = design.store.level(uid, r) as usize;
-        let cj = q_compact[j];
-        let ck = r_compact[k];
-        if cj == u32::MAX || ck == u32::MAX {
-            continue;
-        }
-        let w = weights.map_or(1.0, |w| w[uid]);
-        let pos = cursor[cj as usize] as usize;
-        bucket_cols[pos] = ck;
-        bucket_vals[pos] = w;
-        cursor[cj as usize] += 1;
-    }
-
-    // Pass 3: workspace-based dedup per row.
-    // Accumulate into work[col], track touched columns, sort only the
-    // unique set, then emit into final CSR.
-    let mut work = vec![0.0f64; n_r];
-    let mut touched: Vec<u32> = Vec::new();
-    let mut c_indptr = vec![0u32; n_q + 1];
-    let mut c_indices = Vec::new();
-    let mut c_data = Vec::new();
-
-    for row in 0..n_q {
-        let start = bucket_indptr[row] as usize;
-        let end = bucket_indptr[row + 1] as usize;
-        for idx in start..end {
-            let col = bucket_cols[idx] as usize;
-            if work[col] == 0.0 {
-                touched.push(col as u32);
-            }
-            work[col] += bucket_vals[idx];
-        }
-        touched.sort_unstable();
-        for &col in &touched {
-            let v = work[col as usize];
-            if v != 0.0 {
-                c_indices.push(col);
-                c_data.push(v);
-            }
-            work[col as usize] = 0.0;
-        }
-        c_indptr[row + 1] = c_indices.len() as u32;
-        touched.clear();
-    }
-
-    let c = CsrBlock {
-        indptr: c_indptr,
-        indices: c_indices,
-        data: c_data,
-        nrows: n_q,
-        ncols: n_r,
-    };
-    (c, diag_q, diag_r)
 }
 
 #[cfg(test)]
 mod tests;
-
-// ---------------------------------------------------------------------------

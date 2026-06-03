@@ -1,8 +1,9 @@
 //! LSMR test suite.
 
+use super::bidiag::dot;
 use super::bidiag::{Bidiagonalization, GolubKahan};
+use super::vec_norm;
 use super::*;
-use super::{dot, vec_norm};
 use crate::{Operator, SolveError};
 
 /// Identity operator used by mlsmr equivalence tests.
@@ -72,6 +73,30 @@ impl Operator for DiagPrecond {
     }
     fn apply_adjoint(&self, x: &[f64], y: &mut [f64]) -> Result<(), SolveError> {
         self.apply(x, y)
+    }
+}
+
+/// Degenerate 2×2 operator `A = [[1, 0], [0, 0]]` — zero second row and zero
+/// second column. Shared by the zero-row/column and mid-stream `beta == 0`
+/// breakdown tests.
+struct ZeroSecondRow;
+
+impl Operator for ZeroSecondRow {
+    fn nrows(&self) -> usize {
+        2
+    }
+    fn ncols(&self) -> usize {
+        2
+    }
+    fn apply(&self, x: &[f64], y: &mut [f64]) -> Result<(), SolveError> {
+        y[0] = x[0];
+        y[1] = 0.0;
+        Ok(())
+    }
+    fn apply_adjoint(&self, u: &[f64], x: &mut [f64]) -> Result<(), SolveError> {
+        x[0] = u[0];
+        x[1] = 0.0;
+        Ok(())
     }
 }
 
@@ -197,32 +222,12 @@ fn test_mlsmr_rank_deficient_system() {
 
 #[test]
 fn test_mlsmr_zero_column_and_zero_row() {
-    struct DegenerateOp;
-    impl Operator for DegenerateOp {
-        fn nrows(&self) -> usize {
-            2
-        }
-        fn ncols(&self) -> usize {
-            2
-        }
-        fn apply(&self, x: &[f64], y: &mut [f64]) -> Result<(), SolveError> {
-            y[0] = x[0];
-            y[1] = 0.0;
-            Ok(())
-        }
-        fn apply_adjoint(&self, u: &[f64], x: &mut [f64]) -> Result<(), SolveError> {
-            x[0] = u[0];
-            x[1] = 0.0;
-            Ok(())
-        }
-    }
-
     let b = vec![2.0, 3.0];
-    let result = lsmr(&DegenerateOp, &b, 1e-12, 100, None).expect("degenerate solve");
+    let result = lsmr(&ZeroSecondRow, &b, 1e-12, 100, None).expect("degenerate solve");
     assert!(result.converged);
     assert!((result.x[0] - 2.0).abs() < 1e-10);
     assert!(result.x[1].abs() < 1e-10);
-    assert!(normal_equation_residual(&DegenerateOp, &result.x, &b) < 1e-10);
+    assert!(normal_equation_residual(&ZeroSecondRow, &result.x, &b) < 1e-10);
 }
 
 #[test]
@@ -231,26 +236,6 @@ fn test_mlsmr_mid_stream_beta_zero_breakdown() {
     // first step, A v_1 - alpha_1 u_1 collapses to zero exactly, so beta_2
     // is zero. Exercises the mid-stream beta == 0 branch in
     // GolubKahan::step that zeroes v before the caller's solution.update.
-    struct ZeroSecondRow;
-    impl Operator for ZeroSecondRow {
-        fn nrows(&self) -> usize {
-            2
-        }
-        fn ncols(&self) -> usize {
-            2
-        }
-        fn apply(&self, x: &[f64], y: &mut [f64]) -> Result<(), SolveError> {
-            y[0] = x[0];
-            y[1] = 0.0;
-            Ok(())
-        }
-        fn apply_adjoint(&self, u: &[f64], x: &mut [f64]) -> Result<(), SolveError> {
-            x[0] = u[0];
-            x[1] = 0.0;
-            Ok(())
-        }
-    }
-
     let b = vec![5.0, 0.0];
     let result = lsmr(&ZeroSecondRow, &b, 1e-12, 100, None).expect("beta=0 solve");
     assert!(result.converged);
@@ -316,7 +301,7 @@ fn test_mlsmr_none_matches_identity_precond() {
 /// active. The M-weighted MGS path uses dot products against `p̃ = M v` and
 /// scales `p̃` by `1/α`; with `M = I` this must reduce to the Euclidean
 /// MGS used by the unpreconditioned path. Guards the windowed scaling
-/// logic in `ModifiedLocalReorth::push` against drift.
+/// logic in `WindowRing<2>::push` against drift.
 #[test]
 fn test_mlsmr_none_matches_identity_precond_windowed() {
     // 30×12 Vandermonde, cond(A) ≈ 1e10 — chosen to stress the windowed reorth

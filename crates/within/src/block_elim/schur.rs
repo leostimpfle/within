@@ -7,21 +7,24 @@
 //! - [`ApproxSchurComplement`] — clique-tree sampling, keeping `S` sparse for
 //!   high-degree eliminated levels.
 
+use super::csr_matrix::CsrMatrix;
 use rayon::prelude::*;
-use schwarz_precond::CsrMatrix;
 
 use super::elimination::{Edge, Elimination, SampledCliqueEmitter};
 use crate::config::ApproxSchurConfig;
 use crate::csr_block::CsrBlock;
 
+/// Checked `usize -> u32` for CSR indptr/index values. A silent `as u32`
+/// truncation above `u32::MAX` would corrupt the factorization with no
+/// diagnostic; these are build-path invariants, so panic loudly instead.
+#[inline]
+fn to_u32(x: usize) -> u32 {
+    u32::try_from(x).expect("CSR index exceeds u32::MAX")
+}
+
 pub(crate) struct SchurLaplacian;
 
 impl SchurLaplacian {
-    /// Build a symmetric CSR Laplacian from pre-sorted, deduplicated fill edges.
-    fn from_edges(edges: Vec<Edge>, n_keep: usize) -> CsrMatrix {
-        Self::build_laplacian_csr(&edges, n_keep)
-    }
-
     /// Build the Schur complement via row-workspace accumulation (exact path).
     ///
     /// Computes `S = D_keep − keep_to_elim · diag(inv_diag_elim) · elim_to_keep`
@@ -65,7 +68,7 @@ impl SchurLaplacian {
     ///
     /// This is the matrix actually factored by dense anchored Cholesky, so building
     /// it directly avoids allocating a full `n_keep x n_keep` dense Schur matrix.
-    fn anchored_minor_from_elimination(elim: &Elimination) -> Vec<f64> {
+    pub(crate) fn anchored_minor_from_elimination(elim: &Elimination) -> Vec<f64> {
         let n_keep = elim.n_keep;
         if n_keep <= 1 {
             return Vec::new();
@@ -147,12 +150,14 @@ impl SchurLaplacian {
         touched: &mut [usize],
     ) -> (Vec<u32>, Vec<f64>) {
         touched.sort_unstable();
-        let mut row_indices = Vec::new();
-        let mut row_data = Vec::new();
+        // `touched.len()` is a tight upper bound on the emitted non-zeros
+        // (the diagonal plus every fill column), so size both buffers once.
+        let mut row_indices = Vec::with_capacity(touched.len());
+        let mut row_data = Vec::with_capacity(touched.len());
         for &j in touched.iter() {
             let v = work[j];
             if v != 0.0 || j == i {
-                row_indices.push(j as u32);
+                row_indices.push(to_u32(j));
                 row_data.push(v);
             }
             work[j] = 0.0;
@@ -163,15 +168,16 @@ impl SchurLaplacian {
     /// Assemble a CSR matrix from per-row sparse results.
     fn assemble_schur_csr(rows: Vec<(Vec<u32>, Vec<f64>)>, n_keep: usize) -> CsrMatrix {
         let mut s_indptr = vec![0u32; n_keep + 1];
-        let mut s_indices = Vec::new();
-        let mut s_data = Vec::new();
+        // Pre-count total NNZ so the value/index buffers allocate exactly once.
+        let total_nnz: usize = rows.iter().map(|(ri, _)| ri.len()).sum();
+        let mut s_indices = Vec::with_capacity(total_nnz);
+        let mut s_data = Vec::with_capacity(total_nnz);
         for (i, (ri, rd)) in rows.into_iter().enumerate() {
             s_indices.extend_from_slice(&ri);
             s_data.extend_from_slice(&rd);
-            s_indptr[i + 1] = s_indices.len() as u32;
+            s_indptr[i + 1] = to_u32(s_indices.len());
         }
         CsrMatrix::new(s_indptr, s_indices, s_data, n_keep)
-            .expect("schur rows are well-formed by construction")
     }
 
     /// Build symmetric CSR Laplacian from sorted upper-triangular edges.
@@ -209,7 +215,7 @@ impl SchurLaplacian {
             .collect();
         for i in 0..n_keep {
             let pos = (offsets[i] + lower_count[i]) as usize;
-            indices[pos] = i as u32;
+            indices[pos] = to_u32(i);
             data[pos] = diag[i];
         }
 
@@ -231,7 +237,6 @@ impl SchurLaplacian {
         }
 
         CsrMatrix::new(offsets, indices, data, n_keep)
-            .expect("schur rows are well-formed by construction")
     }
 }
 
@@ -269,17 +274,6 @@ impl SchurComplement for ExactSchurComplement {
     }
 }
 
-impl ExactSchurComplement {
-    /// Compute the exact Schur anchored dense minor directly.
-    ///
-    /// The anchored top-left principal minor is what dense Cholesky factors, so
-    /// this avoids allocating the full dense Schur matrix. The caller already
-    /// holds the [`Elimination`] and knows `n_keep`.
-    pub(crate) fn compute_dense_anchored(&self, elim: &Elimination) -> Vec<f64> {
-        SchurLaplacian::anchored_minor_from_elimination(elim)
-    }
-}
-
 impl SchurComplement for ApproxSchurComplement {
     /// Compute an approximate Schur complement by sampling clique-trees.
     ///
@@ -288,7 +282,7 @@ impl SchurComplement for ApproxSchurComplement {
     fn compute(&self, elim: &Elimination) -> CsrMatrix {
         let emitter = SampledCliqueEmitter::new(&self.config);
         let edges = elim.par_emit(&emitter);
-        SchurLaplacian::from_edges(edges, elim.n_keep)
+        SchurLaplacian::build_laplacian_csr(&edges, elim.n_keep)
     }
 }
 
@@ -296,7 +290,7 @@ impl SchurComplement for ApproxSchurComplement {
 mod tests {
     use super::*;
     use crate::csr_block::CsrBlock;
-    use crate::domain::CrossTab;
+    use crate::domain::{BlockDiagonals, CrossTab};
 
     fn make_cross_tab(
         c_dense: &[f64],
@@ -304,15 +298,16 @@ mod tests {
         n_r: usize,
         diag_q: Vec<f64>,
         diag_r: Vec<f64>,
-    ) -> CrossTab {
+    ) -> (CrossTab, BlockDiagonals) {
         let c = CsrBlock::from_dense_table(c_dense, n_q, n_r);
         let ct = c.transpose();
-        CrossTab {
-            c,
-            ct,
-            diag_q,
-            diag_r,
-        }
+        (
+            CrossTab { c, ct },
+            BlockDiagonals {
+                q: diag_q,
+                r: diag_r,
+            },
+        )
     }
 
     fn sparse_to_dense(matrix: &CsrMatrix) -> Vec<Vec<f64>> {
@@ -401,8 +396,8 @@ mod tests {
         let c_dense = vec![1.0, 2.0, 3.0, 0.0, 0.0, 4.0];
         let diag_q = vec![5.0, 6.0, 8.0];
         let diag_r = vec![7.0, 9.0];
-        let cross_tab = make_cross_tab(&c_dense, 3, 2, diag_q.clone(), diag_r.clone());
-        let elim = Elimination::new(&cross_tab).unwrap();
+        let (cross_tab, diagonals) = make_cross_tab(&c_dense, 3, 2, diag_q.clone(), diag_r.clone());
+        let elim = Elimination::new(&cross_tab, &diagonals).unwrap();
 
         assert!(elim.eliminate_q);
         assert_eq!(elim.inv_diag_elim.len(), 3);
@@ -427,9 +422,9 @@ mod tests {
         let c_dense = vec![2.0, 0.0, 1.0, 0.0, 3.0, 4.0];
         let diag_q = vec![8.0, 9.0];
         let diag_r = vec![5.0, 6.0, 0.0];
-        let cross_tab = make_cross_tab(&c_dense, 2, 3, diag_q, diag_r);
+        let (cross_tab, diagonals) = make_cross_tab(&c_dense, 2, 3, diag_q, diag_r);
 
-        let result = Elimination::new(&cross_tab);
+        let result = Elimination::new(&cross_tab, &diagonals);
         match result {
             Err(crate::BuildError::SingularDiagonal { index: 2, .. }) => {}
             Err(e) => panic!("expected SingularDiagonal at index 2, got: {e}"),
@@ -441,9 +436,10 @@ mod tests {
     fn approximate_schur_is_seed_deterministic_and_laplacian_like() {
         // Degree-3 star in eliminated block gives nontrivial sampled edges.
         let c_dense = vec![1.0, 2.0, 3.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0];
-        let cross_tab = make_cross_tab(&c_dense, 3, 3, vec![10.0, 4.0, 5.0], vec![2.0, 3.0, 4.0]);
-        let elim_a = Elimination::new(&cross_tab).unwrap();
-        let elim_b = Elimination::new(&cross_tab).unwrap();
+        let (cross_tab, diagonals) =
+            make_cross_tab(&c_dense, 3, 3, vec![10.0, 4.0, 5.0], vec![2.0, 3.0, 4.0]);
+        let elim_a = Elimination::new(&cross_tab, &diagonals).unwrap();
+        let elim_b = Elimination::new(&cross_tab, &diagonals).unwrap();
         let approx = ApproxSchurComplement::new(crate::config::ApproxSchurConfig {
             seed: 12345,
             ..Default::default()

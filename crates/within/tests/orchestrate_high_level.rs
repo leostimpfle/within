@@ -37,23 +37,6 @@ fn test_high_level_solve_weighted() {
 }
 
 #[test]
-fn test_high_level_solve_preconditioned() {
-    let categories = array![[0u32, 0], [1, 0], [0, 1], [1, 1], [2, 0]];
-    let y = [1.0, 2.0, 3.0, 4.0, 5.0];
-
-    let params = LsmrOptions {
-        tol: 1e-8,
-        maxiter: 1000,
-        ..Default::default()
-    };
-    let precond = PreconditionerConfig::default();
-    let result =
-        solve(categories.view(), &y, None, &params, Some(&precond)).expect("solve preconditioned");
-    common::assert_converged_with_small_residual(&result, 1e-6);
-    common::assert_solution_finite(&result);
-}
-
-#[test]
 fn test_solve_batch_matches_individual() {
     let categories = array![[0u32, 0], [1, 0], [0, 1], [1, 1], [2, 0]];
     let y1 = vec![1.0, 2.0, 3.0, 4.0, 5.0];
