@@ -8,8 +8,9 @@
 use approx_chol::low_level::Builder;
 use approx_chol::{CsrRef, Factor};
 use faer::{MatRef, Side};
-use schwarz_precond::{CsrMatrix, LocalSolveError};
+use schwarz_precond::LocalSolveError;
 
+use super::csr_matrix::CsrMatrix;
 use crate::config::ApproxCholConfig;
 use crate::BuildError;
 

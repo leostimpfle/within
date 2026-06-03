@@ -47,12 +47,6 @@ pub enum BuildError {
         /// Minimum scratch size required by the subdomain core.
         required_min: usize,
     },
-    /// CSR matrix construction violated a documented invariant.
-    #[error("CSR construction invalid: {reason}")]
-    InvalidCsr {
-        /// Short description of which CSR invariant was violated.
-        reason: &'static str,
-    },
 }
 
 /// Runtime error emitted by a local subdomain solver during a solve call.
