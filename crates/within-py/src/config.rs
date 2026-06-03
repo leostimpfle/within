@@ -4,6 +4,7 @@
 //! Python→native config conversions (`to_native`,
 //! `resolve_precond_input`, `resolve_lsmr_config`).
 
+use numpy::PyReadonlyArray1;
 use pyo3::prelude::*;
 
 use within::config::{
@@ -11,8 +12,6 @@ use within::config::{
     ReductionStrategy,
 };
 use within::Preconditioner;
-
-use crate::objects::PyPreconditioner;
 
 // ---------------------------------------------------------------------------
 // Low-level config classes (available via `_within` for benchmarks)
@@ -195,6 +194,87 @@ impl PyLsmrOptions {
             maxiter,
             local_size,
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Built preconditioner (returned by Solver, picklable)
+// ---------------------------------------------------------------------------
+
+/// A pre-built preconditioner that can be pickled and reused.
+///
+/// Obtained via ``Solver.preconditioner``. Pass it back to a new
+/// ``Solver(…, preconditioner=p)`` to skip the expensive factorisation.
+#[pyclass(frozen, module = "within._within")]
+#[pyo3(name = "Preconditioner")]
+pub struct PyPreconditioner {
+    pub(crate) inner: Preconditioner,
+}
+
+#[pymethods]
+impl PyPreconditioner {
+    /// Apply the preconditioner: ``y = M⁻¹ x``.
+    fn apply<'py>(
+        &self,
+        py: Python<'py>,
+        x: PyReadonlyArray1<'py, f64>,
+    ) -> PyResult<Bound<'py, numpy::PyArray1<f64>>> {
+        let x_slice = x
+            .as_slice()
+            .map_err(|_| pyo3::exceptions::PyValueError::new_err("x must be contiguous"))?;
+        if x_slice.len() != self.inner.ncols() {
+            return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                "x has length {} but preconditioner expects {}",
+                x_slice.len(),
+                self.inner.ncols()
+            )));
+        }
+        let mut y = vec![0.0; self.inner.nrows()];
+        self.inner
+            .apply(x_slice, &mut y)
+            .map_err(|e: within::SolveError| {
+                pyo3::exceptions::PyRuntimeError::new_err(e.to_string())
+            })?;
+        Ok(numpy::PyArray1::from_vec(py, y))
+    }
+    /// Number of rows (DOFs).
+    #[getter]
+    fn nrows(&self) -> usize {
+        self.inner.nrows()
+    }
+
+    /// Number of columns (DOFs).
+    #[getter]
+    fn ncols(&self) -> usize {
+        self.inner.ncols()
+    }
+
+    fn __repr__(&self) -> String {
+        format!("Preconditioner(Additive, n={})", self.inner.nrows())
+    }
+
+    /// Pickle support: serialize to ``(bytes,)`` constructor arg.
+    fn __reduce__<'py>(
+        &self,
+        py: Python<'py>,
+    ) -> PyResult<(Bound<'py, PyAny>, (Bound<'py, pyo3::types::PyBytes>,))> {
+        let bytes = postcard::to_stdvec(&self.inner)
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+        let cls = py.get_type::<Self>();
+        let py_bytes = pyo3::types::PyBytes::new(py, &bytes);
+        Ok((cls.into_any(), (py_bytes,)))
+    }
+
+    /// Construct from serialised bytes (used by pickle and for manual persistence).
+    #[new]
+    fn new(data: &[u8]) -> PyResult<Self> {
+        let inner: Preconditioner = postcard::from_bytes(data).map_err(|e| {
+            pyo3::exceptions::PyValueError::new_err(format!(
+                "failed to deserialize preconditioner: {}",
+                e
+            ))
+        })?;
+        Ok(Self { inner })
     }
 }
 
