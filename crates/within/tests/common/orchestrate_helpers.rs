@@ -38,3 +38,14 @@ pub fn assert_solution_finite(result: &SolveResult) {
         "Non-finite solution"
     );
 }
+
+/// Assert two solution vectors agree element-wise within `tol`.
+pub fn assert_solutions_close(a: &[f64], b: &[f64], tol: f64) {
+    assert_eq!(a.len(), b.len(), "solution lengths differ");
+    for (i, (&ai, &bi)) in a.iter().zip(b.iter()).enumerate() {
+        assert!(
+            (ai - bi).abs() <= tol,
+            "solutions differ at index {i}: {ai} vs {bi} (tol {tol})"
+        );
+    }
+}

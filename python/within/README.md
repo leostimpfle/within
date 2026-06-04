@@ -19,7 +19,7 @@ pip install within_py
 `within`'s main user-facing function is `solve`. Provide a 2-D `uint32` array of category codes (one column per fixed-effect factor) and a response vector `y`. The solver finds x in the normal equations **D'D x = D'y**, where D is the sparse categorical design matrix.
 
 ```python
-from within import solve, solve_batch
+from within import PreconditionerConfig, solve, solve_batch
 import numpy as np
 
 np.random.seed(1)
@@ -32,6 +32,7 @@ y = np.random.randn(n)
 
 result = solve(fe, y)                          # Schwarz-preconditioned LSMR
 result = solve(fe, y, weights=np.ones(n))      # weighted solve
+result = solve(fe, y, preconditioner=PreconditionerConfig.Diagonal)
 ```
 
 ### FWL regression example
@@ -94,6 +95,7 @@ solver2 = Solver(fe, preconditioner=precond)   # skip re-factorization
 | `AdditiveSchwarz(local_solver?)` | Additive one-level Schwarz (import from `within.config`). |
 | `PreconditionerConfig.Off` | Disable preconditioning. |
 | `PreconditionerConfig.Additive` | Additive Schwarz shortcut (equivalent to `None`). |
+| `PreconditionerConfig.Diagonal` | Diagonal/Jacobi preconditioner using `diag(D^T W D)^{-1}`. |
 | `Preconditioner` (built) | Reuse a previously-built preconditioner across solvers. |
 
 Pass `None` (the default) to use additive Schwarz with the default local solver.

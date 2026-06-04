@@ -34,8 +34,7 @@ fn wire_format_fixture_deserializes_and_solves() {
     let prebuilt: Preconditioner =
         postcard::from_bytes(PRECOND_BYTES).expect("deserialize fixture preconditioner");
 
-    let solver = Solver::new(categories.view(), None::<Vec<f64>>, prebuilt)
-        .expect("build solver from fixture");
+    let solver = Solver::new(categories.view(), None, prebuilt).expect("build solver from fixture");
     let result = solver
         .solve(&y, &LsmrOptions::default())
         .expect("solve with fixture preconditioner");
@@ -43,7 +42,7 @@ fn wire_format_fixture_deserializes_and_solves() {
     assert!(result.converged, "fixture-built solver should converge");
 
     // Compare against a fresh build to detect any semantic regression.
-    let fresh = Solver::new(categories.view(), None::<Vec<f64>>, None).expect("fresh solver");
+    let fresh = Solver::new(categories.view(), None, None).expect("fresh solver");
     let fresh_result = fresh
         .solve(&y, &LsmrOptions::default())
         .expect("fresh solve");
@@ -67,7 +66,7 @@ fn regenerate_wire_format_fixture() {
     use std::path::PathBuf;
 
     let (categories, _) = fixture_problem();
-    let solver = Solver::new(categories.view(), None::<Vec<f64>>, None).expect("build solver");
+    let solver = Solver::new(categories.view(), None, None).expect("build solver");
     let prec = solver
         .preconditioner()
         .expect("default solver has a preconditioner");

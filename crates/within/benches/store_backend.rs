@@ -102,7 +102,7 @@ fn bench_store_backends(c: &mut Criterion) {
                     .collect();
                 let store = FactorMajorStore::new(factor_levels, *n_obs).unwrap();
                 let design = Design::from_store(store).unwrap();
-                let solver = Solver::new(design, None::<Vec<f64>>, precond_ref).unwrap();
+                let solver = Solver::new(design, None, precond_ref).unwrap();
                 let r = solver.solve(&p.y, &p.params).unwrap();
                 assert!(r.converged);
             });
@@ -113,7 +113,7 @@ fn bench_store_backends(c: &mut Criterion) {
             b.iter(|| {
                 let store = ArrayStore::new(p.categories_c.view()).unwrap();
                 let design = Design::from_store(store).unwrap();
-                let solver = Solver::new(design, None::<Vec<f64>>, precond_ref).unwrap();
+                let solver = Solver::new(design, None, precond_ref).unwrap();
                 let r = solver.solve(&p.y, &p.params).unwrap();
                 assert!(r.converged);
             });
@@ -124,7 +124,7 @@ fn bench_store_backends(c: &mut Criterion) {
             b.iter(|| {
                 let store = ArrayStore::new(p.categories_f.view()).unwrap();
                 let design = Design::from_store(store).unwrap();
-                let solver = Solver::new(design, None::<Vec<f64>>, precond_ref).unwrap();
+                let solver = Solver::new(design, None, precond_ref).unwrap();
                 let r = solver.solve(&p.y, &p.params).unwrap();
                 assert!(r.converged);
             });

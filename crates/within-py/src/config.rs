@@ -84,12 +84,14 @@ impl PyApproxSchurConfig {
 ///
 /// - ``PreconditionerConfig.Additive`` — additive Schwarz (default)
 /// - ``PreconditionerConfig.Off`` — no preconditioner
+/// - ``PreconditionerConfig.Diagonal`` — diagonal/Jacobi preconditioner
 #[pyclass(frozen, eq, eq_int, module = "within._within")]
 #[pyo3(name = "PreconditionerConfig")]
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum PyPreconditionerConfig {
     Additive = 0,
     Off = 1,
+    Diagonal = 2,
 }
 
 #[pyclass(frozen, eq, eq_int, module = "within._within")]
@@ -250,7 +252,11 @@ impl PyPreconditioner {
     }
 
     fn __repr__(&self) -> String {
-        format!("Preconditioner(Additive, n={})", self.inner.nrows())
+        format!(
+            "Preconditioner({}, n={})",
+            self.inner.variant_name(),
+            self.inner.nrows()
+        )
     }
 
     /// Pickle support: serialize to ``(bytes,)`` constructor arg.
@@ -326,6 +332,7 @@ fn extract_preconditioner_config(
         return Ok(Some(match p {
             PyPreconditionerConfig::Off => PreconditionerConfig::Off,
             PyPreconditionerConfig::Additive => PreconditionerConfig::default(),
+            PyPreconditionerConfig::Diagonal => PreconditionerConfig::Diagonal,
         }));
     }
 
@@ -367,7 +374,7 @@ fn extract_preconditioner_config(
 
     Err(PyErr::new::<pyo3::exceptions::PyTypeError, _>(
         "preconditioner must be PreconditionerConfig.Additive, PreconditionerConfig.Off, \
-         AdditiveSchwarz(...), a pre-built Preconditioner, or None",
+         PreconditionerConfig.Diagonal, AdditiveSchwarz(...), a pre-built Preconditioner, or None",
     ))
 }
 

@@ -47,7 +47,7 @@ fn test_empty_categories_via_solve() {
     let y: Vec<f64> = vec![];
     let params = LsmrOptions::default();
     let precond = PreconditionerConfig::default();
-    let result = solve(cats.view(), &y, None, &params, Some(&precond));
+    let result = solve(cats.view(), &y, None, &params, &precond);
     assert!(result.is_err());
     match result.unwrap_err() {
         WithinError::Build(BuildError::EmptyObservations) => {}
@@ -232,13 +232,13 @@ fn test_preconditioner_dimension_mismatch_error() {
     let big = Array2::from_shape_vec((4, 2), vec![0u32, 0, 1, 1, 2, 0, 3, 1]).expect("big array");
     let small = Array2::from_shape_vec((3, 2), vec![0u32, 0, 1, 1, 0, 0]).expect("small array");
 
-    let big_solver = Solver::new(big.view(), None::<Vec<f64>>, None).expect("big solver");
+    let big_solver = Solver::new(big.view(), None, None).expect("big solver");
     let prebuilt = big_solver
         .preconditioner()
         .expect("default solver has a preconditioner")
         .clone();
 
-    let result = Solver::new(small.view(), None::<Vec<f64>>, prebuilt);
+    let result = Solver::new(small.view(), None, prebuilt);
     let err = result.expect_err("expected PreconditionerDimensionMismatch, got Ok");
     match err {
         BuildError::PreconditionerDimensionMismatch {

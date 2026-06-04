@@ -66,7 +66,7 @@ proptest! {
         };
         let precond = additive_precond();
         // LSMR converges on the least-squares system min ||y - Dx||^2 for any y.
-        let result = solve(cats.view(), &y, None, &params, Some(&precond)).unwrap();
+        let result = solve(cats.view(), &y, None, &params, &precond).unwrap();
         prop_assert!(
             result.converged,
             "4-factor solve did not converge (n_obs={}, residual={:.2e})",
@@ -88,10 +88,10 @@ proptest! {
         let precond = additive_precond();
 
         // Path A: convenience `solve()` (uses ArrayStore internally)
-        let result_a = solve(cats.view(), &y, None, &params, Some(&precond)).unwrap();
+        let result_a = solve(cats.view(), &y, None, &params, &precond).unwrap();
 
         // Path B: Solver::new() — identical to solve() but without timing wrapper
-        let solver_b = Solver::new(cats.view(), None::<Vec<f64>>, Some(&precond)).unwrap();
+        let solver_b = Solver::new(cats.view(), None, &precond).unwrap();
         let result_b = solver_b.solve(&y, &params).unwrap();
 
         prop_assert_eq!(
@@ -117,7 +117,7 @@ proptest! {
             ..LsmrOptions::default()
         };
         let precond = additive_precond();
-        let result = solve(cats.view(), &y, None, &params, Some(&precond)).unwrap();
+        let result = solve(cats.view(), &y, None, &params, &precond).unwrap();
 
         if !result.converged {
             return Ok(());

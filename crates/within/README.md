@@ -36,7 +36,13 @@ println!("LSMR converged in {} iterations", result.iterations);
 // Tighter tolerance with an explicit preconditioner config
 let lsmr = LsmrOptions { tol: 1e-10, ..LsmrOptions::default() };
 let precond = PreconditionerConfig::default();
-let result = solve(categories.view(), &y, None, &lsmr, Some(&precond))
+let result = solve(categories.view(), &y, None, &lsmr, &precond)
+    .expect("solve should succeed");
+assert!(result.converged);
+
+// Or opt into a diagonal/Jacobi preconditioner.
+let diagonal = PreconditionerConfig::Diagonal;
+let result = solve(categories.view(), &y, None, &lsmr, &diagonal)
     .expect("solve should succeed");
 assert!(result.converged);
 ```

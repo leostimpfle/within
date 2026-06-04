@@ -18,10 +18,12 @@ class PreconditionerConfig(IntEnum):
     Attributes:
         Additive: Additive Schwarz (default).
         Off: No preconditioner. Useful for debugging or well-conditioned problems.
+        Diagonal: Diagonal/Jacobi preconditioner.
     """
 
     Additive = 0
     Off = 1
+    Diagonal = 2
 
 class ReductionStrategy(IntEnum):
     """Strategy for combining subdomain contributions in additive Schwarz.
@@ -157,9 +159,10 @@ def solve(
             defaults. Default: ``LsmrOptions(tol=1e-8, maxiter=1000)``.
         weights: Observation weights, shape ``(n_obs,)``, dtype ``float64``.
             Default: unit weights (unweighted).
-        preconditioner: Controls preconditioning. Four input forms are accepted:
+        preconditioner: Controls preconditioning. Five input forms are accepted:
             ``None`` (default) builds the additive Schwarz preconditioner with
             default settings. ``PreconditionerConfig.Off`` disables it.
+            ``PreconditionerConfig.Diagonal`` uses diagonal/Jacobi scaling.
             ``AdditiveSchwarz(...)`` overrides the local-solver / reduction
             settings. A previously-built ``Preconditioner`` instance reuses an
             existing factorisation.

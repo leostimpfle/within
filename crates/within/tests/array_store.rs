@@ -46,7 +46,7 @@ fn test_array_store_f_contiguous_matches_factor_major() {
         &y,
         None,
         &default_params(),
-        Some(&additive_precond()),
+        additive_precond(),
     )
     .expect("ArrayStore solve");
 
@@ -56,8 +56,7 @@ fn test_array_store_f_contiguous_matches_factor_major() {
         .collect();
     let store = FactorMajorStore::new(factor_cols, cats.nrows()).expect("valid FactorMajorStore");
     let design = Design::from_store(store).expect("valid design");
-    let solver =
-        within::Solver::new(design, None::<Vec<f64>>, Some(&additive_precond())).expect("solver");
+    let solver = within::Solver::new(design, None, additive_precond()).expect("solver");
     let result_fms = solver
         .solve(&y, &default_params())
         .expect("FactorMajorStore solve");
@@ -80,14 +79,8 @@ fn test_array_store_c_contiguous_solves() {
     let (cats, y) = larger_problem();
     assert!(cats.is_standard_layout()); // C-contiguous by default
 
-    let result = solve(
-        cats.view(),
-        &y,
-        None,
-        &default_params(),
-        Some(&additive_precond()),
-    )
-    .expect("C-contiguous ArrayStore solve");
+    let result = solve(cats.view(), &y, None, &default_params(), additive_precond())
+        .expect("C-contiguous ArrayStore solve");
 
     assert!(result.converged);
     common::assert_solution_finite(&result);
@@ -166,7 +159,7 @@ fn test_array_store_weighted() {
         &y,
         Some(&weights),
         &default_params(),
-        Some(&additive_precond()),
+        additive_precond(),
     )
     .expect("weighted ArrayStore solve");
 
