@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use crate::block_elim::BlockElimSolver;
 use crate::config::{LocalSolverConfig, PreconditionerConfig};
 use crate::domain::{Design, LocalDomain};
-use crate::observation::{validate_weights, Store};
+use crate::observation::{factor_columns, level_at, validate_weights, Store};
 use crate::BuildError;
 
 /// Concrete additive Schwarz type used in the parent crate.
@@ -55,26 +55,6 @@ impl DiagonalPreconditioner {
             inv_diag: Arc::from(inv_diag),
         }
     }
-
-    fn apply_scaling(&self, x: &[f64], y: &mut [f64]) -> Result<(), schwarz_precond::SolveError> {
-        let n = self.inv_diag.len();
-        if x.len() != n {
-            return Err(schwarz_precond::SolveError::InvalidInput {
-                context: "DiagonalPreconditioner::apply",
-                message: format!("x.len() ({}) != n_dofs ({})", x.len(), n),
-            });
-        }
-        if y.len() != n {
-            return Err(schwarz_precond::SolveError::InvalidInput {
-                context: "DiagonalPreconditioner::apply",
-                message: format!("y.len() ({}) != n_dofs ({})", y.len(), n),
-            });
-        }
-        for ((yi, &xi), &di) in y.iter_mut().zip(x.iter()).zip(self.inv_diag.iter()) {
-            *yi = di * xi;
-        }
-        Ok(())
-    }
 }
 
 impl Operator for DiagonalPreconditioner {
@@ -87,11 +67,27 @@ impl Operator for DiagonalPreconditioner {
     }
 
     fn apply(&self, x: &[f64], y: &mut [f64]) -> Result<(), schwarz_precond::SolveError> {
-        self.apply_scaling(x, y)
+        let n = self.inv_diag.len();
+        if x.len() != n || y.len() != n {
+            return Err(schwarz_precond::SolveError::InvalidInput {
+                context: "DiagonalPreconditioner::apply",
+                message: format!(
+                    "x.len()={}, y.len()={}, expected n_dofs={}",
+                    x.len(),
+                    y.len(),
+                    n
+                ),
+            });
+        }
+        for ((yi, &xi), &di) in y.iter_mut().zip(x.iter()).zip(self.inv_diag.iter()) {
+            *yi = di * xi;
+        }
+        Ok(())
     }
 
+    /// A diagonal operator is symmetric (`M^T = M`), so the adjoint is `apply`.
     fn apply_adjoint(&self, x: &[f64], y: &mut [f64]) -> Result<(), schwarz_precond::SolveError> {
-        self.apply_scaling(x, y)
+        self.apply(x, y)
     }
 }
 
@@ -204,36 +200,37 @@ fn build_diagonal<S: Store>(
     weights: Option<&[f64]>,
 ) -> Result<DiagonalPreconditioner, BuildError> {
     let mut diag = vec![0.0; design.n_dofs];
+    let cols = factor_columns(&design.store);
 
     for (factor_idx, factor) in design.factors.iter().enumerate() {
         let slice = &mut diag[factor.offset..factor.offset + factor.n_levels];
-        match design.store.factor_column(factor_idx) {
-            Some(levels) => {
-                for (uid, &level) in levels.iter().enumerate() {
-                    slice[level as usize] += weights.map_or(1.0, |w| w[uid]);
-                }
-            }
-            None => {
-                for uid in 0..design.n_obs {
-                    let level = design.store.level(uid, factor_idx) as usize;
-                    slice[level] += weights.map_or(1.0, |w| w[uid]);
-                }
-            }
+        for uid in 0..design.n_obs {
+            let level = level_at(&design.store, cols[factor_idx], uid, factor_idx);
+            slice[level] += weights.map_or(1.0, |w| w[uid]);
         }
     }
 
-    let mut inv_diag = Vec::with_capacity(diag.len());
-    for (index, d) in diag.into_iter().enumerate() {
-        if !d.is_finite() || d <= 0.0 {
+    // Invert in place. A zero diagonal entry is an unidentified DOF — a
+    // structural zero column of `D` from an unobserved or fully zero-weighted
+    // level. Take the pseudo-inverse (`inv = 0`) so the coordinate stays in the
+    // preconditioner's null space and resolves to 0, matching the
+    // unpreconditioned path. A non-finite reciprocal (a diagonal so small that
+    // `1/d` overflows) is genuinely degenerate and still rejected.
+    for (index, d) in diag.iter_mut().enumerate() {
+        if *d == 0.0 {
+            continue;
+        }
+        let inv = 1.0 / *d;
+        if !inv.is_finite() {
             return Err(BuildError::SingularDiagonal {
                 block: "diagonal",
                 index,
             });
         }
-        inv_diag.push(1.0 / d);
+        *d = inv;
     }
 
-    Ok(DiagonalPreconditioner::new(inv_diag))
+    Ok(DiagonalPreconditioner::new(diag))
 }
 
 /// Build a [`Preconditioner`] from a design and optional observation weights.

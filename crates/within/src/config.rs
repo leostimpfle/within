@@ -121,6 +121,10 @@ pub enum PreconditionerConfig {
         reduction: ReductionStrategy,
     },
     /// Diagonal/Jacobi preconditioner with `M^{-1} = diag(D^T W D)^{-1}`.
+    ///
+    /// A level with no observations (or one that is fully zero-weighted) has a
+    /// zero diagonal; it takes the pseudo-inverse (`inv = 0`), pinning that
+    /// coordinate to 0 as on the unpreconditioned path.
     Diagonal,
 }
 

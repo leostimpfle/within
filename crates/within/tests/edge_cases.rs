@@ -2,7 +2,7 @@ use ndarray::array;
 use rand::rngs::SmallRng;
 use rand::{Rng, SeedableRng};
 use within::observation::FactorMajorStore;
-use within::{solve, BuildError, Design, LsmrOptions, PreconditionerConfig, Solver, WithinError};
+use within::{solve, Design, LsmrOptions, PreconditionerConfig, Solver};
 
 #[path = "common/orchestrate_helpers.rs"]
 mod common;
@@ -94,29 +94,34 @@ fn test_zero_weight_error_with_preconditioner() {
     );
 }
 
+/// All-zero weights make every diagonal entry zero. Unlike the additive path
+/// (whose local factorization hits a zero pivot and errors — see
+/// `test_zero_weight_error_with_preconditioner`), the diagonal preconditioner
+/// takes the pseudo-inverse of each zero entry, so — like the unpreconditioned
+/// path — it solves the resulting zero system and returns x=0.
 #[test]
-fn test_zero_weight_error_with_diagonal_preconditioner() {
+fn test_zero_weight_diagonal_preconditioner_returns_zero() {
     let cats = array![[0u32, 0], [1u32, 0], [0u32, 1], [1u32, 1], [2u32, 0]];
     let y = vec![1.0f64; 5];
     let weights = vec![0.0f64; 5];
-    let precond = PreconditionerConfig::Diagonal;
 
-    let err = solve(
+    let result = solve(
         cats.view(),
         &y,
         Some(&weights),
         &LsmrOptions::default(),
-        &precond,
+        &PreconditionerConfig::Diagonal,
     )
-    .expect_err("zero weights with diagonal preconditioner should produce an error");
+    .expect("zero weights with diagonal preconditioner should succeed");
 
-    match err {
-        WithinError::Build(BuildError::SingularDiagonal {
-            block: "diagonal",
-            index: 0,
-        }) => {}
-        other => panic!("expected diagonal SingularDiagonal, got {other:?}"),
-    }
+    assert!(
+        result.converged,
+        "zero-Gramian system should trivially converge"
+    );
+    assert!(
+        result.x.iter().all(|&v| v == 0.0),
+        "zero-Gramian solution must be the zero vector"
+    );
 }
 
 /// Without a preconditioner, all-zero weights produce a zero system and a
@@ -146,10 +151,17 @@ fn test_zero_weight_no_preconditioner_returns_zero() {
     );
 }
 
+/// A preconditioner changes convergence, not the answer: the diagonal and
+/// unpreconditioned solves must agree on the same least-squares solution.
+///
+/// Uses a single full-rank factor so the solution is unique. A multi-factor FE
+/// design is rank-deficient (the additive constant is unidentified), so the
+/// minimum-norm coefficient vector LSMR returns depends on the preconditioned
+/// metric — only the fitted values, not the raw coefficients, are invariant.
 #[test]
-fn test_diagonal_and_unpreconditioned_solutions_are_finite() {
-    let cats = array![[0u32, 0], [1, 0], [0, 1], [1, 1], [2, 0], [2, 1]];
-    let y = vec![1.0, 2.0, 1.5, 2.5, 3.0, 3.5];
+fn test_diagonal_matches_unpreconditioned_solution() {
+    let cats = array![[0u32], [0], [1], [1], [2], [2]];
+    let y = vec![1.0, 3.0, 2.0, 4.0, 5.0, 7.0];
     let params = LsmrOptions::default();
 
     let diagonal = solve(
@@ -164,7 +176,38 @@ fn test_diagonal_and_unpreconditioned_solutions_are_finite() {
         .expect("unpreconditioned solve");
 
     common::assert_solution_finite(&diagonal);
-    common::assert_solution_finite(&unpreconditioned);
+    common::assert_solutions_close(&diagonal.x, &unpreconditioned.x, 1e-6);
+}
+
+/// A factor whose observed levels leave interior gaps (`n_levels = max + 1`)
+/// produces structural zero columns of `D` — unidentified DOFs whose diagonal
+/// is zero. The unpreconditioned and additive paths both pin those coefficients
+/// to 0 and solve fine; with the pseudo-inverse of a zero diagonal, the diagonal
+/// preconditioner now matches rather than failing with `SingularDiagonal`.
+#[test]
+fn test_diagonal_matches_unpreconditioned_on_gap_design() {
+    // Single factor observed only at levels {0, 2, 4} => n_levels = 5, so global
+    // DOFs 1 and 3 have no observations.
+    let cats = array![[0u32], [2], [4]];
+    let y = vec![1.0, 2.0, 3.0];
+    let params = LsmrOptions::default();
+
+    let diagonal = solve(
+        cats.view(),
+        &y,
+        None,
+        &params,
+        &PreconditionerConfig::Diagonal,
+    )
+    .expect("diagonal solve must succeed on a gap design (pseudo-inverse of zero diagonal)");
+    let unpreconditioned = solve(cats.view(), &y, None, &params, &PreconditionerConfig::Off)
+        .expect("unpreconditioned solve");
+
+    assert!(diagonal.converged, "diagonal solve must converge");
+    common::assert_solutions_close(&diagonal.x, &unpreconditioned.x, 1e-6);
+    // The unobserved DOFs are unidentified and must be pinned to exactly 0.
+    assert_eq!(diagonal.x[1], 0.0, "unobserved DOF 1 must be 0");
+    assert_eq!(diagonal.x[3], 0.0, "unobserved DOF 3 must be 0");
 }
 
 // ---------------------------------------------------------------------------

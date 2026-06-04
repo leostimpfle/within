@@ -13,7 +13,7 @@ Modified LSMR is now the sole iterative solver, replacing CG and GMRES.
 
 - **Modified LSMR:** preconditioned `mlsmr` on `sqrt(W) D` (no normal-equation formation), optional windowed mGS reorthogonalization via `LsmrOptions.local_size`, and rejection of non-finite input with `SolveError::InvalidInput` (was silent NaN propagation).
 - `PreconditionerConfig::Off` variant — explicit identity preconditioner.
-- `PreconditionerConfig::Diagonal` variant — diagonal/Jacobi preconditioner (`M⁻¹ = diag(DᵀWD)⁻¹`), exposed in Python as `PreconditionerConfig.Diagonal`.
+- `PreconditionerConfig::Diagonal` variant — diagonal/Jacobi preconditioner (`M⁻¹ = diag(DᵀWD)⁻¹`), exposed in Python as `PreconditionerConfig.Diagonal`. A zero diagonal (an unobserved or fully zero-weighted level — an unidentified DOF) takes the pseudo-inverse (`inv = 0`), pinning that coordinate to 0 like the unpreconditioned path; only a non-finite reciprocal is rejected with `BuildError::SingularDiagonal`.
 - Python `within.config` submodule: `AdditiveSchwarz`, `LocalSolverConfig`, `ApproxCholConfig`, `ApproxSchurConfig`, `ReductionStrategy`.
 - Python `Solver` / `solve` / `solve_batch` accept a 5-form preconditioner: `None`, `PreconditionerConfig.{Off, Additive, Diagonal}`, `AdditiveSchwarz(...)`, or a pre-built `Preconditioner` (reuse path).
 - `From<&Preconditioner> for PreconditionerInput`: `Solver::new(.., &precond)` now works alongside the owned form. Cloning a `Preconditioner` is O(1) (refcount-only), so this is a cheap reuse path.
