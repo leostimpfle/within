@@ -91,7 +91,7 @@ proptest! {
         let result_a = solve(cats.view(), &y, None, &params, &precond).unwrap();
 
         // Path B: Solver::new() — identical to solve() but without timing wrapper
-        let solver_b = Solver::new(cats.view(), None::<Vec<f64>>, &precond).unwrap();
+        let solver_b = Solver::new(cats.view(), None, &precond).unwrap();
         let result_b = solver_b.solve(&y, &params).unwrap();
 
         prop_assert_eq!(

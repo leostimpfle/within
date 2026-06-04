@@ -56,7 +56,7 @@ fn test_array_store_f_contiguous_matches_factor_major() {
         .collect();
     let store = FactorMajorStore::new(factor_cols, cats.nrows()).expect("valid FactorMajorStore");
     let design = Design::from_store(store).expect("valid design");
-    let solver = within::Solver::new(design, None::<Vec<f64>>, additive_precond()).expect("solver");
+    let solver = within::Solver::new(design, None, additive_precond()).expect("solver");
     let result_fms = solver
         .solve(&y, &default_params())
         .expect("FactorMajorStore solve");

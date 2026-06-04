@@ -162,6 +162,13 @@ impl BatchSolveResult {
 /// [`Solver::solve_batch`] repeatedly with different RHS vectors. The expensive
 /// preconditioner factorization happens only at construction time; LSMR tuning
 /// ([`LsmrOptions`]) is supplied per call.
+///
+/// Ownership: the store type `S` decides whether the categories are borrowed
+/// (`ArrayStore`, zero-copy from an `ArrayView2`) or owned (`FactorMajorStore`);
+/// weights are always owned. A solver that outlives its inputs — e.g. one
+/// returned across the Python boundary — therefore uses an owned store. The
+/// borrow/own choice is parameterized only for the large category data; for a
+/// one-shot weighted solve from a borrowed slice, use the free [`solve`] function.
 pub struct Solver<S: Store> {
     design: Design<S>,
     weights: Option<Vec<f64>>,
@@ -190,20 +197,19 @@ impl<S: Store> Solver<S> {
     /// - `PreconditionerConfig::Diagonal` — use diagonal/Jacobi preconditioning
     /// - [`Preconditioner`] or `&Preconditioner` — reuse a previously built (or deserialized) preconditioner
     ///
-    /// `weights` accepts any `Option<impl Into<Vec<f64>>>` — pass `None` for
-    /// unweighted, or an owned `Vec<f64>` / `&[f64]`. The slice form is cloned
-    /// once at construction.
+    /// `weights` is `None` for unweighted, or an owned `Vec<f64>` that the
+    /// solver takes ownership of (it re-reads the weights on every solve). To
+    /// solve once from a borrowed slice, use the free [`solve`] function.
     ///
     /// LSMR tuning ([`LsmrOptions`]) is supplied per call to [`Solver::solve`] /
     /// [`Solver::solve_batch`], not at construction; preconditioner factorization
     /// state is the only expensive thing built here.
     pub fn new<'a>(
         design: impl IntoDesign<'a, Store = S>,
-        weights: Option<impl Into<Vec<f64>>>,
+        weights: Option<Vec<f64>>,
         preconditioner: impl Into<PreconditionerInput>,
     ) -> Result<Self, BuildError> {
         let design = design.into_design()?;
-        let weights = weights.map(Into::into);
         validate_weights(weights.as_deref(), design.n_obs)?;
 
         let preconditioner = match preconditioner.into() {
@@ -382,7 +388,7 @@ pub fn solve(
     preconditioner: impl Into<PreconditionerInput>,
 ) -> Result<SolveResult, WithinError> {
     let t_start = Instant::now();
-    let solver = Solver::new(categories, weights, preconditioner)?;
+    let solver = Solver::new(categories, weights.map(|w| w.to_vec()), preconditioner)?;
     let time_setup = t_start.elapsed().as_secs_f64();
     let mut result = solver.solve(y, lsmr)?;
     // Include solver construction (preconditioner build) in setup time
@@ -403,7 +409,7 @@ pub fn solve_batch(
     preconditioner: impl Into<PreconditionerInput>,
 ) -> Result<BatchSolveResult, WithinError> {
     let t_start = Instant::now();
-    let solver = Solver::new(categories, weights, preconditioner)?;
+    let solver = Solver::new(categories, weights.map(|w| w.to_vec()), preconditioner)?;
     let mut result = solver.solve_batch(ys, lsmr)?;
     result.time_total = t_start.elapsed().as_secs_f64();
     Ok(result)

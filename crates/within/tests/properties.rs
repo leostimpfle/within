@@ -16,7 +16,7 @@ proptest! {
     fn prop_preconditioner_serde_roundtrip((cats, _y) in random_fe_problem_strategy()) {
         let precond = additive_precond();
 
-        let solver = within::Solver::new(cats.view(), None::<Vec<f64>>, &precond).unwrap();
+        let solver = within::Solver::new(cats.view(), None, &precond).unwrap();
         let fe_precond = solver.preconditioner().unwrap();
 
         let bytes = postcard::to_stdvec(fe_precond).unwrap();

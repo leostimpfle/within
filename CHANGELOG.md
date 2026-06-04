@@ -13,8 +13,9 @@ Modified LSMR is now the sole iterative solver, replacing CG and GMRES.
 
 - **Modified LSMR:** preconditioned `mlsmr` on `sqrt(W) D` (no normal-equation formation), optional windowed mGS reorthogonalization via `LsmrOptions.local_size`, and rejection of non-finite input with `SolveError::InvalidInput` (was silent NaN propagation).
 - `PreconditionerConfig::Off` variant — explicit identity preconditioner.
+- `PreconditionerConfig::Diagonal` variant — diagonal/Jacobi preconditioner (`M⁻¹ = diag(DᵀWD)⁻¹`), exposed in Python as `PreconditionerConfig.Diagonal`.
 - Python `within.config` submodule: `AdditiveSchwarz`, `LocalSolverConfig`, `ApproxCholConfig`, `ApproxSchurConfig`, `ReductionStrategy`.
-- Python `Solver` / `solve` / `solve_batch` accept a 4-form preconditioner: `None`, `PreconditionerConfig.{Off, Additive}`, `AdditiveSchwarz(...)`, or a pre-built `Preconditioner` (reuse path).
+- Python `Solver` / `solve` / `solve_batch` accept a 5-form preconditioner: `None`, `PreconditionerConfig.{Off, Additive, Diagonal}`, `AdditiveSchwarz(...)`, or a pre-built `Preconditioner` (reuse path).
 - `From<&Preconditioner> for PreconditionerInput`: `Solver::new(.., &precond)` now works alongside the owned form. Cloning a `Preconditioner` is O(1) (refcount-only), so this is a cheap reuse path.
 - `BuildError::PreconditionerDimensionMismatch { expected, actual_rows, actual_cols }`: `Solver::new` fails fast when a reused preconditioner's shape does not match the design's DOF count, instead of bubbling up an opaque error from inside the iterative solver.
 
@@ -45,7 +46,7 @@ Modified LSMR is now the sole iterative solver, replacing CG and GMRES.
 - **BREAKING:** `DesignOperator` is `pub(crate)`.
 - **BREAKING:** `SolveResult.final_residual` / `BatchSolveResult.final_residual` renamed to `residual` (Rust + Python).- **BREAKING:** `SchwarzPreconditioner::new(entries, strategy)` replaces `new(entries, n_dofs)` / `with_strategy(entries, n_dofs, strategy)`; `n_dofs` derived from entries. `resolved_reduction_strategy()` renamed to `reduction_strategy()`; dead `with_reduction_strategy` + configured getter removed. `BuildError::GlobalIndexOutOfBounds` removed.
 - **BREAKING (Python):** `ApproxCholConfig.split: int (1=off)` → `split_merge: int | None (None=off)`, matching Rust. Pickle payload shape changed.
-- **BREAKING:** `Solver::new` accepts `Option<impl Into<Vec<f64>>>` for weights; `WithinError` is `#[non_exhaustive]`.
+- **BREAKING:** weights types now mirror each API's relationship to the data: the persistent `Solver::new` takes owned `weights: Option<Vec<f64>>` (it holds them across solves), while the one-shot `solve` / `solve_batch` take borrowed `weights: Option<&[f64]>`. A bare `None` works for both (no turbofish). `WithinError` is `#[non_exhaustive]`.
 - Free `solve()` / `solve_batch()` accept `impl Into<PreconditionerInput>` (same shapes as `Solver::new`).
 - `Solver` and `Preconditioner` implement `Debug`.
 - `approx-chol` bumped `0.1` → `0.2` (now published on crates.io); the new upstream sampler may produce slightly different fill edges in the Schur complement.

@@ -14,7 +14,7 @@ fn test_lsmr_unpreconditioned() {
         maxiter: 1000,
         ..Default::default()
     };
-    let solver = Solver::new(design, None::<Vec<f64>>, None).expect("build solver");
+    let solver = Solver::new(design, None, None).expect("build solver");
     let result = solver.solve(&y, &params).expect("solve");
     common::assert_converged_with_small_residual(&result, 1e-6);
 }
@@ -33,7 +33,7 @@ fn test_lsmr_preconditioned() {
         local_solver: LocalSolverConfig::default(),
         reduction: ReductionStrategy::Auto,
     };
-    let solver = Solver::new(design, None::<Vec<f64>>, &precond).expect("build solver");
+    let solver = Solver::new(design, None, &precond).expect("build solver");
     let result = solver.solve(&y, &params).expect("solve");
     common::assert_converged_with_small_residual(&result, 1e-6);
 }
@@ -49,7 +49,7 @@ fn test_lsmr_diagonal_preconditioned() {
         ..Default::default()
     };
     let precond = PreconditionerConfig::Diagonal;
-    let solver = Solver::new(design, None::<Vec<f64>>, &precond).expect("build solver");
+    let solver = Solver::new(design, None, &precond).expect("build solver");
     let result = solver.solve(&y, &params).expect("solve");
     common::assert_converged_with_small_residual(&result, 1e-6);
     common::assert_solution_finite(&result);
@@ -65,7 +65,7 @@ fn test_lsmr_least_squares() {
         maxiter: 1000,
         ..Default::default()
     };
-    let solver = Solver::new(design, None::<Vec<f64>>, None).expect("build solver");
+    let solver = Solver::new(design, None, None).expect("build solver");
     let result = solver.solve(&y, &params).expect("solve");
     assert!(result.converged, "LSMR LS did not converge");
     common::assert_solution_finite(&result);

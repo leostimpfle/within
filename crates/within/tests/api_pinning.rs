@@ -14,30 +14,29 @@ fn precond_input_call_shapes_compile() {
     let cfg = PreconditionerConfig::default();
 
     // Obtain a prebuilt preconditioner through the public path.
-    let setup = Solver::new(categories.view(), None::<Vec<f64>>, &cfg).unwrap();
+    let setup = Solver::new(categories.view(), None, &cfg).unwrap();
     let prec = setup
         .preconditioner()
         .expect("default solver has a preconditioner")
         .clone();
 
     // Shape 1: bare `None` — resolves through `From<Option<&PreconditionerConfig>>`.
-    let _ = Solver::new(categories.view(), None::<Vec<f64>>, None).expect("None form");
+    let _ = Solver::new(categories.view(), None, None).expect("None form");
 
     // Shape 2: `&PreconditionerConfig` — resolves through `From<&PreconditionerConfig>`.
-    let _ = Solver::new(categories.view(), None::<Vec<f64>>, &cfg).expect("&Cfg form");
+    let _ = Solver::new(categories.view(), None, &cfg).expect("&Cfg form");
 
     // Shape 3: `Option<&PreconditionerConfig>` — explicit `Some(&cfg)`.
-    let _ = Solver::new(categories.view(), None::<Vec<f64>>, Some(&cfg)).expect("Some(&Cfg) form");
+    let _ = Solver::new(categories.view(), None, Some(&cfg)).expect("Some(&Cfg) form");
 
     // Shape 4: owned `Preconditioner` — resolves through `From<Preconditioner>`.
-    let _ =
-        Solver::new(categories.view(), None::<Vec<f64>>, prec.clone()).expect("owned Prec form");
+    let _ = Solver::new(categories.view(), None, prec.clone()).expect("owned Prec form");
 
     // Shape 5: `&Preconditioner` — resolves through `From<&Preconditioner>` (cheap clone).
-    let _ = Solver::new(categories.view(), None::<Vec<f64>>, &prec).expect("&Prec form");
+    let _ = Solver::new(categories.view(), None, &prec).expect("&Prec form");
 
     // Shape 6: owned `Preconditioner` again, consumed last so `prec` is moved here.
-    let _ = Solver::new(categories.view(), None::<Vec<f64>>, prec).expect("owned Prec form (move)");
+    let _ = Solver::new(categories.view(), None, prec).expect("owned Prec form (move)");
 }
 
 #[test]
@@ -46,7 +45,7 @@ fn precond_input_owned_config_form() {
     // Kept separate so the main shape sweep stays focused on the &/None variants.
     let categories = cats();
     let cfg = PreconditionerConfig::default();
-    let _ = Solver::new(categories.view(), None::<Vec<f64>>, cfg).expect("owned Cfg form");
+    let _ = Solver::new(categories.view(), None, cfg).expect("owned Cfg form");
 }
 
 #[test]
@@ -56,7 +55,7 @@ fn solve_free_function_precond_call_shapes_compile() {
     let lsmr = LsmrOptions::default();
     let cfg = PreconditionerConfig::default();
 
-    let setup = Solver::new(categories.view(), None::<Vec<f64>>, &cfg).unwrap();
+    let setup = Solver::new(categories.view(), None, &cfg).unwrap();
     let prec = setup
         .preconditioner()
         .expect("default solver has a preconditioner")
@@ -85,14 +84,12 @@ fn solve_free_function_precond_call_shapes_compile() {
 fn solver_new_weights_call_shapes_compile() {
     let categories = cats();
     let w_vec: Vec<f64> = vec![1.0; 4];
-    let w_slice: &[f64] = &w_vec;
 
-    // None weights.
-    let _ = Solver::new(categories.view(), None::<Vec<f64>>, None).expect("None weights");
+    // Bare `None` — infers, because `weights` is the concrete `Option<Vec<f64>>`
+    // (no turbofish needed). The persistent solver owns its weights; borrow-based
+    // one-shot weighting lives on the free `solve` function instead.
+    let _ = Solver::new(categories.view(), None, None).expect("None weights");
 
-    // Owned Vec<f64> weights.
-    let _ = Solver::new(categories.view(), Some(w_vec.clone()), None).expect("Vec<f64> weights");
-
-    // &[f64] weights — accepted via `impl Into<Vec<f64>>` (clones once).
-    let _ = Solver::new(categories.view(), Some(w_slice), None).expect("&[f64] weights");
+    // Owned `Vec<f64>` weights — moved into the solver.
+    let _ = Solver::new(categories.view(), Some(w_vec), None).expect("Vec<f64> weights");
 }
