@@ -2356,8 +2356,8 @@ packages:
   timestamp: 1772626120915
 - pypi: ./
   name: within-py
-  version: 0.1.0
-  sha256: e3b8d37527f9018027197fe30fbeac46d6bc5075a669248cfeb07b7011c2d20f
+  version: 0.2.0
+  sha256: 4e7c12cdbaa0ccf13e496865cca4c3d0bca29416d08d771b51147d8fbf9c7664
   requires_dist:
   - numpy>=1.24
   - scipy>=1.10
