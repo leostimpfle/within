@@ -50,8 +50,7 @@ fn test_trivial_factor_all_same_level() {
     let params = LsmrOptions::default();
     let precond = additive_precond();
 
-    let result =
-        solve(cats.view(), &y, None, &params, Some(&precond)).expect("trivial-factor solve");
+    let result = solve(cats.view(), &y, None, &params, &precond).expect("trivial-factor solve");
     assert!(
         result.converged,
         "solver did not converge with constant factor"
@@ -86,7 +85,7 @@ fn test_zero_weight_error_with_preconditioner() {
         &y,
         Some(&weights),
         &LsmrOptions::default(),
-        Some(&precond),
+        &precond,
     );
     assert!(
         result.is_err(),
@@ -107,7 +106,7 @@ fn test_zero_weight_error_with_diagonal_preconditioner() {
         &y,
         Some(&weights),
         &LsmrOptions::default(),
-        Some(&precond),
+        &precond,
     )
     .expect_err("zero weights with diagonal preconditioner should produce an error");
 
@@ -133,7 +132,7 @@ fn test_zero_weight_no_preconditioner_returns_zero() {
         &y,
         Some(&weights),
         &LsmrOptions::default(),
-        Some(&PreconditionerConfig::Off),
+        &PreconditionerConfig::Off,
     )
     .expect("zero weights with no preconditioner should succeed");
 
@@ -158,17 +157,11 @@ fn test_diagonal_and_unpreconditioned_solutions_are_finite() {
         &y,
         None,
         &params,
-        Some(&PreconditionerConfig::Diagonal),
+        &PreconditionerConfig::Diagonal,
     )
     .expect("diagonal solve");
-    let unpreconditioned = solve(
-        cats.view(),
-        &y,
-        None,
-        &params,
-        Some(&PreconditionerConfig::Off),
-    )
-    .expect("unpreconditioned solve");
+    let unpreconditioned = solve(cats.view(), &y, None, &params, &PreconditionerConfig::Off)
+        .expect("unpreconditioned solve");
 
     common::assert_solution_finite(&diagonal);
     common::assert_solution_finite(&unpreconditioned);
@@ -245,7 +238,7 @@ fn test_large_design_convergence() {
         ..LsmrOptions::default()
     };
     let precond = additive_precond();
-    let solver = Solver::new(design, None::<Vec<f64>>, Some(&precond)).expect("solver build");
+    let solver = Solver::new(design, None::<Vec<f64>>, &precond).expect("solver build");
     let result = solver.solve(&y, &params).expect("large design solve");
 
     assert!(
@@ -294,15 +287,9 @@ fn test_uniform_weights_matches_unweighted() {
     let params = LsmrOptions::default();
     let precond = additive_precond();
 
-    let r_unit = solve(cats.view(), &y, None, &params, Some(&precond)).expect("unweighted solve");
-    let r_uniform = solve(
-        cats.view(),
-        &y,
-        Some(&uniform_weights),
-        &params,
-        Some(&precond),
-    )
-    .expect("uniform-weight solve");
+    let r_unit = solve(cats.view(), &y, None, &params, &precond).expect("unweighted solve");
+    let r_uniform = solve(cats.view(), &y, Some(&uniform_weights), &params, &precond)
+        .expect("uniform-weight solve");
 
     // Constant scaling of W leaves G and D^T W y proportional, so the solution
     // is identical.
@@ -329,7 +316,7 @@ fn test_repeated_solve_is_deterministic() {
 
     let params = LsmrOptions::default();
     let precond = additive_precond();
-    let solver = Solver::new(design, None::<Vec<f64>>, Some(&precond)).expect("solver build");
+    let solver = Solver::new(design, None::<Vec<f64>>, &precond).expect("solver build");
 
     let r1 = solver.solve(&y, &params).expect("first solve");
     let r2 = solver.solve(&y, &params).expect("second solve");

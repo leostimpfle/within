@@ -24,10 +24,9 @@ fn test_solver_matches_oneshot() {
     let params = default_params();
     let precond = additive_precond();
 
-    let oneshot = solve(categories.view(), &y, None, &params, Some(&precond)).expect("oneshot");
+    let oneshot = solve(categories.view(), &y, None, &params, &precond).expect("oneshot");
 
-    let solver =
-        Solver::new(categories.view(), None::<Vec<f64>>, Some(&precond)).expect("solver build");
+    let solver = Solver::new(categories.view(), None::<Vec<f64>>, &precond).expect("solver build");
     let result = solver.solve(&y, &params).expect("solver solve");
 
     assert!(result.converged);
@@ -43,8 +42,7 @@ fn test_solver_demeaned() {
     let params = default_params();
     let precond = additive_precond();
 
-    let solver =
-        Solver::new(categories.view(), None::<Vec<f64>>, Some(&precond)).expect("solver build");
+    let solver = Solver::new(categories.view(), None::<Vec<f64>>, &precond).expect("solver build");
     let result = solver.solve(&y, &params).expect("solver solve");
 
     assert_eq!(result.demeaned.len(), y.len());
@@ -74,8 +72,7 @@ fn test_solver_diagonal_preconditioner() {
     let params = default_params();
     let precond = PreconditionerConfig::Diagonal;
 
-    let solver =
-        Solver::new(categories.view(), None::<Vec<f64>>, Some(&precond)).expect("solver build");
+    let solver = Solver::new(categories.view(), None::<Vec<f64>>, &precond).expect("solver build");
     assert!(
         solver.preconditioner().is_some(),
         "diagonal preconditioner should be cached"
@@ -91,8 +88,7 @@ fn test_diagonal_preconditioner_single_factor_is_cached() {
     let categories = array![[0u32], [1], [0], [2], [1]];
     let precond = PreconditionerConfig::Diagonal;
 
-    let solver =
-        Solver::new(categories.view(), None::<Vec<f64>>, Some(&precond)).expect("solver build");
+    let solver = Solver::new(categories.view(), None::<Vec<f64>>, &precond).expect("solver build");
 
     let cached = solver
         .preconditioner()
@@ -111,8 +107,7 @@ fn test_solver_batch() {
     let params = default_params();
     let precond = additive_precond();
 
-    let solver =
-        Solver::new(categories.view(), None::<Vec<f64>>, Some(&precond)).expect("solver build");
+    let solver = Solver::new(categories.view(), None::<Vec<f64>>, &precond).expect("solver build");
 
     let r1 = solver.solve(&y1, &params).expect("solve y1");
     let r2 = solver.solve(&y2, &params).expect("solve y2");
@@ -154,8 +149,7 @@ fn test_serde_roundtrip() {
     let params = default_params();
     let precond = additive_precond();
 
-    let solver1 =
-        Solver::new(categories.view(), None::<Vec<f64>>, Some(&precond)).expect("solver build");
+    let solver1 = Solver::new(categories.view(), None::<Vec<f64>>, &precond).expect("solver build");
     let r1 = solver1.solve(&y, &params).expect("solve 1");
 
     // Serialize preconditioner
@@ -180,8 +174,7 @@ fn test_serde_roundtrip() {
 fn test_diagonal_serde_roundtrip() {
     let (categories, _) = categories_and_y();
     let precond = PreconditionerConfig::Diagonal;
-    let solver =
-        Solver::new(categories.view(), None::<Vec<f64>>, Some(&precond)).expect("solver build");
+    let solver = Solver::new(categories.view(), None::<Vec<f64>>, &precond).expect("solver build");
     let precond_ref = solver
         .preconditioner()
         .expect("should have diagonal preconditioner");
@@ -207,7 +200,7 @@ fn test_solver_accepts_prebuilt_design() {
     let params = default_params();
     let precond = additive_precond();
 
-    let solver = Solver::new(design, None::<Vec<f64>>, Some(&precond)).expect("prebuilt design");
+    let solver = Solver::new(design, None::<Vec<f64>>, &precond).expect("prebuilt design");
     let result = solver.solve(&y, &params).expect("solve");
     assert!(result.converged);
 }

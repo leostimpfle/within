@@ -144,11 +144,11 @@ let precond = PreconditionerConfig::Additive {
     local_solver: LocalSolverConfig::default(),
     reduction: ReductionStrategy::default(),
 };
-let r = solve(categories.view(), &y, None, &lsmr, Some(&precond))?;
+let r = solve(categories.view(), &y, None, &lsmr, &precond)?;
 
 // Opt into diagonal/Jacobi preconditioning
 let diagonal = PreconditionerConfig::Diagonal;
-let r = solve(categories.view(), &y, None, &lsmr, Some(&diagonal))?;
+let r = solve(categories.view(), &y, None, &lsmr, &diagonal)?;
 ```
 
 Persistent solver — build once, solve many:

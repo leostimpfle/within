@@ -47,7 +47,7 @@ fn test_empty_categories_via_solve() {
     let y: Vec<f64> = vec![];
     let params = LsmrOptions::default();
     let precond = PreconditionerConfig::default();
-    let result = solve(cats.view(), &y, None, &params, Some(&precond));
+    let result = solve(cats.view(), &y, None, &params, &precond);
     assert!(result.is_err());
     match result.unwrap_err() {
         WithinError::Build(BuildError::EmptyObservations) => {}
