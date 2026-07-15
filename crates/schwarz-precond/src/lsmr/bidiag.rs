@@ -97,6 +97,23 @@ fn par_dot(a: &[f64], b: &[f64]) -> f64 {
     }
 }
 
+/// `α = √⟨v, p̃⟩`. A near-breakdown negative `vp` (exact `‖v‖²_M ≥ 0` rounded
+/// below 0) within the relative floor `√ε·‖v‖‖p̃‖` clamps to `α = 0`; a genuinely
+/// indefinite preconditioner raises.
+fn alpha_from_vp(v: &[f64], p_tilde: &[f64]) -> Result<f64, SolveError> {
+    let vp = par_dot(v, p_tilde);
+    if vp < 0.0 {
+        let bound = f64::EPSILON.sqrt() * (par_dot(v, v) * par_dot(p_tilde, p_tilde)).sqrt();
+        if vp < -bound {
+            return Err(SolveError::InvalidInput {
+                context: "mlsmr",
+                message: "preconditioner not positive definite (⟨v, Mv⟩ < 0)".to_string(),
+            });
+        }
+    }
+    Ok(vp.max(0.0).sqrt())
+}
+
 /// Windowed ring of recent basis vectors for local (windowed) modified
 /// Gram-Schmidt reorthogonalization.
 ///
@@ -487,17 +504,8 @@ impl<'a, A: Operator + ?Sized, M: Operator + ?Sized> ModifiedGolubKahan<'a, A, M
         // ṽ₁ = M⁻¹ p̃
         preconditioner.apply(&bufs.p_tilde, &mut bufs.v)?;
 
-        // α₁ = √⟨ṽ₁, p̃⟩ via the M-norm dot product trick. vp == 0 is a clean
-        // breakdown; vp < 0 means a non-positive-definite preconditioner and
-        // must be rejected rather than silently yielding α₁ = 0.
-        let vp = par_dot(&bufs.v, &bufs.p_tilde);
-        if vp < 0.0 {
-            return Err(SolveError::InvalidInput {
-                context: "mlsmr",
-                message: "preconditioner not positive definite (⟨v, Mv⟩ < 0)".to_string(),
-            });
-        }
-        let alpha = vp.sqrt();
+        // α₁ = √⟨ṽ₁, p̃⟩ via the M-norm dot product trick.
+        let alpha = alpha_from_vp(&bufs.v, &bufs.p_tilde)?;
 
         // Normalize v; leave p_tilde at α₁·p̃_norm.
         if alpha > 0.0 {
@@ -564,17 +572,7 @@ impl<'a, A: Operator + ?Sized, M: Operator + ?Sized> ModifiedGolubKahan<'a, A, M
             reorth.reorthogonalize(&mut self.bufs.v, &mut self.bufs.p_tilde);
         }
 
-        let vp = par_dot(&self.bufs.v, &self.bufs.p_tilde);
-        // vp = ⟨v, M v⟩. vp == 0 is a clean (lucky) breakdown; vp < 0 means
-        // the preconditioner is not positive definite, which would otherwise
-        // produce a silent premature "converged" at the wrong solution.
-        if vp < 0.0 {
-            return Err(SolveError::InvalidInput {
-                context: "mlsmr",
-                message: "preconditioner not positive definite (⟨v, Mv⟩ < 0)".to_string(),
-            });
-        }
-        let alpha_new = vp.sqrt();
+        let alpha_new = alpha_from_vp(&self.bufs.v, &self.bufs.p_tilde)?;
 
         if alpha_new > 0.0 {
             scale_in_place(&mut self.bufs.v, 1.0 / alpha_new);
