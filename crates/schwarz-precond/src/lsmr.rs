@@ -15,13 +15,21 @@ use bidiag::{BidiagStep, Bidiagonalization, GolubKahan, ModifiedGolubKahan};
 use recurrence::{ConvergenceState, LsmrRecurrenceState, RotationStep, SolutionState, Stop};
 
 /// Euclidean norm of a vector.
+///
+/// Max-scaled so the squared sum can't overflow for large-magnitude vectors.
 #[inline]
 pub(crate) fn vec_norm(v: &[f64]) -> f64 {
-    let mut s = 0.0f64;
-    for &x in v {
-        s += x * x;
+    let scale = v.iter().fold(0.0f64, |m, &x| m.max(x.abs()));
+    if scale == 0.0 {
+        // f64::max ignores NaN, so all-{zero,NaN} vectors land here: propagate
+        // NaN instead of laundering it into a finite-looking zero norm.
+        return if v.iter().any(|x| x.is_nan()) {
+            f64::NAN
+        } else {
+            0.0
+        };
     }
-    s.sqrt()
+    scale * v.iter().map(|&x| (x / scale).powi(2)).sum::<f64>().sqrt()
 }
 
 /// Result of an LSMR solve.
