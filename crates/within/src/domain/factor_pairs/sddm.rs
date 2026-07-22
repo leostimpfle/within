@@ -7,7 +7,7 @@
 //! is validated and adopted without sign folding, scaling, or a data rewrite.
 //! Frustrated components — where no signature exists — keep their single
 //! *signed* operator (dominance-scaled but not folded to a Z-matrix) and carry
-//! a [`SchurReduction::Cover`] marker; the Gremban double cover that makes the
+//! a [`Reduction::Cover`] marker; the Gremban double cover that makes the
 //! reduced Schur SDDM is built transiently at factor time (see
 //! [`crate::block_elim`]), so the stored operator stays single-sized.
 
@@ -40,23 +40,62 @@ pub(crate) enum SolveSpace {
     Floating,
     Grounded,
     /// Signed operator whose reduced Schur self-grounds through its Gremban
-    /// cover ([`SchurReduction::Cover`]): the antisymmetric `[b, -b]` embed
+    /// cover ([`ReductionKind::Cover`]): the antisymmetric `[b, -b]` embed
     /// balances the RHS, so the operator-level solve does no mean-subtraction
     /// and injects no ground current.
     Signed,
 }
 
-/// How a component's reduced Schur complement is factored.
-///
-/// Orthogonal to [`CoordinateMap`] (an operator-level congruence): a frustrated
-/// component keeps its single signed operator and marks the *reduction* as
-/// [`SchurReduction::Cover`], deferring the double-cover construction to factor
-/// time so the stored operator never doubles.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub(crate) enum SchurReduction {
-    #[default]
+/// The reduction strategy chosen from a component's signature, before its
+/// grounding is known: `Direct` folds to a Z-matrix and reduces its minor
+/// straight; `Cover` keeps the signed operator and defers a Gremban double
+/// cover to factor time so the stored operator never doubles. Orthogonal to
+/// [`CoordinateMap`] (an operator-level congruence). Resolved into a
+/// [`Reduction`] once the grounding is classified.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ReductionKind {
     Direct,
     Cover,
+}
+
+/// Grounding of a directly-reduced SDDM minor: `Floating` anchors one node,
+/// `Grounded` factors the full complement.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Grounding {
+    Floating,
+    Grounded,
+}
+
+impl Grounding {
+    /// The solve space a floating/grounded minor gauges.
+    pub(crate) fn solve_space(self) -> SolveSpace {
+        match self {
+            Grounding::Floating => SolveSpace::Floating,
+            Grounding::Grounded => SolveSpace::Grounded,
+        }
+    }
+}
+
+/// Resolved reduction state of a local component: the [`ReductionKind`]
+/// strategy paired with the solve space it produced. Only these combinations
+/// are reachable, so the illegal signed-with-direct pairing cannot be
+/// constructed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Reduction {
+    /// Direct Schur factorization of a floating or grounded minor.
+    Direct(Grounding),
+    /// Gremban-cover reduction of a signed operator; solves in [`SolveSpace::Signed`].
+    Cover,
+}
+
+impl Reduction {
+    /// The solve space this reduction gauges.
+    pub(crate) fn solve_space(self) -> SolveSpace {
+        match self {
+            Reduction::Direct(grounding) => grounding.solve_space(),
+            Reduction::Cover => SolveSpace::Signed,
+        }
+    }
 }
 
 /// Map between original and SDDM coordinates, applied to vectors at the
@@ -112,8 +151,7 @@ pub(crate) struct LocalComponent {
     pub(crate) diagonals: BlockDiagonals,
     pub(crate) ground_edges: GroundEdges,
     pub(crate) coordinates: CoordinateMap,
-    pub(crate) solve_space: SolveSpace,
-    pub(crate) reduction: SchurReduction,
+    pub(crate) reduction: Reduction,
 }
 
 /// The component admits no diagonal scaling to weak dominance (Boman); its
@@ -175,8 +213,7 @@ fn convert_known_laplacian(
         diagonals: row_sums,
         ground_edges,
         coordinates: CoordinateMap::default(),
-        solve_space: SolveSpace::Floating,
-        reduction: SchurReduction::Direct,
+        reduction: Reduction::Direct(Grounding::Floating),
     })
 }
 
@@ -201,7 +238,7 @@ fn convert_general(
                 cross_tab,
                 diagonals,
                 factors,
-                SchurReduction::Direct,
+                ReductionKind::Direct,
                 scaling,
             )?
         }
@@ -211,13 +248,7 @@ fn convert_general(
             for factor in &mut factors[n_q..] {
                 *factor = -*factor;
             }
-            assemble(
-                cross_tab,
-                diagonals,
-                factors,
-                SchurReduction::Cover,
-                scaling,
-            )?
+            assemble(cross_tab, diagonals, factors, ReductionKind::Cover, scaling)?
         }
     };
     let violation = relaxation.violation.max(clamped_deficit);
@@ -229,9 +260,9 @@ fn convert_general(
 }
 
 /// Fold the component through `factors` and assemble the validated SDDM form.
-/// The `reduction` fixes the fold contract: a [`SchurReduction::Direct`]
+/// The `reduction` fixes the fold contract: a [`ReductionKind::Direct`]
 /// component must fold to a true Z-matrix, so any off-diagonal the signature
-/// failed to drive nonnegative is an error; a [`SchurReduction::Cover`] component
+/// failed to drive nonnegative is an error; a [`ReductionKind::Cover`] component
 /// keeps its single *signed* operator (negatives retained) and grounds through a
 /// Gremban double cover built at factor time (see [`crate::block_elim`]).
 /// Dominance is classified against *magnitude* row sums either way — after a
@@ -242,11 +273,11 @@ fn assemble(
     mut cross_tab: CrossTab,
     diagonals: BlockDiagonals,
     factors: Vec<f64>,
-    reduction: SchurReduction,
+    reduction: ReductionKind,
     scaling: &ScalingConfig,
 ) -> Result<(LocalComponent, f64), NotScalable> {
     let n_q = cross_tab.n_q();
-    let enforce_z = reduction == SchurReduction::Direct;
+    let enforce_z = reduction == ReductionKind::Direct;
     for i in 0..n_q {
         let start = cross_tab.c.indptr[i] as usize;
         let end = cross_tab.c.indptr[i + 1] as usize;
@@ -312,8 +343,8 @@ fn assemble(
 
 /// Validate weak dominance of an assembled operator against `row_sums` (signed
 /// adjacency for a Z-matrix, magnitudes for a signed operator): clamp roundoff
-/// deficits, retain surplus as ground edges, and classify the solve space.
-/// A `Cover`-reduced component is always [`SolveSpace::Signed`]; the
+/// deficits, retain surplus as ground edges, and resolve the [`Reduction`]
+/// state. A `Cover`-reduced component is always [`SolveSpace::Signed`]; the
 /// float/ground classification only decides whether its surplus is retained
 /// (the cover self-grounds either way). Returns the largest relative deficit
 /// that was clamped; deficits beyond tolerance are errors under
@@ -323,7 +354,7 @@ fn finalize(
     mut scaled_diagonals: BlockDiagonals,
     row_sums: BlockDiagonals,
     coordinates: CoordinateMap,
-    reduction: SchurReduction,
+    reduction: ReductionKind,
     scaling: &ScalingConfig,
 ) -> Result<(LocalComponent, f64), NotScalable> {
     let n = cross_tab.n_local();
@@ -370,10 +401,10 @@ fn finalize(
         ground_edges.q.fill(0.0);
         ground_edges.r.fill(0.0);
     }
-    let solve_space = match reduction {
-        SchurReduction::Cover => SolveSpace::Signed,
-        SchurReduction::Direct if floats => SolveSpace::Floating,
-        SchurReduction::Direct => SolveSpace::Grounded,
+    let reduction = match reduction {
+        ReductionKind::Cover => Reduction::Cover,
+        ReductionKind::Direct if floats => Reduction::Direct(Grounding::Floating),
+        ReductionKind::Direct => Reduction::Direct(Grounding::Grounded),
     };
 
     Ok((
@@ -382,7 +413,6 @@ fn finalize(
             diagonals: scaled_diagonals,
             ground_edges,
             coordinates,
-            solve_space,
             reduction,
         },
         clamped_deficit,
