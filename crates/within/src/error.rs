@@ -34,6 +34,18 @@ pub enum BuildError {
         /// Actual length.
         got: usize,
     },
+    /// A slope loading is not finite. A NaN/∞ loading makes its level-Gram
+    /// diagonal non-finite, so reparameterization silently drops the column and
+    /// misreports it as an unidentified direction; loadings must be finite.
+    #[error("slope {slope} loading at index {index} must be finite, got {value}")]
+    InvalidLoading {
+        /// Index of the offending slope covariate within its effect.
+        slope: usize,
+        /// Index of the offending loading value.
+        index: usize,
+        /// The offending value.
+        value: f64,
+    },
     /// Weight vector does not match the number of observations.
     #[error("weights has length {got}, expected {expected}")]
     WeightCountMismatch {

@@ -404,6 +404,12 @@ impl<'a> Solver<'a> {
                 ),
             });
         }
+        if let Some((index, &value)) = y.iter().enumerate().find(|&(_, &v)| !v.is_finite()) {
+            return Err(SolveError::InvalidInput {
+                context: "Solver::solve",
+                message: format!("response at index {index} must be finite, got {value}"),
+            });
+        }
 
         let t_start = Instant::now();
 
