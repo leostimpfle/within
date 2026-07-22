@@ -4,12 +4,14 @@ set -euo pipefail
 cargo llvm-cov clean --workspace
 source <(cargo llvm-cov show-env --sh)
 
-cargo test --workspace --all-features
+cargo test --workspace --all-features --locked
 if python -m pip --version >/dev/null 2>&1; then
-    maturin develop
+    maturin develop --locked
 else
-    maturin develop --uv
+    maturin develop --uv --locked
 fi
 pytest tests/ -v
 
-cargo llvm-cov report --summary-only
+# Floor set just below the measured total (94.99% lines); only lower it
+# deliberately, never raise it above what's actually measured.
+cargo llvm-cov report --summary-only --fail-under-lines 94
