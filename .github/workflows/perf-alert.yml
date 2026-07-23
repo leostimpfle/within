@@ -56,10 +56,20 @@ jobs:
       - name: Commit refreshed reference
         if: github.event_name == 'workflow_dispatch' && inputs.update-reference
         run: |
-          if ! git diff --quiet -- benches/wallclock_reference.json; then
-            git config user.name "github-actions[bot]"
-            git config user.email "github-actions[bot]@users.noreply.github.com"
-            git add benches/wallclock_reference.json
-            git commit -m "chore(perf): bootstrap wall-clock reference (#147) [skip ci]"
-            git push
+          if git diff --quiet -- benches/wallclock_reference.json; then
+            exit 0
           fi
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add benches/wallclock_reference.json
+          git commit -m "chore(perf): bootstrap wall-clock reference (#147) [skip ci]"
+          # The bench takes minutes; a merge to main can land in that window and
+          # make the push a non-fast-forward. Rebase our single-file commit onto
+          # the new tip (no concurrent merge touches this file) and retry.
+          for attempt in 1 2 3 4 5; do
+            git push && exit 0
+            echo "push rejected (raced a merge to main); rebasing and retrying ($attempt)…"
+            git pull --rebase origin main
+          done
+          echo "::error::could not push refreshed wall-clock reference after retries"
+          exit 1
