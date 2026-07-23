@@ -70,6 +70,16 @@ def test_coefficient_layout_locates_unidentified_and_round_trips():
     (u,) = res.unidentified
     assert res.x[layout.index(u.term, u.level, u.column)] == 0.0
 
+    # UnidentifiedDirection is a frozen value type: a repeated solve yields a
+    # distinct-but-equal instance that reprs identically, compares/hashes equal,
+    # dedups in a set, and is unequal to an arbitrary object.
+    (u2,) = solve([Effect(worker, True), Effect(firm, True, [x])], y).unidentified
+    assert u is not u2
+    assert repr(u) == "UnidentifiedDirection(term=1, level=2, column=1)"
+    assert u == u2 and hash(u) == hash(u2)
+    assert len({u, u2}) == 1
+    assert u != (u.term, u.level, u.column)
+
     # index and address are mutual inverses over the whole vector.
     for i in range(layout.n_dofs()):
         assert layout.index(*layout.address(i)) == i

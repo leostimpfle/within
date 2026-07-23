@@ -39,3 +39,75 @@ pub fn random_fe_problem_strategy() -> impl Strategy<Value = (Array2<u32>, Vec<f
 pub fn additive_precond() -> PreconditionerConfig {
     PreconditionerConfig::default()
 }
+
+/// One factor's owned inputs, from which the test body borrows to build an
+/// [`within::Effect`] (which holds slices, so the data must outlive it).
+#[derive(Debug, Clone)]
+pub struct FactorData {
+    pub levels: Vec<u32>,
+    pub intercept: bool,
+    pub slopes: Vec<Vec<f64>>,
+}
+
+/// A random varying-slopes least-squares problem: 1–3 factors (each an
+/// optional intercept plus 0–2 slope covariates), positive weights, and a
+/// response — all sharing one observation count.
+#[derive(Debug, Clone)]
+pub struct SlopesProblem {
+    pub factors: Vec<FactorData>,
+    pub weights: Vec<f64>,
+    pub y: Vec<f64>,
+}
+
+pub fn random_slopes_problem_strategy() -> impl Strategy<Value = SlopesProblem> {
+    (60usize..=300, 1usize..=3).prop_flat_map(|(n_obs, n_factors)| {
+        // Per factor: level count, intercept flag, slope count. An effect with
+        // neither an intercept nor a slope is invalid, so force an intercept in
+        // that case.
+        proptest::collection::vec((2u32..=15, any::<bool>(), 0usize..=2), n_factors).prop_flat_map(
+            move |specs| {
+                let factor_gens: Vec<_> = specs
+                    .into_iter()
+                    .map(|(n_levels, intercept, n_slopes)| {
+                        let intercept = intercept || n_slopes == 0;
+                        (
+                            proptest::collection::vec(0u32..n_levels, n_obs),
+                            proptest::collection::vec(-3.0f64..3.0, n_obs),
+                            proptest::collection::vec(
+                                proptest::collection::vec(-0.5f64..0.5, n_obs),
+                                n_slopes,
+                            ),
+                        )
+                            .prop_map(move |(levels, base, noises)| {
+                                // Slopes are near-collinear (shared base + small
+                                // per-column noise) so per-level slope Grams are
+                                // ill-conditioned — the solver's documented hard case.
+                                let slopes = noises
+                                    .into_iter()
+                                    .enumerate()
+                                    .map(|(j, noise)| {
+                                        base.iter()
+                                            .zip(&noise)
+                                            .map(|(b, e)| b * (0.6 + 0.2 * j as f64) + e)
+                                            .collect()
+                                    })
+                                    .collect();
+                                FactorData {
+                                    levels,
+                                    intercept,
+                                    slopes,
+                                }
+                            })
+                    })
+                    .collect();
+                let weights = proptest::collection::vec(0.2f64..3.0, n_obs);
+                let y = proptest::collection::vec(-10.0f64..10.0, n_obs);
+                (factor_gens, weights, y).prop_map(|(factors, weights, y)| SlopesProblem {
+                    factors,
+                    weights,
+                    y,
+                })
+            },
+        )
+    })
+}
