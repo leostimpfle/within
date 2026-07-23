@@ -29,6 +29,7 @@ and this project follows [Semantic Versioning](https://semver.org/).
 - **BREAKING:** `Design` / `Solver` trade their storage type parameter for a lifetime — `Design<'a>` / `Solver<'a>` — borrowing caller columns until a locality sort or `into_owned()` (#68).
 - **BREAKING:** `Design::from_store` → `Design::from_frame`, taking an `ObservationFrame` (#68).
 - **BREAKING:** `BuildError::ObservationCountMismatch` reports the offending `column` index (#68).
+- **BREAKING:** `BuildError::SingularDiagonal` no longer carries a `block` field (was `&'static str`); which diagonal block held the degenerate entry was not user-diagnosable.
 - `approx-chol` bumped 0.2.0 → 0.3.1, speeding up local-solver setup.
 - The locality reorder changes summation order, so unsorted-input results match 0.2.0 within solver tolerance, not bitwise.
 - Documented the reproducibility contract (#110): a single-threaded run is bitwise-reproducible; across thread counts, parallel summation reorders floating-point adds, so coefficients agree within solver tolerance (~1e-16), not bitwise. Pin the Rayon width — and an explicit `ReductionStrategy` if the width may vary — to hold estimates stable within solver tolerance across runs (single-threaded is the only bitwise guarantee).
@@ -40,8 +41,13 @@ and this project follows [Semantic Versioning](https://semver.org/).
 - `SolveResult.residual` / `BatchSolveResult.residual` now report the LSMR recurrence's normal-equation residual *estimate* instead of recomputing it exactly, saving two passes per solve; exact when unpreconditioned, in the preconditioner's metric otherwise (#149).
 - **BREAKING (`schwarz-precond`):** `LsmrResult` gains a public `normal_eq_residual` field, the relative normal-equation residual estimate (#149).
 
+### Fixed
+
+- Python `solve_batch` no longer emits the F-contiguity `UserWarning` twice for a C-order categories array.
+
 ### Removed
 
+- `scipy` is no longer a runtime dependency of `within-py` — the package never imported it.
 - **BREAKING:** The `Store` trait and its `ArrayStore` / `FactorMajorStore` backends, superseded by `ObservationFrame` (#68).
 - **BREAKING (`schwarz-precond`):** `LsmrStopReason::BidiagonalizationBreakdown` — the variant was unreachable. A Golub–Kahan breakdown drives the LSMR convergence estimates (proportional to the bidiagonal entries α, β) to zero on the same step, so it is always reported as `ResidualTolerance` or `NormalEquationTolerance`. Not exposed through `within`'s public API (#111).
 

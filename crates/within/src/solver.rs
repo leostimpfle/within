@@ -297,7 +297,10 @@ impl BatchSolveResult {
 /// one-shot weighted solve from a borrowed slice, use the free [`solve`] function.
 pub struct Solver<'a> {
     design: Design<'a>,
-    weights: Option<Vec<f64>>,
+    /// `sqrt(W)` in the design's internal observation order, computed once and
+    /// borrowed by the per-RHS [`DesignOperator`]s (raw weights are needed only
+    /// during construction).
+    sqrt_weights: Option<Vec<f64>>,
     preconditioner: Option<Preconditioner>,
     reparam: Option<SlopeReparam>,
     warnings: Vec<BuildWarning>,
@@ -308,7 +311,7 @@ impl std::fmt::Debug for Solver<'_> {
         f.debug_struct("Solver")
             .field("n_obs", &self.design.n_obs)
             .field("n_dofs", &self.design.n_dofs)
-            .field("has_weights", &self.weights.is_some())
+            .field("has_weights", &self.sqrt_weights.is_some())
             .field("has_preconditioner", &self.preconditioner.is_some())
             .finish()
     }
@@ -370,9 +373,16 @@ impl<'a> Solver<'a> {
             }
         };
 
+        let sqrt_weights = weights.map(|mut w| {
+            for wi in &mut w {
+                *wi = wi.sqrt();
+            }
+            w
+        });
+
         Ok(Self {
             design,
-            weights,
+            sqrt_weights,
             preconditioner,
             reparam,
             warnings,
@@ -421,7 +431,7 @@ impl<'a> Solver<'a> {
         let y_internal = self.design.permute_obs_in(y);
         let y: &[f64] = &y_internal;
 
-        let rect_op = DesignOperator::new(&self.design, self.weights.as_deref());
+        let rect_op = DesignOperator::new(&self.design, self.sqrt_weights.as_deref());
         let b = rect_op.weighted_rhs(y);
         let b: &[f64] = &b;
 

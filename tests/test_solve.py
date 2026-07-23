@@ -17,11 +17,7 @@ from within import (
 )
 from within.config import AdditiveSchwarz, LocalSolverConfig, ScalingConfig
 
-from conftest import generate_synthetic_data
-
-
-def as_solver_categories(cats):
-    return np.asfortranarray(np.column_stack(cats).astype(np.uint32))
+from conftest import as_solver_categories, generate_synthetic_data
 
 
 def assert_normal_equations_satisfied(cats, y, result, tol, weights=None):
@@ -69,6 +65,16 @@ def test_coefficient_layout_locates_unidentified_and_round_trips():
     # The reported unidentified direction resolves to a zero coefficient slot.
     (u,) = res.unidentified
     assert res.x[layout.index(u.term, u.level, u.column)] == 0.0
+
+    # UnidentifiedDirection is a frozen value type: a repeated solve yields a
+    # distinct-but-equal instance that reprs identically, compares/hashes equal,
+    # dedups in a set, and is unequal to an arbitrary object.
+    (u2,) = solve([Effect(worker, True), Effect(firm, True, [x])], y).unidentified
+    assert u is not u2
+    assert repr(u) == "UnidentifiedDirection(term=1, level=2, column=1)"
+    assert u == u2 and hash(u) == hash(u2)
+    assert len({u, u2}) == 1
+    assert u != (u.term, u.level, u.column)
 
     # index and address are mutual inverses over the whole vector.
     for i in range(layout.n_dofs()):

@@ -422,8 +422,8 @@ mod slope_design_tests {
             Effect::new(&small, true, [&z[2][..], &z[3][..]]).unwrap(),
         ];
         let design = Design::new(effects).unwrap();
-        let weights: Vec<f64> = (0..n).map(|i| 0.5 + noise(i).abs()).collect();
-        let op = DesignOperator::new(&design, Some(&weights));
+        let sqrt_weights: Vec<f64> = (0..n).map(|i| (0.5 + noise(i).abs()).sqrt()).collect();
+        let op = DesignOperator::new(&design, Some(&sqrt_weights));
 
         let x: Vec<f64> = (0..design.n_dofs).map(|j| noise(13 * j + 1)).collect();
         let r: Vec<f64> = (0..n).map(|i| noise(29 * i + 5)).collect();
@@ -498,7 +498,8 @@ mod weighted_adjoint_proptests {
                 .map(|(i, (dxi, ri))| weights[i] * dxi * ri)
                 .sum();
 
-            let op_weighted = DesignOperator::new(&dm, Some(&weights));
+            let sqrt_weights: Vec<f64> = weights.iter().map(|w| w.sqrt()).collect();
+            let op_weighted = DesignOperator::new(&dm, Some(&sqrt_weights));
             let wr = op_weighted.weighted_rhs(&r);
             let mut wdtr = vec![0.0f64; n_dofs];
             op_weighted.apply_adjoint(&wr, &mut wdtr).unwrap();

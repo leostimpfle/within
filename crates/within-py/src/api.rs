@@ -118,7 +118,6 @@ pub fn solve_batch<'py>(
     match extract_design(py, design)? {
         DesignSource::Categories(categories) => {
             let cats = categories.as_array();
-            warn_c_contiguous(py, &cats)?;
             validate_batch_rows(y_arr.nrows(), cats.nrows())?;
             run_batch_with_warnings(py, move || {
                 let columns = extract_columns(&y_arr);

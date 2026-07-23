@@ -14,9 +14,7 @@ from within._within import (
     Schur,
 )
 
-
-def as_solver_categories(cats):
-    return np.asfortranarray(np.column_stack(cats).astype(np.uint32))
+from conftest import as_solver_categories
 
 
 @pytest.fixture()

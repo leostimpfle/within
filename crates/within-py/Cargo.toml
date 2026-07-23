@@ -12,7 +12,6 @@ crate-type = ["cdylib"]
 
 [dependencies]
 within = { path = "../within" }
-schwarz-precond.workspace = true
 postcard.workspace = true
 pyo3 = { version = "0.25", features = ["extension-module"] }
 numpy = "0.25"

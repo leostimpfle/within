@@ -19,3 +19,8 @@ def generate_synthetic_data(
         y += x_true[offset + cats[f]]
         offset += nl
     return cats, x_true, y
+
+
+def as_solver_categories(cats):
+    """Stack per-factor level arrays into F-contiguous uint32 (the solver's fast path)."""
+    return np.asfortranarray(np.column_stack(cats).astype(np.uint32))

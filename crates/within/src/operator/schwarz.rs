@@ -237,10 +237,7 @@ fn build_diagonal(
         }
         let inv = 1.0 / *d;
         if !inv.is_finite() {
-            return Err(BuildError::SingularDiagonal {
-                block: "diagonal",
-                index,
-            });
+            return Err(BuildError::SingularDiagonal { index });
         }
         *d = inv;
     }
@@ -259,8 +256,8 @@ pub(crate) fn build_preconditioner(
 ) -> Result<(Option<Preconditioner>, Vec<BuildWarning>), BuildError> {
     use crate::domain::build_local_domains;
 
-    design.validate_weights(weights)?;
-
+    // Weights are pre-validated by the sole caller (`Solver::new`); its
+    // observation permutation preserves length, finiteness, and sign.
     let default_cfg = PreconditionerConfig::default();
     let resolved = config.unwrap_or(&default_cfg);
     match resolved {

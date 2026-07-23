@@ -127,10 +127,7 @@ impl<'a> Elimination<'a> {
                 if d > 0.0 {
                     Ok(1.0 / d)
                 } else {
-                    Err(BuildError::SingularDiagonal {
-                        block: if eliminate_q { "q (elim)" } else { "r (elim)" },
-                        index: i,
-                    })
+                    Err(BuildError::SingularDiagonal { index: i })
                 }
             })
             .collect::<Result<_, _>>()?;

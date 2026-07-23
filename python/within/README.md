@@ -54,10 +54,10 @@ print(np.round(beta_hat, 4))  # [ 0.9982 -2.006   0.5005]
 
 | Function | Description |
 |---|---|
-| `solve(categories, y, options?, weights?, preconditioner?)` | Solve a single right-hand side. Returns `SolveResult`. |
-| `solve_batch(categories, Y, options?, weights?, preconditioner?)` | Solve multiple RHS vectors in parallel. `Y` has shape `(n_obs, k)`. Returns `BatchSolveResult`. |
+| `solve(design, y, weights?, options?, preconditioner?)` | Solve a single right-hand side. Returns `SolveResult`. |
+| `solve_batch(design, Y, weights?, options?, preconditioner?)` | Solve multiple RHS vectors in parallel. `Y` has shape `(n_obs, k)`. Returns `BatchSolveResult`. |
 
-`categories` is a 2-D `uint32` array of shape `(n_obs, n_factors)`. A `UserWarning` is emitted when a C-contiguous array is passed — if the data is already sorted by the largest factor, `np.asfortranarray(categories)` gives faster solves; unsorted input is copied internally either way.
+`design` is a 2-D `uint32` array of category codes with shape `(n_obs, n_factors)`, or a list of `Effect` terms for varying slopes. A `UserWarning` is emitted when a C-contiguous array is passed — if the data is already sorted by the largest factor, `np.asfortranarray(design)` gives faster solves; unsorted input is copied internally either way.
 
 ### Persistent solver
 
@@ -76,7 +76,7 @@ solver2 = Solver(fe, preconditioner=precond)   # skip re-factorization
 
 | Property / Method | Description |
 |---|---|
-| `Solver(categories, weights?, preconditioner?)` | Build solver. Factorizes the preconditioner at construction. |
+| `Solver(design, weights?, preconditioner?)` | Build solver. Factorizes the preconditioner at construction. |
 | `.solve(y, options?)` | Solve a single RHS with the given LSMR tuning. Returns `SolveResult`. |
 | `.solve_batch(Y, options?)` | Solve multiple RHS columns in parallel. Returns `BatchSolveResult`. |
 | `.preconditioner` | Return the built `Preconditioner` (picklable), or `None`. Reuse via `Solver(..., preconditioner=p)`. |
@@ -104,12 +104,13 @@ Pass `None` (the default) to use additive Schwarz with the default local solver.
 
 | Class | Description |
 |---|---|
-| `LocalSolverConfig(approx_chol?, approx_schur?, dense_threshold=24)` | Schur complement reduction with approximate Cholesky on the reduced system. Default local solver. Import from `within.config`. `approx_schur=None` requests an exact Schur (slower, used for validation). |
+| `LocalSolverConfig(approx_chol?, schur?, dense_threshold?, scaling?)` | Schur complement reduction with approximate Cholesky on the reduced system. Default local solver. Import from `within.config`. Omit `schur` for the library default (approximate); pass `Schur.exact()` for the exact complement. |
+| `Schur.approximate(config?)` / `Schur.exact()` | Schur-reduction mode for `LocalSolverConfig`. |
 | `ApproxCholConfig(seed=0, split_merge=None)` | Approximate Cholesky parameters. |
 | `ApproxSchurConfig(seed=0, split=1)` | Approximate Schur complement sampling parameters. |
 
 ### Result types
 
-**`SolveResult`**: `x` (coefficients), `demeaned` (residuals), `converged`, `iterations`, `residual`, `time_total`, `time_setup`, `time_solve`.
+**`SolveResult`**: `x` (coefficients), `demeaned` (residuals), `converged`, `iterations`, `residual`, `unidentified`, `layout`, `time_total`, `time_setup`, `time_solve`.
 
 **`BatchSolveResult`**: Same fields, with `converged`, `iterations`, `residual`, and `time_solve` as lists (one entry per RHS).
