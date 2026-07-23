@@ -237,10 +237,7 @@ fn build_diagonal(
         }
         let inv = 1.0 / *d;
         if !inv.is_finite() {
-            return Err(BuildError::SingularDiagonal {
-                block: "diagonal",
-                index,
-            });
+            return Err(BuildError::SingularDiagonal { index });
         }
         *d = inv;
     }

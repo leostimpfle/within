@@ -71,12 +71,11 @@ pub enum BuildError {
         /// The offending channel pair.
         pair: SignedPair,
     },
-    /// A zero diagonal was encountered during block elimination.
-    #[error("zero diagonal in {block} block at index {index}")]
+    /// A zero (or non-finite-reciprocal) diagonal was encountered while
+    /// building a preconditioner.
+    #[error("zero diagonal in preconditioner at index {index}")]
     SingularDiagonal {
-        /// Which block contained the zero diagonal ("keep" or "elim").
-        block: &'static str,
-        /// Row/column index of the zero diagonal entry.
+        /// Row/column index of the degenerate entry.
         index: usize,
     },
     /// Local solver construction failed.

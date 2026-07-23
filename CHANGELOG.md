@@ -29,6 +29,7 @@ and this project follows [Semantic Versioning](https://semver.org/).
 - **BREAKING:** `Design` / `Solver` trade their storage type parameter for a lifetime — `Design<'a>` / `Solver<'a>` — borrowing caller columns until a locality sort or `into_owned()` (#68).
 - **BREAKING:** `Design::from_store` → `Design::from_frame`, taking an `ObservationFrame` (#68).
 - **BREAKING:** `BuildError::ObservationCountMismatch` reports the offending `column` index (#68).
+- **BREAKING:** `BuildError::SingularDiagonal` no longer carries a `block` field (was `&'static str`); which diagonal block held the degenerate entry was not user-diagnosable.
 - `approx-chol` bumped 0.2.0 → 0.3.1, speeding up local-solver setup.
 - The locality reorder changes summation order, so unsorted-input results match 0.2.0 within solver tolerance, not bitwise.
 - Documented the reproducibility contract (#110): a single-threaded run is bitwise-reproducible; across thread counts, parallel summation reorders floating-point adds, so coefficients agree within solver tolerance (~1e-16), not bitwise. Pin the Rayon width — and an explicit `ReductionStrategy` if the width may vary — to hold estimates stable within solver tolerance across runs (single-threaded is the only bitwise guarantee).
