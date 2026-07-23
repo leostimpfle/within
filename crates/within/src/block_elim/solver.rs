@@ -87,7 +87,7 @@ fn backsub_block_from_scaled_rhs(
 // ===========================================================================
 
 /// Local subdomain solver using block elimination on the bipartite SDDM.
-#[derive(Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, serde::Serialize)]
 pub struct BlockElimSolver {
     /// Bipartite Gramian structure: C and C^T (diagonals are folded into
     /// `inv_diag_elim`/`reduced_factor` at build time and not retained).
@@ -107,6 +107,102 @@ pub struct BlockElimSolver {
     coordinates: CoordinateMap,
     /// Whether the augmented Laplacian has a ground vertex.
     solve_space: SolveSpace,
+}
+
+impl<'de> serde::Deserialize<'de> for BlockElimSolver {
+    /// Reconstruct from bytes that may be untrusted (a pickle cache, another
+    /// machine, a tampered file), validating every cross-field invariant the
+    /// infallible [`Self::new`] takes for granted. The two count fields are
+    /// re-derived rather than trusted, and each dimension is pinned to a witness
+    /// that is itself bounded by the input length, so no accepted solver can
+    /// overflow its scratch arithmetic or index out of bounds when applied.
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        use serde::de::Error;
+
+        #[derive(serde::Deserialize)]
+        struct Helper {
+            cross_tab: CrossTab,
+            inv_diag_elim: Vec<f64>,
+            reduced_factor: ReducedFactor,
+            eliminate_q: bool,
+            n_internal: usize,
+            n_reduced: usize,
+            coordinates: CoordinateMap,
+            solve_space: SolveSpace,
+        }
+
+        let h = Helper::deserialize(deserializer)?;
+
+        // `c` bounds n_q by its `indptr` length; the stored transpose's row
+        // count (validated the same way) is the only witness that bounds n_r,
+        // without which recomputing the transpose below could allocate wildly.
+        let CrossTab { c, ct } = h.cross_tab;
+        if !c.is_structurally_valid() {
+            return Err(D::Error::custom(
+                "cross_tab.c is not a structurally valid CSR block",
+            ));
+        }
+        if ct.nrows != c.ncols || ct.ncols != c.nrows || !ct.is_structurally_valid() {
+            return Err(D::Error::custom("cross_tab.ct shape disagrees with c"));
+        }
+        let (n_q, n_r) = (c.nrows, c.ncols);
+        let n_internal = n_q + n_r;
+        if h.n_internal != n_internal {
+            return Err(D::Error::custom("n_internal disagrees with cross_tab"));
+        }
+
+        let n_reduced = h.reduced_factor.factor_dimension();
+        if h.n_reduced != n_reduced {
+            return Err(D::Error::custom("n_reduced disagrees with reduced factor"));
+        }
+
+        // Roles are fixed by `eliminate_q`: the eliminated block is scaled by
+        // `inv_diag_elim`, the kept block is what the reduced factor solves.
+        let (elim_size, n_keep) = if h.eliminate_q {
+            (n_q, n_r)
+        } else {
+            (n_r, n_q)
+        };
+        if h.inv_diag_elim.len() != elim_size {
+            return Err(D::Error::custom(
+                "inv_diag_elim length disagrees with eliminated block",
+            ));
+        }
+        if let CoordinateMap::Scaled(factors) = &h.coordinates {
+            if factors.len() != n_internal {
+                return Err(D::Error::custom(
+                    "Scaled coordinate map length disagrees with n_internal",
+                ));
+            }
+        }
+
+        // The reduced factor's input dimension and its cover/direct kind must
+        // match the solve space `eliminate_and_recover` will drive it through.
+        let input_dim = h.reduced_factor.input_dimension();
+        let is_cover = matches!(h.reduced_factor, ReducedFactor::Cover { .. });
+        let consistent = match h.solve_space {
+            SolveSpace::Signed => is_cover && input_dim == n_keep,
+            SolveSpace::Floating => !is_cover && input_dim == n_keep,
+            SolveSpace::Grounded => !is_cover && (input_dim == n_keep || input_dim == n_keep + 1),
+        };
+        if !consistent {
+            return Err(D::Error::custom(
+                "reduced factor disagrees with solve space or kept block size",
+            ));
+        }
+
+        // Rebuild the transpose from the validated `c` so it cannot disagree,
+        // then let `new` re-derive the counts we checked above.
+        let ct = c.transpose();
+        Ok(BlockElimSolver::new(
+            CrossTab { c, ct },
+            h.inv_diag_elim,
+            h.reduced_factor,
+            h.eliminate_q,
+            h.coordinates,
+            h.solve_space,
+        ))
+    }
 }
 
 /// The q/r blocks assigned to their eliminated/kept roles for one solve.
