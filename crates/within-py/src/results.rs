@@ -220,7 +220,7 @@ pub(crate) fn into_py_batch_result(
 
 /// Run a native single-response solve with the GIL released, then convert.
 ///
-/// The closure produces a [`SolveResult`] off-GIL (`allow_threads`); its native
+/// The closure produces a [`SolveResult`] off-GIL (`detach`); its native
 /// error is mapped to a `PyValueError` and the result to its Python wrapper.
 /// Shared by the free `solve` function and the persistent `Solver.solve`.
 pub(crate) fn run_solve<E, F>(py: Python<'_>, solve: F) -> PyResult<PySolveResult>

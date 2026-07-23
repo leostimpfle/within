@@ -357,3 +357,50 @@ fn frustrated_component_solves_exactly_through_cover() {
         );
     }
 }
+
+/// A structurally valid solver built the normal way; the deserialize-validation
+/// tests below tamper one field of a clone and assert the round-trip rejects it.
+fn valid_solver_for_deser() -> BlockElimSolver {
+    let (cross_tab, diagonals) = make_cross_tab_q_lt_r();
+    let config = LocalSolverConfig {
+        approx_chol: ApproxCholConfig::default(),
+        schur: SchurMode::Exact,
+        dense_threshold: 0,
+        scaling: Default::default(),
+    };
+    let component = LocalComponent::general_for_test(cross_tab, diagonals);
+    BlockElimSolver::build(component, &config).expect("block-elim build failed")
+}
+
+#[test]
+fn valid_solver_round_trips() {
+    let solver = valid_solver_for_deser();
+    let bytes = postcard::to_stdvec(&solver).expect("serialize");
+    let restored: BlockElimSolver = postcard::from_bytes(&bytes).expect("deserialize");
+    assert_eq!(restored.n_local(), solver.n_local());
+    assert_eq!(restored.scratch_size(), solver.scratch_size());
+}
+
+#[test]
+fn inv_diag_elim_length_mismatch_is_rejected() {
+    let mut bad = valid_solver_for_deser();
+    bad.inv_diag_elim.push(0.0);
+    let bytes = postcard::to_stdvec(&bad).expect("serialize");
+    assert!(postcard::from_bytes::<BlockElimSolver>(&bytes).is_err());
+}
+
+#[test]
+fn n_internal_mismatch_is_rejected() {
+    let mut bad = valid_solver_for_deser();
+    bad.n_internal += 1;
+    let bytes = postcard::to_stdvec(&bad).expect("serialize");
+    assert!(postcard::from_bytes::<BlockElimSolver>(&bytes).is_err());
+}
+
+#[test]
+fn scaled_coordinate_length_mismatch_is_rejected() {
+    let mut bad = valid_solver_for_deser();
+    bad.coordinates = CoordinateMap::Scaled(vec![1.0; bad.n_internal + 3].into_boxed_slice());
+    let bytes = postcard::to_stdvec(&bad).expect("serialize");
+    assert!(postcard::from_bytes::<BlockElimSolver>(&bytes).is_err());
+}

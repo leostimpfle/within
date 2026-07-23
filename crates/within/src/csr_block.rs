@@ -32,6 +32,31 @@ impl CsrBlock {
         self.data.len()
     }
 
+    /// Whether the CSR arrays are self-consistent: `indptr` holds `nrows + 1`
+    /// entries starting at `0` and non-decreasing, its last entry equals
+    /// `indices.len() == data.len()`, and every column index is `< ncols`.
+    ///
+    /// `nrows`/`ncols` are stored beside the arrays, so untrusted bytes can set
+    /// them to disagree; [`crate::block_elim`] deserialization screens a block
+    /// with this before indexing it, since a block that passes cannot drive an
+    /// out-of-bounds gather, scatter, or transpose.
+    pub(crate) fn is_structurally_valid(&self) -> bool {
+        if self.nrows.checked_add(1) != Some(self.indptr.len()) {
+            return false;
+        }
+        let nnz = self.indices.len();
+        if self.data.len() != nnz {
+            return false;
+        }
+        if self.indptr[0] != 0 || *self.indptr.last().unwrap() as usize != nnz {
+            return false;
+        }
+        if self.indptr.windows(2).any(|w| w[0] > w[1]) {
+            return false;
+        }
+        self.indices.iter().all(|&j| (j as usize) < self.ncols)
+    }
+
     /// Row `i` as `(column, weight)` pairs.
     pub(crate) fn row(&self, i: usize) -> impl Iterator<Item = (usize, f64)> + '_ {
         let start = self.indptr[i] as usize;

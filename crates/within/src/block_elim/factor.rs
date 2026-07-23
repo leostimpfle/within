@@ -22,7 +22,7 @@ use crate::BuildError;
 // ===========================================================================
 
 /// Reduced-system factor backend for Schur-complement local solves.
-#[derive(Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, serde::Serialize)]
 pub(crate) enum ReducedFactor {
     // Postcard encodes enum discriminants by declaration order; the wire
     // fixture pins Approx = 0 and Dense = 1, so new variants append after them.
@@ -120,6 +120,91 @@ impl ReducedFactor {
                     *out = 0.5 * (buf[i] - buf[*m + i]);
                 }
                 Ok(())
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Deserialize — validated reconstruction from untrusted bytes
+// ---------------------------------------------------------------------------
+
+/// Wire mirror of [`ReducedFactor`]. `Cover`'s `inner` is a non-recursive
+/// [`LeafFactor`], so a `Cover`-of-`Cover` — which no real build produces —
+/// fails to decode with an unknown-variant error instead of recursing without
+/// bound (a serialized chain of `Cover` discriminants would otherwise overflow
+/// the stack, both while decoding and in [`ReducedFactor::scratch_len`]).
+#[derive(serde::Deserialize)]
+enum ReducedFactorWire {
+    Approx(Factor),
+    Dense(DenseCholesky),
+    Cover { inner: Box<LeafFactor>, m: usize },
+}
+
+/// A `Cover`'s inner factor: only ever a direct backend, never another cover.
+#[derive(serde::Deserialize)]
+enum LeafFactor {
+    Approx(Factor),
+    Dense(DenseCholesky),
+}
+
+/// Reject an `Approx` factor whose dimensions cannot arise from `approx-chol`,
+/// whose contract augments the input by at most one Gremban vertex, so
+/// `n ∈ {original_n, original_n + 1}`. Without this, a crafted `Factor::n`
+/// overflows the caller's scratch arithmetic.
+fn checked_approx(f: Factor) -> Result<ReducedFactor, &'static str> {
+    let (n, base) = (f.n(), f.original_n());
+    if n == base || Some(n) == base.checked_add(1) {
+        Ok(ReducedFactor::Approx(f))
+    } else {
+        Err("Approx factor dimension inconsistent with its original dimension")
+    }
+}
+
+/// Reject a [`DenseCholesky`] whose factor length is neither the full `n×n`
+/// minor nor the anchored `(n-1)×(n-1)` one — the only two shapes
+/// [`DenseCholesky::solve_in_place`] can view without reading out of bounds.
+fn checked_dense(dc: DenseCholesky) -> Result<ReducedFactor, &'static str> {
+    let n = dc.n;
+    let full = n.checked_mul(n);
+    let anchored = n.saturating_sub(1).checked_mul(n.saturating_sub(1));
+    if Some(dc.l_row_major.len()) == full || Some(dc.l_row_major.len()) == anchored {
+        Ok(ReducedFactor::Dense(dc))
+    } else {
+        Err("DenseCholesky factor length inconsistent with its dimension")
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for ReducedFactor {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        use serde::de::Error;
+        match ReducedFactorWire::deserialize(deserializer)? {
+            ReducedFactorWire::Approx(f) => checked_approx(f).map_err(D::Error::custom),
+            ReducedFactorWire::Dense(dc) => checked_dense(dc).map_err(D::Error::custom),
+            ReducedFactorWire::Cover { inner, m } => {
+                let inner = match *inner {
+                    LeafFactor::Approx(f) => checked_approx(f),
+                    LeafFactor::Dense(dc) => checked_dense(dc),
+                }
+                .map_err(D::Error::custom)?;
+                // `solve_in_place` embeds the antisymmetric `[b, -b]` RHS into
+                // the inner factor, whose dimension is the `2m` doubled cover
+                // nodes plus at most two augmentation vertices (the grounded
+                // minor's and approx-chol's Gremban vertex). Anything outside
+                // `[2m, 2m + 2]` over- or under-runs that embed.
+                let two_m = m
+                    .checked_mul(2)
+                    .ok_or_else(|| D::Error::custom("Cover dimension m too large"))?;
+                let cover_dim = inner.factor_dimension();
+                if cover_dim < two_m || cover_dim > two_m.saturating_add(2) {
+                    return Err(D::Error::custom(
+                        "Cover inner factor dimension inconsistent with m",
+                    ));
+                }
+                Ok(ReducedFactor::Cover {
+                    inner: Box::new(inner),
+                    m,
+                })
             }
         }
     }
@@ -332,5 +417,54 @@ mod tests {
         let r0 = 2.0 * x[0] + x[1] - b[0];
         let r1 = x[0] + 2.0 * x[1] - b[1];
         assert!(r0.hypot(r1) < 1e-9, "residual too large: ({r0}, {r1})");
+    }
+
+    fn dense_2x2() -> ReducedFactor {
+        ReducedFactor::try_dense(vec![4.0, 0.0, 0.0, 9.0], 2).expect("spd minor")
+    }
+
+    #[test]
+    fn valid_dense_round_trips() {
+        let bytes = postcard::to_stdvec(&dense_2x2()).expect("serialize");
+        let restored: ReducedFactor = postcard::from_bytes(&bytes).expect("deserialize");
+        assert_eq!(restored.factor_dimension(), 2);
+    }
+
+    #[test]
+    fn nested_cover_is_rejected() {
+        // A cover whose inner is itself a cover — never built, and the shape
+        // whose `scratch_len` recursion overflowed the stack (#166).
+        let nested = ReducedFactor::Cover {
+            inner: Box::new(ReducedFactor::Cover {
+                inner: Box::new(dense_2x2()),
+                m: 1,
+            }),
+            m: 1,
+        };
+        let bytes = postcard::to_stdvec(&nested).expect("serialize");
+        assert!(postcard::from_bytes::<ReducedFactor>(&bytes).is_err());
+    }
+
+    #[test]
+    fn dense_with_inconsistent_length_is_rejected() {
+        // len 3 is neither the full 4×4 nor the anchored 3×3 minor of n = 4.
+        let bad = ReducedFactor::Dense(DenseCholesky {
+            l_row_major: vec![1.0, 2.0, 3.0],
+            n: 4,
+        });
+        let bytes = postcard::to_stdvec(&bad).expect("serialize");
+        assert!(postcard::from_bytes::<ReducedFactor>(&bytes).is_err());
+    }
+
+    #[test]
+    fn cover_with_undersized_inner_is_rejected() {
+        // The inner factor (dim 2) cannot hold the antisymmetric embed for m = 5
+        // (which needs 2m = 10 nodes).
+        let bad = ReducedFactor::Cover {
+            inner: Box::new(dense_2x2()),
+            m: 5,
+        };
+        let bytes = postcard::to_stdvec(&bad).expect("serialize");
+        assert!(postcard::from_bytes::<ReducedFactor>(&bytes).is_err());
     }
 }
