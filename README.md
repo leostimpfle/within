@@ -8,7 +8,7 @@ By the Frisch-Waugh-Lovell theorem, estimating a regression of the form *y = Xβ
 
 ## Scope
 
-`within` is a low-level fixed-effects kernel. Callers pass pre-factorized categorical codes: contiguous 0-based `uint32` level codes in F-order (column-major) arrays. Formula-level convenience — DataFrames, string/object categoricals, `pandas.factorize`, and formula parsing — is intentionally out of scope and belongs to a frontend layer built on top. The pyfixest/fixest-style workflow is served by such a frontend calling `within` underneath.
+`within` is a low-level fixed-effects kernel. Callers pass pre-factorized categorical codes: contiguous 0-based `uint32` level codes in F-order (column-major) arrays. Formula-level convenience — DataFrames, string/object categoricals, `pandas.factorize`, and formula parsing — is intentionally out of scope and belongs to a frontend layer built on top. The pyfixest-style workflow is served by such a frontend calling `within` underneath.
 
 ## Installation
 
