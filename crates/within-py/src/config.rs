@@ -79,7 +79,7 @@ impl PyApproxSchurConfig {
 /// Schur-complement reduction mode for `LocalSolverConfig`: approximate (the
 /// library default) or exact. Build via `Schur.approximate(...)` or
 /// `Schur.exact()`.
-#[pyclass(frozen, module = "within._within")]
+#[pyclass(frozen, skip_from_py_object, module = "within._within")]
 #[pyo3(name = "Schur")]
 #[derive(Clone)]
 pub struct PySchur {
@@ -195,7 +195,7 @@ impl PyScalingConfig {
 /// - ``PreconditionerConfig.Additive`` — additive Schwarz (default)
 /// - ``PreconditionerConfig.Off`` — no preconditioner
 /// - ``PreconditionerConfig.Diagonal`` — diagonal/Jacobi preconditioner
-#[pyclass(frozen, eq, eq_int, module = "within._within")]
+#[pyclass(frozen, eq, eq_int, from_py_object, module = "within._within")]
 #[pyo3(name = "PreconditionerConfig")]
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum PyPreconditionerConfig {
@@ -204,7 +204,7 @@ pub enum PyPreconditionerConfig {
     Diagonal = 2,
 }
 
-#[pyclass(frozen, eq, eq_int, module = "within._within")]
+#[pyclass(frozen, eq, eq_int, from_py_object, module = "within._within")]
 #[pyo3(name = "ReductionStrategy")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PyReductionStrategy {
@@ -268,7 +268,7 @@ impl PyLocalSolverConfig {
 #[pyo3(name = "AdditiveSchwarz")]
 pub struct PyAdditiveSchwarz {
     #[pyo3(get)]
-    pub local_solver: Option<PyObject>,
+    pub local_solver: Option<Py<PyAny>>,
     #[pyo3(get)]
     pub reduction: PyReductionStrategy,
 }
@@ -277,7 +277,7 @@ pub struct PyAdditiveSchwarz {
 impl PyAdditiveSchwarz {
     #[new]
     #[pyo3(signature = (local_solver=None, reduction=PyReductionStrategy::Auto))]
-    fn new(local_solver: Option<PyObject>, reduction: PyReductionStrategy) -> Self {
+    fn new(local_solver: Option<Py<PyAny>>, reduction: PyReductionStrategy) -> Self {
         Self {
             local_solver,
             reduction,
@@ -432,7 +432,7 @@ pub(crate) fn resolve_precond_input(
     preconditioner: Option<&Bound<'_, PyAny>>,
 ) -> PyResult<PrecondInput> {
     if let Some(obj) = preconditioner {
-        if let Ok(built) = obj.downcast::<PyPreconditioner>() {
+        if let Ok(built) = obj.cast::<PyPreconditioner>() {
             return Ok(PrecondInput::Prebuilt(built.get().inner.clone()));
         }
     }
@@ -460,13 +460,13 @@ fn extract_preconditioner_config(
     }
 
     // Advanced: AdditiveSchwarz object
-    if let Ok(schwarz) = obj.downcast::<PyAdditiveSchwarz>() {
+    if let Ok(schwarz) = obj.cast::<PyAdditiveSchwarz>() {
         let s = schwarz.get();
         let local = match &s.local_solver {
             None => LocalSolverConfig::default(),
             Some(obj) => {
                 let obj = obj.bind(py);
-                let Ok(sc) = obj.downcast::<PyLocalSolverConfig>() else {
+                let Ok(sc) = obj.cast::<PyLocalSolverConfig>() else {
                     return Err(PyErr::new::<pyo3::exceptions::PyTypeError, _>(
                         "local_solver must be LocalSolverConfig or None",
                     ));
@@ -512,7 +512,7 @@ pub(crate) fn resolve_lsmr_config(config: Option<&Bound<'_, PyAny>>) -> PyResult
     let Some(c) = config else {
         return Ok(LsmrOptions::default());
     };
-    if let Ok(lsmr) = c.downcast::<PyLsmrOptions>() {
+    if let Ok(lsmr) = c.cast::<PyLsmrOptions>() {
         let lsmr = lsmr.get();
         return Ok(LsmrOptions {
             tol: lsmr.tol,

@@ -64,7 +64,7 @@ pub struct PyBatchSolveResult {
 }
 
 /// A per-level design direction the data cannot identify.
-#[pyclass(frozen, eq, hash, module = "within._within")]
+#[pyclass(frozen, eq, hash, skip_from_py_object, module = "within._within")]
 #[pyo3(name = "UnidentifiedDirection")]
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub struct PyUnidentifiedDirection {
@@ -88,7 +88,7 @@ impl PyUnidentifiedDirection {
 
 /// Translates a ``(term, level, column)`` coefficient address to its flat
 /// index in ``SolveResult.x`` and back.
-#[pyclass(frozen, module = "within._within")]
+#[pyclass(frozen, skip_from_py_object, module = "within._within")]
 #[pyo3(name = "CoefficientLayout")]
 #[derive(Clone)]
 pub struct PyCoefficientLayout {
@@ -228,7 +228,7 @@ where
     E: std::fmt::Display + Send,
     F: Send + FnOnce() -> Result<SolveResult, E>,
 {
-    let result = py.allow_threads(solve).map_err(value_err)?;
+    let result = py.detach(solve).map_err(value_err)?;
     Ok(into_py_result(py, result))
 }
 
@@ -241,7 +241,7 @@ where
     E: std::fmt::Display + Send,
     F: Send + FnOnce() -> Result<BatchSolveResult, E>,
 {
-    let result = py.allow_threads(solve).map_err(value_err)?;
+    let result = py.detach(solve).map_err(value_err)?;
     into_py_batch_result(py, result)
 }
 
@@ -263,7 +263,7 @@ where
     E: std::fmt::Display + Send,
     F: Send + FnOnce() -> Result<(SolveResult, Vec<BuildWarning>), E>,
 {
-    let (result, warnings) = py.allow_threads(solve).map_err(value_err)?;
+    let (result, warnings) = py.detach(solve).map_err(value_err)?;
     emit_build_warnings(py, &warnings)?;
     Ok(into_py_result(py, result))
 }
@@ -277,7 +277,7 @@ where
     E: std::fmt::Display + Send,
     F: Send + FnOnce() -> Result<(BatchSolveResult, Vec<BuildWarning>), E>,
 {
-    let (result, warnings) = py.allow_threads(solve).map_err(value_err)?;
+    let (result, warnings) = py.detach(solve).map_err(value_err)?;
     emit_build_warnings(py, &warnings)?;
     into_py_batch_result(py, result)
 }
