@@ -20,9 +20,6 @@ all-features = true
 # past 0.9.18); tracked to revisit, not silently accepted.
 ignore = [
     { id = "RUSTSEC-2024-0436", reason = "transitive `paste` dep is unmaintained (no vulnerability); no drop-in replacement upstream" },
-    { id = "RUSTSEC-2026-0176", reason = "pyo3 0.25.1 PyList/PyTuple::nth overflow; we don't call nth/nth_back on these iterators. Fix needs pyo3 >=0.29, an API-breaking bump out of scope here" },
-    { id = "RUSTSEC-2026-0177", reason = "pyo3 0.25.1 PyCFunction::new_closure missing Sync bound; within-py never calls new_closure. Fix needs pyo3 >=0.29, out of scope here" },
-    { id = "RUSTSEC-2026-0097", reason = "rand unsound only with the `log` feature plus a custom logger reading rand::rng(); within-py enables neither" },
 ]
 
 [licenses]
@@ -46,17 +43,17 @@ multiple-versions = "deny"
 wildcards = "deny"
 allow-wildcard-paths = true
 skip = [
-    { crate = "cpufeatures@0.2.17", reason = "pre-existing transitive duplicate (sha2 vs chacha20 chains)" },
     { crate = "equator@0.2.2", reason = "pre-existing transitive duplicate within faer's nano-gemm chain" },
     { crate = "equator@0.4.2", reason = "pre-existing transitive duplicate within faer's nano-gemm chain" },
     { crate = "equator-macro@0.2.1", reason = "pre-existing transitive duplicate within faer's nano-gemm chain" },
     { crate = "equator-macro@0.4.2", reason = "pre-existing transitive duplicate within faer's nano-gemm chain" },
     { crate = "getrandom@0.3.4", reason = "pre-existing transitive duplicate (rand 0.9 vs 0.10 chains)" },
-    { crate = "rand@0.8.5", reason = "pre-existing transitive duplicate (criterion vs faer/approx-chol chains)" },
-    { crate = "rand@0.9.2", reason = "pre-existing transitive duplicate (criterion vs faer/approx-chol chains)" },
+    { crate = "rand@0.8.7", reason = "transitive duplicate; dev-dep is on rand 0.10, num-complex/faer pull the older line" },
+    { crate = "rand@0.9.5", reason = "transitive duplicate; dev-dep is on rand 0.10, faer/proptest pull the older line" },
     { crate = "rand_core@0.6.4", reason = "pre-existing transitive duplicate (criterion vs faer/approx-chol chains)" },
     { crate = "rand_core@0.9.5", reason = "pre-existing transitive duplicate (criterion vs faer/approx-chol chains)" },
     { crate = "syn@1.0.109", reason = "pre-existing transitive duplicate (older proc-macro crates not yet on syn 2)" },
+    { crate = "syn@2.0.119", reason = "transitive duplicate; serde_derive is on syn 3, faer's enum-as-inner/sysctl chain still on syn 2" },
     { crate = "thiserror@1.0.69", reason = "pre-existing transitive duplicate; workspace itself is on thiserror 2" },
     { crate = "thiserror-impl@1.0.69", reason = "pre-existing transitive duplicate; workspace itself is on thiserror 2" },
     { crate = "windows-sys@0.42.0", reason = "pre-existing transitive duplicate (older Windows-target crates)" },

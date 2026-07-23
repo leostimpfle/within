@@ -18,7 +18,7 @@ fn additive_precond() -> PreconditionerConfig {
 /// Build a larger problem for more meaningful convergence tests.
 fn larger_problem() -> (Array2<u32>, Vec<f64>) {
     use rand::rngs::SmallRng;
-    use rand::{Rng, SeedableRng};
+    use rand::{RngExt, SeedableRng};
 
     let mut rng = SmallRng::seed_from_u64(42);
     let n_obs = 500;
