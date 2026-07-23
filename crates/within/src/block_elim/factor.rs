@@ -7,7 +7,10 @@
 
 use approx_chol::low_level::Builder;
 use approx_chol::{CsrRef, Factor};
-use faer::{MatRef, Side};
+use faer::linalg::triangular_solve::{
+    solve_lower_triangular_in_place, solve_upper_triangular_in_place,
+};
+use faer::{MatMut, MatRef, Par, Side};
 use schwarz_precond::LocalSolveError;
 
 use super::csr_matrix::CsrMatrix;
@@ -178,52 +181,27 @@ impl DenseCholesky {
     /// anchored gauge and are written as zero.
     fn solve_in_place(&self, x: &mut [f64]) {
         debug_assert_eq!(x.len(), self.n);
-        let l = &self.l_row_major;
-        let m = if l.len() == self.n * self.n {
+        let m = if self.l_row_major.len() == self.n * self.n {
             self.n
         } else {
             self.n.saturating_sub(1)
         };
-        debug_assert_eq!(l.len(), m * m);
+        debug_assert_eq!(self.l_row_major.len(), m * m);
 
-        // Forward solve on the minor: L y = b.
-        for i in 0..m {
-            // SAFETY: i<m, row bounds and triangular-access bounds are validated by loop limits.
-            let mut s = unsafe { *x.get_unchecked(i) };
-            for j in 0..i {
-                // SAFETY: i<m, j<i<m -> indices are in bounds.
-                let lij = unsafe { *l.get_unchecked(i * m + j) };
-                // SAFETY: j<i<m -> in bounds.
-                let xj = unsafe { *x.get_unchecked(j) };
-                s -= lij * xj;
-            }
-            // SAFETY: i<m -> diagonal index and write index are in bounds.
-            let lii = unsafe { *l.get_unchecked(i * m + i) };
-            debug_assert!(
-                lii.is_finite() && lii != 0.0,
-                "Cholesky diagonal must be a finite nonzero pivot"
+        if m > 0 {
+            // Delegate both substitutions to faer's blocked kernels, viewing
+            // the stored factor and `x` in place: L y = b then Lᵀ x = y.
+            let l = MatRef::from_row_major_slice(&self.l_row_major, m, m);
+            solve_lower_triangular_in_place(
+                l,
+                MatMut::from_column_major_slice_mut(&mut x[..m], m, 1),
+                Par::Seq,
             );
-            unsafe { *x.get_unchecked_mut(i) = s / lii };
-        }
-
-        // Backward solve on the minor: L^T x = y.
-        for i in (0..m).rev() {
-            // SAFETY: i<m -> in bounds.
-            let mut s = unsafe { *x.get_unchecked(i) };
-            for j in (i + 1)..m {
-                // SAFETY: j<m, i<j -> in bounds.
-                let lji = unsafe { *l.get_unchecked(j * m + i) };
-                // SAFETY: j<m -> in bounds.
-                let xj = unsafe { *x.get_unchecked(j) };
-                s -= lji * xj;
-            }
-            // SAFETY: i<m -> diagonal index and write index are in bounds.
-            let lii = unsafe { *l.get_unchecked(i * m + i) };
-            debug_assert!(
-                lii.is_finite() && lii != 0.0,
-                "Cholesky diagonal must be a finite nonzero pivot"
+            solve_upper_triangular_in_place(
+                l.transpose(),
+                MatMut::from_column_major_slice_mut(&mut x[..m], m, 1),
+                Par::Seq,
             );
-            unsafe { *x.get_unchecked_mut(i) = s / lii };
         }
 
         for v in &mut x[m..] {
