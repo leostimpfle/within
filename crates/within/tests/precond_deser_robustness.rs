@@ -1,0 +1,39 @@
+//! Deserializing untrusted bytes into a [`Preconditioner`] must return a typed
+//! error, never panic or read out of bounds — the pickle path accepts bytes
+//! that may originate outside the producing process. Exhaustive coverage lives
+//! in the `preconditioner_from_bytes` fuzz target (see `fuzz/`); this pins the
+//! specific inputs a stable-toolchain CI job can guard without a fuzzer.
+
+use within::Preconditioner;
+
+// The fuzzer's first find: a serialized Schwarz preconditioner whose `n_dofs`
+// sat below its covered subdomain index span — formerly a debug-assert panic
+// and, in release, an out-of-bounds subdomain scatter at apply time.
+const CRASH_NDOFS_SPAN: &[u8] = include_bytes!("fixtures/precond_deser_crash_ndofs_span.bin");
+
+#[test]
+fn deserializing_untrusted_bytes_returns_error_not_panic() {
+    assert!(
+        postcard::from_bytes::<Preconditioner>(CRASH_NDOFS_SPAN).is_err(),
+        "n_dofs-below-span input must deserialize to a typed error"
+    );
+
+    // Malformed inputs — empty, truncated, and saturated byte strings — must
+    // deserialize to an error without panicking (a panic here fails the test).
+    let half = &CRASH_NDOFS_SPAN[..CRASH_NDOFS_SPAN.len() / 2];
+    let cases: [&[u8]; 6] = [
+        &[],
+        &[0x00],
+        &[0xFF; 8],
+        &[0xFF; 64],
+        half,
+        &CRASH_NDOFS_SPAN[..1],
+    ];
+    for bytes in cases {
+        assert!(
+            postcard::from_bytes::<Preconditioner>(bytes).is_err(),
+            "malformed input of {} bytes must deserialize to an error",
+            bytes.len()
+        );
+    }
+}
