@@ -41,6 +41,10 @@ and this project follows [Semantic Versioning](https://semver.org/).
 - `SolveResult.residual` / `BatchSolveResult.residual` now report the LSMR recurrence's normal-equation residual *estimate* instead of recomputing it exactly, saving two passes per solve; exact when unpreconditioned, in the preconditioner's metric otherwise (#149).
 - **BREAKING (`schwarz-precond`):** `LsmrResult` gains a public `normal_eq_residual` field, the relative normal-equation residual estimate (#149).
 
+### Fixed
+
+- Python `solve_batch` no longer emits the F-contiguity `UserWarning` twice for a C-order categories array.
+
 ### Removed
 
 - `scipy` is no longer a runtime dependency of `within-py` — the package never imported it.
