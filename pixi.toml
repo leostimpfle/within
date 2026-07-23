@@ -26,8 +26,15 @@ hypothesis = ">=6.0"
 samply = ">=0.13"
 cargo-mutants = ">=27.1,<28"
 
+# Isolated so `pixi run -e audit abi3audit <wheel>` installs only the auditor,
+# not the build+dev toolchain. Verifies a built wheel uses only the py3.9
+# limited API, so the single cp39-abi3 wheel is valid on every later CPython.
+[feature.audit.dependencies]
+abi3audit = ">=0.0.26"
+
 [environments]
 default = { features = ["build", "dev"], solve-group = "default" }
+audit = { features = ["audit"] }
 
 [tasks]
 test = "maturin develop --uv --locked && pytest tests/ -v --cov=within --cov-report=term-missing"
@@ -35,3 +42,6 @@ develop = "maturin develop --uv --release"
 coverage-rust = "cargo llvm-cov --workspace --all-features --summary-only"
 coverage = "./scripts/coverage-with-python.sh"
 mutants = "cargo mutants -C --locked"
+
+[feature.audit.tasks]
+abi3audit = "abi3audit --strict"
