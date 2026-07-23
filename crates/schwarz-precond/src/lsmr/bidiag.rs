@@ -398,8 +398,9 @@ impl<'a, A: Operator + ?Sized> GolubKahan<'a, A> {
         let n = operator.ncols();
         let mut bufs = GolubKahanBuffers::new(m, n, local_size);
 
-        // β₁ = ‖b‖, u₁ = b / β₁
-        let beta = par_dot(b, b).sqrt();
+        // β₁ = ‖b‖ via the max-scaled norm: par_dot(b, b).sqrt() overflows to ∞
+        // for large-magnitude b, zeroing u₁ into a silent x = 0 result.
+        let beta = super::vec_norm(b);
         if beta > 0.0 {
             let inv = 1.0 / beta;
             for (ui, &bi) in bufs.u.iter_mut().zip(b) {
@@ -489,8 +490,9 @@ impl<'a, A: Operator + ?Sized, M: Operator + ?Sized> ModifiedGolubKahan<'a, A, M
         let n = operator.ncols();
         let mut bufs = ModifiedGolubKahanBuffers::new(m, n, local_size);
 
-        // β₁ = ‖b‖, u₁ = b / β₁
-        let beta = par_dot(b, b).sqrt();
+        // β₁ = ‖b‖ via the max-scaled norm: par_dot(b, b).sqrt() overflows to ∞
+        // for large-magnitude b, zeroing u₁ into a silent x = 0 result.
+        let beta = super::vec_norm(b);
         if beta > 0.0 {
             let inv = 1.0 / beta;
             for (ui, &bi) in bufs.u.iter_mut().zip(b) {
