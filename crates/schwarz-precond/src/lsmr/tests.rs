@@ -17,6 +17,27 @@ fn vec_norm_is_overflow_safe_and_propagates_nan() {
     assert!(vec_norm(&[0.0, f64::NAN]).is_nan());
 }
 
+/// Regression: a finite but large-magnitude RHS must not overflow β₁ = ‖b‖ to
+/// ∞ inside `init` (unscaled Σb²), which zeroed u₁ and α₁ and returned a silent
+/// converged x = 0.
+#[test]
+fn test_lsmr_large_magnitude_rhs_not_silently_zero() {
+    // Entries ~1e155: the unscaled Σb² = 1e310 overflows f64, but the
+    // max-scaled ‖b‖ stays finite. A = I, so the exact solution is x = b.
+    let b = vec![1e155, 2e155, 3e155];
+    let result = lsmr(&IdentityOp { n: 3 }, &b, 1e-10, 100, None).expect("lsmr solve");
+
+    let all_zero = result.x.iter().all(|&xi| xi == 0.0);
+    assert!(
+        !(all_zero && result.converged),
+        "large-magnitude b silently returned the all-zero solution as converged",
+    );
+
+    let diff: Vec<f64> = result.x.iter().zip(&b).map(|(x, bi)| x - bi).collect();
+    let rel_err = vec_norm(&diff) / vec_norm(&b);
+    assert!(rel_err < 1e-6, "relative solution error: {rel_err}");
+}
+
 /// Identity operator used by mlsmr equivalence tests.
 struct IdentityOp {
     n: usize,
