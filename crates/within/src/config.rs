@@ -3,6 +3,13 @@
 //! `Option<&PreconditionerConfig>` accepts `None` (default Additive Schwarz),
 //! `Some(Off)` (identity), `Some(Additive(_))` (tuned), or
 //! `Some(Diagonal)` (Jacobi).
+//!
+//! Stability policy: enums that may gain variants (the preconditioner strategy
+//! set) stay `#[non_exhaustive]`, so adding a variant is non-breaking — external
+//! `match` sites already carry a wildcard arm. Option structs commit to public
+//! fields and literal construction; adding a field is a deliberate breaking
+//! change, caught mechanically by the cargo-semver-checks CI gate rather than
+//! slipping through silently.
 
 pub use schwarz_precond::ReductionStrategy;
 

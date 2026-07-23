@@ -6,6 +6,10 @@ By the Frisch-Waugh-Lovell theorem, estimating a regression of the form *y = Xβ
 
 `within`'s solvers are tailored to the structure of fixed effects problems, which can be represented as a graph (as first noted by Correia, 2016). Concretely, `within` uses modified LSMR with a domain decomposition (Schwarz) preconditioner, backed by approximate Cholesky local solvers (Gao et al, 2025).
 
+## Scope
+
+`within` is a low-level fixed-effects kernel. Callers pass pre-factorized categorical codes: contiguous 0-based `uint32` level codes in F-order (column-major) arrays. Formula-level convenience — DataFrames, string/object categoricals, `pandas.factorize`, and formula parsing — is intentionally out of scope and belongs to a frontend layer built on top. The pyfixest-style workflow is served by such a frontend calling `within` underneath.
+
 ## Installation
 
 You can install Python bindings from PyPi by running 
