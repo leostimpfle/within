@@ -18,15 +18,22 @@ fn tight_params() -> LsmrOptions {
     }
 }
 
-fn rel_l2_diff(actual: &[f64], expected: &[f64]) -> f64 {
+/// L2 agreement with a mixed absolute+relative tolerance: returns the actual
+/// discrepancy and the tolerance it must stay under. A near-saturated design
+/// drives the residual (hence `expected`) toward zero, where a purely relative
+/// check amplifies machine-precision noise into a spurious failure; the `atol`
+/// floor absorbs that regime while `rtol` still catches real divergence.
+fn l2_close(actual: &[f64], expected: &[f64]) -> (f64, f64) {
+    const ATOL: f64 = 1e-9;
+    const RTOL: f64 = 1e-6;
     let num = actual
         .iter()
         .zip(expected)
         .map(|(a, e)| (a - e).powi(2))
         .sum::<f64>()
         .sqrt();
-    let den = expected.iter().map(|e| e * e).sum::<f64>().sqrt();
-    num / den.max(1e-12)
+    let expected_norm = expected.iter().map(|e| e * e).sum::<f64>().sqrt();
+    (num, ATOL + RTOL * expected_norm)
 }
 
 proptest! {
@@ -50,10 +57,10 @@ proptest! {
         prop_assert!(scaled.converged);
 
         let expected: Vec<f64> = base.demeaned.iter().map(|v| c * v).collect();
-        let rel = rel_l2_diff(&scaled.demeaned, &expected);
+        let (num, tol) = l2_close(&scaled.demeaned, &expected);
         prop_assert!(
-            rel <= 1e-6,
-            "response-scaling equivariance violated: rel L2 = {rel:.3e} (c={c})"
+            num <= tol,
+            "response-scaling equivariance violated: |Δ| = {num:.3e} > tol {tol:.3e} (c={c})"
         );
     }
 
@@ -78,10 +85,10 @@ proptest! {
         let scaled = solve(cats.view(), &y, Some(w_scaled.as_slice()), &params, &precond).unwrap();
         prop_assert!(scaled.converged);
 
-        let rel = rel_l2_diff(&scaled.demeaned, &base.demeaned);
+        let (num, tol) = l2_close(&scaled.demeaned, &base.demeaned);
         prop_assert!(
-            rel <= 1e-6,
-            "weight-scaling invariance violated: rel L2 = {rel:.3e} (k={k})"
+            num <= tol,
+            "weight-scaling invariance violated: |Δ| = {num:.3e} > tol {tol:.3e} (k={k})"
         );
     }
 
@@ -108,10 +115,10 @@ proptest! {
         for (j, y) in ys.iter().enumerate() {
             let single = solve(cats.view(), y, None, &params, &precond).unwrap();
             prop_assert!(single.converged);
-            let rel = rel_l2_diff(batch.demeaned(j), &single.demeaned);
+            let (num, tol) = l2_close(batch.demeaned(j), &single.demeaned);
             prop_assert!(
-                rel <= 1e-6,
-                "batch vs column-wise residual mismatch (column {j}): rel L2 = {rel:.3e}"
+                num <= tol,
+                "batch vs column-wise residual mismatch (column {j}): |Δ| = {num:.3e} > tol {tol:.3e}"
             );
         }
     }
