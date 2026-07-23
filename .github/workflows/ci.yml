@@ -40,6 +40,19 @@ jobs:
       - name: cargo check (workspace, all features, at the declared MSRV)
         run: cargo check --workspace --all-features --locked
 
+  semver:
+    name: SemVer (public API)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # within-py is a PyO3 cdylib whose real public surface is the Python ABI,
+      # not a Rust library API, so cargo-semver-checks can't check it; scope to
+      # the two crates actually published to crates.io.
+      - name: cargo-semver-checks
+        uses: obi1kenobi/cargo-semver-checks-action@v2.9
+        with:
+          package: within, schwarz-precond
+
   platform:
     name: Tests (${{ matrix.os }})
     if: github.ref == 'refs/heads/main' || github.event_name == 'push'
