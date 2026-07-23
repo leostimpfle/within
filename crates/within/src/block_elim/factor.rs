@@ -178,15 +178,15 @@ fn checked_dense(dc: DenseCholesky) -> Result<ReducedFactor, &'static str> {
 impl<'de> serde::Deserialize<'de> for ReducedFactor {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         use serde::de::Error;
-        let leaf = |leaf: LeafFactor| match leaf {
-            LeafFactor::Approx(f) => checked_approx(f),
-            LeafFactor::Dense(dc) => checked_dense(dc),
-        };
         match ReducedFactorWire::deserialize(deserializer)? {
             ReducedFactorWire::Approx(f) => checked_approx(f).map_err(D::Error::custom),
             ReducedFactorWire::Dense(dc) => checked_dense(dc).map_err(D::Error::custom),
             ReducedFactorWire::Cover { inner, m } => {
-                let inner = leaf(*inner).map_err(D::Error::custom)?;
+                let inner = match *inner {
+                    LeafFactor::Approx(f) => checked_approx(f),
+                    LeafFactor::Dense(dc) => checked_dense(dc),
+                }
+                .map_err(D::Error::custom)?;
                 // `solve_in_place` embeds the antisymmetric `[b, -b]` RHS into
                 // the inner factor, whose dimension is the `2m` doubled cover
                 // nodes plus at most two augmentation vertices (the grounded
