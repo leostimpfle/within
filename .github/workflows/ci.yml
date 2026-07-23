@@ -11,7 +11,7 @@ env:
 
 jobs:
   check:
-    name: Check (Linux)
+    name: Check + Coverage (Linux)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -23,12 +23,12 @@ jobs:
         run: pixi run -e default cargo fmt --all -- --check
       - name: cargo clippy
         run: pixi run -e default cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
-      - name: cargo test
-        run: pixi run -e default cargo test --workspace --all-features --locked
       - name: cargo deny
         run: pixi run -e default cargo deny --locked check
-      - name: pytest
-        run: pixi run test
+      # Coverage instruments and runs the full workspace test suite + pytest,
+      # so it subsumes the standalone `cargo test`/`pytest` steps.
+      - name: coverage (cargo test + pytest, instrumented)
+        run: pixi run coverage
 
   msrv:
     name: MSRV (1.85.0)
@@ -73,16 +73,3 @@ jobs:
         run: pixi run -e default cargo test --workspace --all-features --locked
       - name: pytest
         run: pixi run test
-
-  coverage:
-    name: Coverage
-    runs-on: ubuntu-latest
-    needs: check
-    steps:
-      - uses: actions/checkout@v4
-      - uses: prefix-dev/setup-pixi@v0.10.0
-        with:
-          cache: true
-      - uses: Swatinem/rust-cache@v2
-      - name: Run coverage
-        run: pixi run coverage
