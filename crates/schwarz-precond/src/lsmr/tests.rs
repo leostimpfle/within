@@ -38,6 +38,33 @@ fn test_lsmr_large_magnitude_rhs_not_silently_zero() {
     assert!(rel_err < 1e-6, "relative solution error: {rel_err}");
 }
 
+/// Companion for the preconditioned path: within's default solve runs `mlsmr`
+/// → `ModifiedGolubKahan::init`, which carries the same β₁ = ‖b‖ fix. With
+/// A = I and M = I the exact solution is again x = b.
+#[test]
+fn test_mlsmr_large_magnitude_rhs_not_silently_zero() {
+    let b = vec![1e155, 2e155, 3e155];
+    let result = mlsmr(
+        &IdentityOp { n: 3 },
+        &b,
+        &IdentityOp { n: 3 },
+        1e-10,
+        100,
+        None,
+    )
+    .expect("preconditioned mlsmr solve");
+
+    let all_zero = result.x.iter().all(|&xi| xi == 0.0);
+    assert!(
+        !(all_zero && result.converged),
+        "large-magnitude b silently returned the all-zero solution as converged",
+    );
+
+    let diff: Vec<f64> = result.x.iter().zip(&b).map(|(x, bi)| x - bi).collect();
+    let rel_err = vec_norm(&diff) / vec_norm(&b);
+    assert!(rel_err < 1e-6, "relative solution error: {rel_err}");
+}
+
 /// Identity operator used by mlsmr equivalence tests.
 struct IdentityOp {
     n: usize,

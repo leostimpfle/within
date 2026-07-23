@@ -72,4 +72,8 @@ fn free_solve_batch_surfaces_build_warnings() {
         "free solve_batch dropped the preconditioner build warning: {:?}",
         result.warnings,
     );
+
+    // The result field mirrors the solver accessor exactly.
+    let solver = Solver::new(warning_effects(), None, &cfg).expect("solver");
+    assert_eq!(result.warnings.as_slice(), solver.warnings());
 }
