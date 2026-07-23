@@ -8,14 +8,14 @@ low maxiter, and config boundary values. Pathological-weight tolerance
 
 from __future__ import annotations
 
+import warnings
+
 import numpy as np
 import pytest
 
-from within import LsmrOptions, PreconditionerConfig, Solver, solve
+from within import LsmrOptions, PreconditionerConfig, Solver, solve, solve_batch
 
-
-def as_solver_categories(cats):
-    return np.asfortranarray(np.column_stack(cats).astype(np.uint32))
+from conftest import as_solver_categories
 
 
 # ---------------------------------------------------------------------------
@@ -37,6 +37,22 @@ class TestNanInfPropagation:
         y = np.array([1.0, np.inf, 3.0])
         with pytest.raises(ValueError, match="finite"):
             solve(cats, y)
+
+    def test_nan_in_weights_rejected(self):
+        """NaN in weights should be rejected at build validation."""
+        cats = as_solver_categories([np.array([0, 1, 0]), np.array([0, 0, 1])])
+        y = np.array([1.0, 2.0, 3.0])
+        w = np.array([1.0, np.nan, 1.0])
+        with pytest.raises(ValueError, match="finite"):
+            solve(cats, y, weights=w)
+
+    def test_inf_in_weights_rejected(self):
+        """Inf in weights should be rejected at build validation."""
+        cats = as_solver_categories([np.array([0, 1, 0]), np.array([0, 0, 1])])
+        y = np.array([1.0, 2.0, 3.0])
+        w = np.array([1.0, np.inf, 1.0])
+        with pytest.raises(ValueError, match="finite"):
+            solve(cats, y, weights=w)
 
 
 # ---------------------------------------------------------------------------
@@ -137,6 +153,15 @@ class TestMinimalProblemSizes:
         assert result.converged
         assert np.all(np.isfinite(result.x))
 
+    def test_empty_batch_returns_zero_column_results(self):
+        """Y with zero columns returns well-shaped (n, 0) results."""
+        cats = as_solver_categories([np.array([0, 0, 1, 1]), np.array([0, 1, 0, 1])])
+        Y = np.empty((4, 0), dtype=np.float64)
+        result = solve_batch(cats, Y)
+        assert result.demeaned.shape == (4, 0)
+        assert result.x.shape[1] == 0
+        assert len(result.converged) == 0
+
 
 # ---------------------------------------------------------------------------
 # Non-contiguous input arrays (binding contract)
@@ -195,6 +220,18 @@ class TestNonContiguousInputs:
         y = np.array([1.0, 2.0, 3.0, 4.0, 5.0])
         with pytest.warns(UserWarning, match="F-contiguous"):
             solve(cats_c, y)
+
+    def test_c_contiguous_categories_warns_once_in_batch(self):
+        """solve_batch should emit the F-contiguity warning exactly once."""
+        cats_c = np.array(
+            [[0, 0], [1, 0], [0, 1], [1, 1], [0, 0]], dtype=np.uint32, order="C"
+        )
+        Y = np.column_stack([np.arange(5.0), np.arange(5.0) ** 2])
+        with warnings.catch_warnings(record=True) as record:
+            warnings.simplefilter("always")
+            solve_batch(cats_c, Y)
+        contiguity = [w for w in record if "F-contiguous" in str(w.message)]
+        assert len(contiguity) == 1
 
 
 # ---------------------------------------------------------------------------

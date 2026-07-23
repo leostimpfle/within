@@ -6,9 +6,7 @@ import pytest
 from within import Effect, solve
 from within._within import ApproxSchurConfig
 
-
-def as_solver_categories(cats):
-    return np.asfortranarray(np.column_stack(cats).astype(np.uint32))
+from conftest import as_solver_categories
 
 
 class TestErrorHandling:
@@ -37,6 +35,13 @@ class TestErrorHandling:
     def test_wrong_dtype_categories(self):
         """float64 categories should raise a TypeError naming uint32."""
         cats = np.array([[0.0, 0.0], [1.0, 1.0]], dtype=np.float64, order="F")
+        y = np.array([1.0, 2.0])
+        with pytest.raises(TypeError, match="uint32"):
+            solve(cats, y)
+
+    def test_int64_categories_raises_typeerror(self):
+        """int64 categories (the pandas.factorize default) should raise a TypeError naming uint32."""
+        cats = np.array([[0, 0], [1, 1]], dtype=np.int64, order="F")
         y = np.array([1.0, 2.0])
         with pytest.raises(TypeError, match="uint32"):
             solve(cats, y)

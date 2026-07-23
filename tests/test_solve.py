@@ -17,11 +17,7 @@ from within import (
 )
 from within.config import AdditiveSchwarz, LocalSolverConfig, ScalingConfig
 
-from conftest import generate_synthetic_data
-
-
-def as_solver_categories(cats):
-    return np.asfortranarray(np.column_stack(cats).astype(np.uint32))
+from conftest import as_solver_categories, generate_synthetic_data
 
 
 def assert_normal_equations_satisfied(cats, y, result, tol, weights=None):
