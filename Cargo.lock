@@ -1636,7 +1636,7 @@ dependencies = [
 
 [[package]]
 name = "schwarz-precond"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "faer",
  "rayon",
@@ -2283,7 +2283,7 @@ dependencies = [
 
 [[package]]
 name = "within"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "approx-chol",
  "criterion",
@@ -2301,7 +2301,7 @@ dependencies = [
 
 [[package]]
 name = "within-py"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "numpy",
  "postcard",
