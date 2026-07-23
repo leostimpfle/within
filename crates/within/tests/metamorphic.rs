@@ -1,3 +1,4 @@
+use ndarray::Array2;
 use proptest::prelude::*;
 use within::{solve, solve_batch, LsmrOptions};
 
@@ -6,8 +7,9 @@ mod strategies;
 use strategies::{additive_precond, random_fe_problem_strategy};
 
 // Drive both arms of each metamorphic pair to tight first-order optimality so
-// the gauge-invariant residual agrees to well below the assertion tolerance;
-// draws where either arm fails to converge are rejected.
+// the gauge-invariant residual agrees to well below the assertion tolerance.
+// These are well-conditioned plain-FE designs, so convergence is asserted (not
+// assumed): a convergence regression here is a failure, never a silent skip.
 fn tight_params() -> LsmrOptions {
     LsmrOptions {
         tol: 1e-11,
@@ -41,11 +43,11 @@ proptest! {
         let precond = additive_precond();
 
         let base = solve(cats.view(), &y, None, &params, &precond).unwrap();
-        prop_assume!(base.converged);
+        prop_assert!(base.converged);
 
         let y_scaled: Vec<f64> = y.iter().map(|v| c * v).collect();
         let scaled = solve(cats.view(), &y_scaled, None, &params, &precond).unwrap();
-        prop_assume!(scaled.converged);
+        prop_assert!(scaled.converged);
 
         let expected: Vec<f64> = base.demeaned.iter().map(|v| c * v).collect();
         let rel = rel_l2_diff(&scaled.demeaned, &expected);
@@ -70,11 +72,11 @@ proptest! {
         let precond = additive_precond();
 
         let base = solve(cats.view(), &y, Some(w.as_slice()), &params, &precond).unwrap();
-        prop_assume!(base.converged);
+        prop_assert!(base.converged);
 
         let w_scaled: Vec<f64> = w.iter().map(|v| k * v).collect();
         let scaled = solve(cats.view(), &y, Some(w_scaled.as_slice()), &params, &precond).unwrap();
-        prop_assume!(scaled.converged);
+        prop_assert!(scaled.converged);
 
         let rel = rel_l2_diff(&scaled.demeaned, &base.demeaned);
         prop_assert!(
@@ -101,16 +103,68 @@ proptest! {
 
         let refs: Vec<&[f64]> = ys.iter().map(Vec::as_slice).collect();
         let batch = solve_batch(cats.view(), &refs, None, &params, &precond).unwrap();
-        prop_assume!(batch.converged.iter().all(|&c| c));
+        prop_assert!(batch.converged.iter().all(|&c| c));
 
         for (j, y) in ys.iter().enumerate() {
             let single = solve(cats.view(), y, None, &params, &precond).unwrap();
-            prop_assume!(single.converged);
+            prop_assert!(single.converged);
             let rel = rel_l2_diff(batch.demeaned(j), &single.demeaned);
             prop_assert!(
                 rel <= 1e-6,
                 "batch vs column-wise residual mismatch (column {j}): rel L2 = {rel:.3e}"
             );
         }
+    }
+
+    /// Minimal-norm gauge: first-order optimality pins every *identified*
+    /// coefficient, but leaves the null-space representative free. `within`
+    /// documents the minimal-norm choice — unidentified directions held at
+    /// exactly `0` — so assert that directly (the equivariance and residual
+    /// checks are gauge-invariant and cannot see it).
+    #[test]
+    fn prop_unidentified_slots_are_zero((cats, y) in random_fe_problem_strategy()) {
+        let params = tight_params();
+        let precond = additive_precond();
+        let result = solve(cats.view(), &y, None, &params, &precond).unwrap();
+        prop_assert!(result.converged);
+
+        for u in &result.unidentified {
+            let slot = result.layout.index(u.term, u.level, u.column).unwrap();
+            prop_assert_eq!(
+                result.x[slot],
+                0.0,
+                "unidentified slot (term {}, level {}, col {}) = {}, expected exactly 0",
+                u.term,
+                u.level,
+                u.column,
+                result.x[slot]
+            );
+        }
+    }
+}
+
+/// Known-answer oracle: a saturated single-factor design has no gauge freedom,
+/// so each level's fixed effect is exactly the mean of that level's responses.
+/// This pins actual coefficient VALUES at their `layout` addresses — the one
+/// thing the gauge-invariant optimality and residual checks cannot verify, and
+/// the cheap guard against a weighting/labeling misconception shared between the
+/// solver and a self-referential oracle.
+#[test]
+fn saturated_single_factor_recovers_level_means() {
+    // Level means: {1,3}→2, {2,4,6}→4, {5}→5.
+    let cats = Array2::from_shape_vec((6, 1), vec![0u32, 0, 1, 1, 1, 2]).unwrap();
+    let y = vec![1.0, 3.0, 2.0, 4.0, 6.0, 5.0];
+    let params = tight_params();
+    let precond = additive_precond();
+    let result = solve(cats.view(), &y, None, &params, &precond).unwrap();
+    assert!(result.converged);
+
+    for (level, &mean) in [2.0, 4.0, 5.0].iter().enumerate() {
+        let slot = result.layout.index(0, level, 0).unwrap();
+        assert!(
+            (result.x[slot] - mean).abs() < 1e-6,
+            "level {level}: coefficient {} != level mean {mean}",
+            result.x[slot]
+        );
     }
 }
