@@ -17,6 +17,7 @@ fn test_lsmr_unpreconditioned() {
     let solver = Solver::new(design, None, None).expect("build solver");
     let result = solver.solve(&y, &params).expect("solve");
     common::assert_converged_with_small_residual(&result, 1e-6);
+    common::assert_normal_equations_satisfied(&common::test_categories(), None, &y, &result, 1e-6);
 }
 
 #[test]
@@ -36,6 +37,7 @@ fn test_lsmr_preconditioned() {
     let solver = Solver::new(design, None, &precond).expect("build solver");
     let result = solver.solve(&y, &params).expect("solve");
     common::assert_converged_with_small_residual(&result, 1e-6);
+    common::assert_normal_equations_satisfied(&common::test_categories(), None, &y, &result, 1e-6);
 }
 
 #[test]
@@ -53,6 +55,7 @@ fn test_lsmr_diagonal_preconditioned() {
     let result = solver.solve(&y, &params).expect("solve");
     common::assert_converged_with_small_residual(&result, 1e-6);
     common::assert_solution_finite(&result);
+    common::assert_normal_equations_satisfied(&common::test_categories(), None, &y, &result, 1e-6);
 }
 
 #[test]
@@ -69,6 +72,7 @@ fn test_lsmr_least_squares() {
     let result = solver.solve(&y, &params).expect("solve");
     assert!(result.converged, "LSMR LS did not converge");
     common::assert_solution_finite(&result);
+    common::assert_normal_equations_satisfied(&common::test_categories(), None, &y, &result, 1e-6);
 }
 
 #[test]
@@ -84,8 +88,15 @@ fn test_lsmr_least_squares_weighted_preconditioned() {
         ..Default::default()
     };
     let precond = PreconditionerConfig::default();
-    let solver = Solver::new(design, Some(weights), &precond).expect("build solver");
+    let solver = Solver::new(design, Some(weights.clone()), &precond).expect("build solver");
     let result = solver.solve(&y, &params).expect("solve");
     common::assert_converged_with_small_residual(&result, 1e-6);
     common::assert_solution_finite(&result);
+    common::assert_normal_equations_satisfied(
+        &common::test_categories(),
+        Some(weights.as_slice()),
+        &y,
+        &result,
+        1e-6,
+    );
 }
