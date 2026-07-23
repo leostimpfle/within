@@ -6,7 +6,7 @@ use std::time::Duration;
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, SamplingMode};
 use ndarray::{Array2, ShapeBuilder};
 use rand::rngs::SmallRng;
-use rand::{Rng, SeedableRng};
+use rand::{RngExt, SeedableRng};
 
 use within::config::{LsmrOptions, PreconditionerConfig};
 use within::Solver;

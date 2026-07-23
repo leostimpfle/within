@@ -3,7 +3,7 @@
 //! directory is not auto-discovered as a bench target).
 
 use rand::rngs::SmallRng;
-use rand::{Rng, SeedableRng};
+use rand::{RngExt, SeedableRng};
 use within::observation::ObservationFrame;
 use within::Design;
 
