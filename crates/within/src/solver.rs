@@ -210,6 +210,9 @@ pub struct SolveResult {
     pub x: Vec<f64>,
     /// Per-level directions the data cannot identify.
     pub unidentified: Vec<UnidentifiedDirection>,
+    /// Non-fatal preconditioner-build warnings (see [`Solver::warnings`]);
+    /// empty when a pre-built preconditioner was reused.
+    pub warnings: Vec<BuildWarning>,
     /// Address ↔ flat-`x`-index translation for this design's coefficients.
     pub layout: CoefficientLayout,
     /// Demeaned response: `y - D x` (length = n_obs), in caller order.
@@ -248,6 +251,9 @@ pub struct BatchSolveResult {
     /// Per-level directions the data cannot identify, shared across all RHS:
     /// identification depends only on the design and weights, never on `y`.
     pub unidentified: Vec<UnidentifiedDirection>,
+    /// Non-fatal preconditioner-build warnings, shared across all RHS; see
+    /// [`SolveResult::warnings`].
+    pub warnings: Vec<BuildWarning>,
     /// Address ↔ flat-`x`-index translation for this design's coefficients.
     pub layout: CoefficientLayout,
     /// All demeaned responses concatenated (length = n_obs * n_rhs).
@@ -470,6 +476,7 @@ impl<'a> Solver<'a> {
         Ok(SolveResult {
             x,
             unidentified,
+            warnings: self.warnings.clone(),
             layout: CoefficientLayout::from_design(&self.design),
             // Back to the caller's observation order (no-op if not reordered).
             demeaned: self.design.permute_obs_out(demeaned),
@@ -526,6 +533,7 @@ impl<'a> Solver<'a> {
         Ok(BatchSolveResult {
             x,
             unidentified,
+            warnings: self.warnings.clone(),
             layout: CoefficientLayout::from_design(&self.design),
             demeaned,
             converged,

@@ -97,6 +97,15 @@ pub enum BuildError {
         /// Actual column count of the supplied preconditioner.
         actual_cols: usize,
     },
+    /// The design's total degrees of freedom exceed `u32::MAX`, the width of the
+    /// CSR column index; the coefficient structure cannot be represented. The
+    /// usual cause is raw entity IDs passed as factor codes (`n_levels = max
+    /// code + 1`), which inflates the level space past what the solver indexes.
+    #[error("design has {n_dofs} degrees of freedom, exceeding the u32 column-index limit")]
+    DofSpaceExceedsU32 {
+        /// Total degrees of freedom implied by the design.
+        n_dofs: usize,
+    },
 }
 
 /// The channel pair whose signed cross-factor component an error or warning
