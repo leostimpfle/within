@@ -58,6 +58,24 @@ where
         }
 
         let h: Helper<S> = Helper::deserialize(deserializer)?;
+        // The bytes may be untrusted (a cache, another machine, a tampered
+        // file). `n_dofs` below the covered subdomain index span is a caller
+        // bug for the infallible constructors — only debug-asserted there — but
+        // from arbitrary input it would let a subdomain scatter out of bounds
+        // at apply time, so reject it here as a typed error rather than build
+        // an unsound preconditioner.
+        let covered_span = h
+            .subdomains
+            .iter()
+            .flat_map(|e| e.global_indices().iter().copied())
+            .max()
+            .map_or(0, |m| m as usize + 1);
+        if h.n_dofs < covered_span {
+            return Err(serde::de::Error::custom(format!(
+                "n_dofs ({}) is below the covered subdomain index span ({covered_span})",
+                h.n_dofs
+            )));
+        }
         Ok(SchwarzPreconditioner::with_n_dofs(
             h.subdomains,
             h.n_dofs,
