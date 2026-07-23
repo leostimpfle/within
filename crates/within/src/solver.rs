@@ -7,7 +7,7 @@ use std::time::Instant;
 
 use ndarray::{ArrayView2, Axis};
 use rayon::prelude::*;
-use schwarz_precond::{lsmr as lsmr_solve, mlsmr, Operator as _};
+use schwarz_precond::{lsmr as lsmr_solve, mlsmr};
 
 use crate::config::{LsmrOptions, PreconditionerConfig};
 use crate::domain::{Design, Effect};
@@ -21,21 +21,6 @@ mod reparam;
 #[cfg(test)]
 mod tests;
 use reparam::SlopeReparam;
-
-// Max-scaled so the squared sum can't overflow for large-magnitude vectors.
-fn norm(v: &[f64]) -> f64 {
-    let scale = v.iter().fold(0.0_f64, |m, &x| m.max(x.abs()));
-    if scale == 0.0 {
-        // f64::max ignores NaN, so all-{zero,NaN} vectors land here: propagate
-        // NaN instead of laundering it into a finite-looking zero norm.
-        return if v.iter().any(|x| x.is_nan()) {
-            f64::NAN
-        } else {
-            0.0
-        };
-    }
-    scale * v.iter().map(|&x| (x / scale).powi(2)).sum::<f64>().sqrt()
-}
 
 /// Fallible conversion into a [`Design`] for [`Solver::new`]: a categories
 /// matrix (`ArrayView2<u32>`), a list of [`Effect`] terms, or a pass-through
@@ -237,7 +222,11 @@ pub struct SolveResult {
     pub converged: bool,
     /// Number of LSMR iterations used.
     pub iterations: usize,
-    /// Final relative residual norm `‖r‖ / ‖b‖`.
+    /// Relative normal-equation residual `||D^T W (y - Dx)|| / ||D^T W y||`,
+    /// estimated from the LSMR recurrence (Fong & Saunders) at no extra cost.
+    /// Exact for an unpreconditioned solve; for a preconditioned solve it is
+    /// measured in the preconditioner's metric and typically sits a modest
+    /// factor below the true-metric value.
     pub residual: f64,
     /// Wall-clock time for the entire solve (setup + LSMR), in seconds.
     pub time_total: f64,
@@ -267,7 +256,8 @@ pub struct BatchSolveResult {
     pub converged: Vec<bool>,
     /// Per-RHS iteration counts.
     pub iterations: Vec<usize>,
-    /// Per-RHS final relative residual norms.
+    /// Per-RHS relative normal-equation residual estimate; see
+    /// [`SolveResult::residual`].
     pub residual: Vec<f64>,
     /// Per-RHS solve times in seconds.
     pub time_solve: Vec<f64>,
@@ -454,16 +444,9 @@ impl<'a> Solver<'a> {
             *d = yi - *d;
         }
 
-        // Relative normal-equation residual: ||D^T W (y - Dx)|| / ||D^T W y||.
-        // Compute D^T W v as rect_op.apply_adjoint(W^{1/2} v): apply_adjoint
-        // delivers D^T W^{1/2} (·), so feeding W^{1/2} v gives D^T W v.
-        let mut rhs = vec![0.0; self.design.n_dofs];
-        rect_op.apply_adjoint(b, &mut rhs)?;
-        let rhs_norm = norm(&rhs).max(1e-15);
-        let weighted_demeaned = rect_op.weighted_rhs(&demeaned);
-        let mut residual_dof = vec![0.0; self.design.n_dofs];
-        rect_op.apply_adjoint(weighted_demeaned.as_ref(), &mut residual_dof)?;
-        let residual = norm(&residual_dof) / rhs_norm;
+        // Relative normal-equation residual estimate, read from the LSMR
+        // recurrence at no extra cost; see `SolveResult::residual`.
+        let residual = r.normal_eq_residual;
 
         let mut x = r.x;
         let unidentified = match &self.reparam {

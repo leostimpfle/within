@@ -43,6 +43,11 @@ pub struct LsmrResult {
     pub iterations: usize,
     /// Final residual norm estimate `‖b − A x‖`.
     pub residual_norm: f64,
+    /// Relative normal-equation residual estimate `‖Aᵀrₖ‖ / ‖Aᵀb‖`, recovered
+    /// from the recurrence scalars (`|ζ̄ₖ| / |ζ̄₀|`, Fong & Saunders) at no extra
+    /// cost. For a preconditioned solve (via [`mlsmr`]) this is measured in the
+    /// preconditioner's metric.
+    pub normal_eq_residual: f64,
     /// Reason the solver stopped.
     pub stop_reason: LsmrStopReason,
 }
@@ -83,6 +88,7 @@ pub fn lsmr<A: Operator + ?Sized>(
             converged: true,
             iterations: 0,
             residual_norm: 0.0,
+            normal_eq_residual: 0.0,
             stop_reason: LsmrStopReason::ZeroRhs,
         });
     }
@@ -124,6 +130,7 @@ pub fn mlsmr<A: Operator + ?Sized, M: Operator + ?Sized>(
             converged: true,
             iterations: 0,
             residual_norm: 0.0,
+            normal_eq_residual: 0.0,
             stop_reason: LsmrStopReason::ZeroRhs,
         });
     }
@@ -150,6 +157,7 @@ fn lsmr_from_bidiag<B: Bidiagonalization>(
             converged: true,
             iterations: 0,
             residual_norm: b_norm,
+            normal_eq_residual: 0.0,
             stop_reason: LsmrStopReason::InitialNormalEquationResidualZero,
         });
     }
@@ -180,6 +188,7 @@ fn lsmr_from_bidiag<B: Bidiagonalization>(
                 converged: true,
                 iterations: itn,
                 residual_norm: recurrence.residual_estimate(),
+                normal_eq_residual: recurrence.relative_normal_eq_residual(),
                 stop_reason,
             });
         }
@@ -191,6 +200,7 @@ fn lsmr_from_bidiag<B: Bidiagonalization>(
         converged: false,
         iterations: maxiter,
         residual_norm: recurrence.residual_estimate(),
+        normal_eq_residual: recurrence.relative_normal_eq_residual(),
         stop_reason: LsmrStopReason::MaxIterations,
     })
 }

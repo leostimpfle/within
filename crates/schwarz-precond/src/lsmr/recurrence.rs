@@ -71,16 +71,20 @@ pub(super) struct LsmrRecurrenceState {
     c_bar: f64,
     s_bar: f64,
     zeta_bar: f64,
+    // |ζ̄₀| snapshot (clamped), relativizes the reported normal-eq residual.
+    zeta0: f64,
 }
 
 impl LsmrRecurrenceState {
     pub(super) fn init(s1: BidiagStep) -> Self {
+        let zeta_bar = s1.alpha * s1.beta;
         Self {
             alpha_bar: s1.alpha,
             phi_bar: s1.beta,
             c_bar: 1.0,
             s_bar: 0.0,
-            zeta_bar: s1.alpha * s1.beta,
+            zeta_bar,
+            zeta0: zeta_bar.abs().max(f64::MIN_POSITIVE),
         }
     }
 
@@ -142,6 +146,12 @@ impl LsmrRecurrenceState {
     /// `|ζ̄|` — running estimate of `‖Aᵀ r_k‖` (Fong & Saunders).
     fn normal_eq_residual_estimate(&self) -> f64 {
         self.zeta_bar.abs()
+    }
+
+    /// `|ζ̄ₖ| / |ζ̄₀|` — normal-equation residual relative to its initial value
+    /// `‖Aᵀb‖` (Fong & Saunders); the clamp on `ζ̄₀` guards the ratio.
+    pub(super) fn relative_normal_eq_residual(&self) -> f64 {
+        self.normal_eq_residual_estimate() / self.zeta0
     }
 }
 
