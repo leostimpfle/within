@@ -149,6 +149,12 @@ impl<'a> Design<'a> {
             terms.push(meta);
         }
 
+        // DOFs index CSR columns as u32; a raw entity ID (or otherwise oversized
+        // level space) is rejected here rather than left to panic in to_u32.
+        if u32::try_from(offset).is_err() {
+            return Err(BuildError::DofSpaceExceedsU32 { n_dofs: offset });
+        }
+
         // Sort by the term contributing the most DOFs (for plain factors, the
         // highest-cardinality one) so its gather/scatter runs sequentially.
         // `obs_perm` indexes observations as u32; beyond u32::MAX rows skip
@@ -282,6 +288,18 @@ mod tests {
             continuous.into_iter().map(Into::into).collect(),
         )
         .unwrap()
+    }
+
+    #[test]
+    fn build_rejects_dof_space_exceeding_u32() {
+        // A single code of u32::MAX implies u32::MAX + 1 levels — one past the
+        // CSR column-index width — the shape a raw entity ID takes. Rejected
+        // before any to_u32 conversion can panic.
+        let err = Design::from_frame(frame(vec![vec![u32::MAX]], vec![])).unwrap_err();
+        assert!(matches!(
+            err,
+            BuildError::DofSpaceExceedsU32 { n_dofs } if n_dofs == u32::MAX as usize + 1
+        ));
     }
 
     #[test]
