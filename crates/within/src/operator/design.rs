@@ -26,13 +26,13 @@ const PAR_THRESHOLD: usize = 10_000;
 /// `D^T W^{1/2} x` (scatter). For the weighted variant, the normal equations
 /// `A^T A = D^T W D = G` recover the Gramian, so the same Schwarz
 /// preconditioner approximating `G^{-1}` applies. Pass `None` to
-/// [`DesignOperator::new`] for `D`, or `Some(&w)` for `W^{1/2} D`. The branch
+/// [`DesignOperator::new`] for `D`, or `Some(&sqrt_w)` for `W^{1/2} D`. The branch
 /// on weights is hoisted outside the per-row loop — the weighted gather applies
 /// `W^{1/2}` in a trailing per-chunk sweep, and the adjoint multiplies inline
 /// through a closure, so there is no per-row scratch buffer.
 pub(crate) struct DesignOperator<'a> {
     design: &'a Design<'a>,
-    sqrt_weights: Option<Vec<f64>>,
+    sqrt_weights: Option<&'a [f64]>,
     /// Reusable atomic-scatter scratch, sized once to the largest term's
     /// coefficient block and reused across terms and `apply_adjoint` calls so
     /// it is allocated once per operator rather than once per LSMR iteration.
@@ -49,28 +49,27 @@ pub(crate) struct DesignOperator<'a> {
 impl<'a> DesignOperator<'a> {
     /// Wrap a design matrix as a linear operator.
     ///
-    /// Pass `None` for `D`, `Some(&w)` for `W^{1/2} D` (then `w.len()` must
-    /// equal `design.n_obs`). Precomputes and stores `sqrt(W)` when weights
-    /// are present.
+    /// Pass `None` for `D`, `Some(&sqrt_w)` for `W^{1/2} D` — the weights must
+    /// already be square-rooted (the `Solver` computes `sqrt(W)` once and
+    /// borrows it across every per-RHS operator), and `sqrt_w.len()` must equal
+    /// `design.n_obs`.
     ///
     /// # Panics
     ///
-    /// Panics when `weights.is_some()` and `weights.unwrap().len()` does not
-    /// equal `design.n_obs`. The `Solver` entry points perform fallible
-    /// validation against `BuildError::WeightCountMismatch` before
-    /// construction, so callers that go through `Solver::new` or
-    /// `solve()` never trigger this panic.
-    pub(crate) fn new(design: &'a Design<'a>, weights: Option<&[f64]>) -> Self {
-        let sqrt_weights = weights.map(|w| {
+    /// Panics when `sqrt_weights.is_some()` and its length does not equal
+    /// `design.n_obs`. The `Solver` entry points perform fallible validation
+    /// against `BuildError::WeightCountMismatch` before construction, so callers
+    /// that go through `Solver::new` or `solve()` never trigger this panic.
+    pub(crate) fn new(design: &'a Design<'a>, sqrt_weights: Option<&'a [f64]>) -> Self {
+        if let Some(sw) = sqrt_weights {
             assert_eq!(
-                w.len(),
+                sw.len(),
                 design.n_obs,
-                "weights length {} does not match design.n_obs {}",
-                w.len(),
+                "sqrt-weights length {} does not match design.n_obs {}",
+                sw.len(),
                 design.n_obs
             );
-            w.iter().map(|wi| wi.sqrt()).collect()
-        });
+        }
         let max_block = design.terms.iter().map(|t| t.n_dofs()).max().unwrap_or(0);
         Self {
             design,
@@ -86,7 +85,7 @@ impl<'a> DesignOperator<'a> {
     /// For unweighted designs, borrows `y` (no allocation); the weighted
     /// variant returns an owned scaled copy.
     pub(crate) fn weighted_rhs<'y>(&self, y: &'y [f64]) -> Cow<'y, [f64]> {
-        match &self.sqrt_weights {
+        match self.sqrt_weights {
             None => Cow::Borrowed(y),
             Some(sw) => Cow::Owned(y.iter().zip(sw).map(|(&yi, &swi)| swi * yi).collect()),
         }
@@ -130,7 +129,7 @@ impl Operator for DesignOperator<'_> {
     fn apply(&self, x: &[f64], y: &mut [f64]) -> Result<(), schwarz_precond::SolveError> {
         debug_assert_eq!(x.len(), self.design.n_dofs);
         debug_assert_eq!(y.len(), self.design.n_obs);
-        gather_apply(self.design, x, y, self.sqrt_weights.as_deref());
+        gather_apply(self.design, x, y, self.sqrt_weights);
         Ok(())
     }
 
@@ -144,7 +143,7 @@ impl Operator for DesignOperator<'_> {
         // lock needed: `AtomicF64` mutates through `&self`, and a single
         // operator's `apply_adjoint` calls are sequential (`solve_batch` builds
         // a distinct operator per RHS), so the shared buffer is never raced.
-        match &self.sqrt_weights {
+        match self.sqrt_weights {
             Some(sw) => scatter_apply(self.design, &self.scatter_scratch, y, &|i| sw[i] * x[i]),
             None => scatter_apply(self.design, &self.scatter_scratch, y, &|i| x[i]),
         }
