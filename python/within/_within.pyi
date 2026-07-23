@@ -120,7 +120,10 @@ class SolveResult:
             shape ``(n_obs,)``.
         converged: Whether the LSMR solver met the convergence tolerance.
         iterations: Total number of LSMR iterations performed.
-        residual: Final relative residual norm.
+        residual: Relative normal-equation residual
+            ``||D^T W (y - Dx)|| / ||D^T W y||`` estimated from the LSMR
+            recurrence at no extra cost. Exact for an unpreconditioned solve;
+            measured in the preconditioner's metric otherwise.
         time_total: Wall-clock time for the entire solve (setup + solve), in seconds.
         time_setup: Wall-clock time for the setup phase (operator + preconditioner
             construction), in seconds.
@@ -163,7 +166,8 @@ class BatchSolveResult:
         demeaned: Demeaned responses, shape ``(n_obs, k)`` (column-major).
         converged: Whether each RHS converged.
         iterations: Total LSMR iterations for each RHS.
-        residual: Final relative residual norm for each RHS.
+        residual: Per-RHS relative normal-equation residual estimate
+            (see ``SolveResult.residual``).
         time_solve: Wall-clock solve time for each RHS, in seconds.
         time_total: Wall-clock time for the entire batch (including shared setup),
             in seconds.

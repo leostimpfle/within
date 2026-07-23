@@ -1,4 +1,3 @@
-use ndarray::array;
 use within::{solve, solve_batch, LsmrOptions, PreconditionerConfig};
 
 #[path = "common/orchestrate_helpers.rs"]
@@ -6,7 +5,7 @@ mod common;
 
 #[test]
 fn test_high_level_solve() {
-    let categories = array![[0u32, 0], [1, 0], [0, 1], [1, 1], [2, 0]];
+    let categories = common::test_categories_array();
     let y = [1.0, 2.0, 3.0, 4.0, 5.0];
 
     let params = LsmrOptions::default();
@@ -14,11 +13,12 @@ fn test_high_level_solve() {
     let result = solve(categories.view(), &y, None, &params, &precond).expect("solve");
     common::assert_converged_with_small_residual(&result, 1e-6);
     common::assert_solution_finite(&result);
+    common::assert_normal_equations_satisfied(&common::test_categories(), None, &y, &result, 1e-6);
 }
 
 #[test]
 fn test_high_level_solve_weighted() {
-    let categories = array![[0u32, 0], [1, 0], [0, 1], [1, 1], [2, 0]];
+    let categories = common::test_categories_array();
     let y = [1.0, 2.0, 3.0, 4.0, 5.0];
     let weights = vec![1.0, 2.0, 1.5, 0.5, 3.0];
 
@@ -28,11 +28,18 @@ fn test_high_level_solve_weighted() {
         solve(categories.view(), &y, Some(&weights), &params, &precond).expect("solve weighted");
     common::assert_converged_with_small_residual(&result, 1e-6);
     common::assert_solution_finite(&result);
+    common::assert_normal_equations_satisfied(
+        &common::test_categories(),
+        Some(weights.as_slice()),
+        &y,
+        &result,
+        1e-6,
+    );
 }
 
 #[test]
 fn test_solve_batch_matches_individual() {
-    let categories = array![[0u32, 0], [1, 0], [0, 1], [1, 1], [2, 0]];
+    let categories = common::test_categories_array();
     let y1 = vec![1.0, 2.0, 3.0, 4.0, 5.0];
     let y2 = vec![5.0, 4.0, 3.0, 2.0, 1.0];
 
@@ -56,7 +63,7 @@ fn test_solve_batch_matches_individual() {
 
 #[test]
 fn test_solve_batch_single_rhs() {
-    let categories = array![[0u32, 0], [1, 0], [0, 1], [1, 1], [2, 0]];
+    let categories = common::test_categories_array();
     let y = [1.0, 2.0, 3.0, 4.0, 5.0];
 
     let params = LsmrOptions::default();
@@ -72,7 +79,7 @@ fn test_solve_batch_single_rhs() {
 
 #[test]
 fn test_solve_batch_weighted() {
-    let categories = array![[0u32, 0], [1, 0], [0, 1], [1, 1], [2, 0]];
+    let categories = common::test_categories_array();
     let y1 = vec![1.0, 2.0, 3.0, 4.0, 5.0];
     let y2 = vec![5.0, 4.0, 3.0, 2.0, 1.0];
     let weights = vec![1.0, 2.0, 1.5, 0.5, 3.0];
@@ -95,7 +102,7 @@ fn test_solve_batch_weighted() {
 
 #[test]
 fn test_batch_result_accessors() {
-    let categories = array![[0u32, 0], [1, 0], [0, 1], [1, 1], [2, 0]];
+    let categories = common::test_categories_array();
     let y1 = vec![1.0, 2.0, 3.0, 4.0, 5.0];
     let y2 = vec![5.0, 4.0, 3.0, 2.0, 1.0];
 

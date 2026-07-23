@@ -276,9 +276,8 @@ impl<A: Operator + ?Sized> Bidiagonalization for GolubKahan<'_, A> {
             self.alpha = 0.0;
             return Ok(BidiagStep { alpha: 0.0, beta });
         }
-        if beta > 0.0 {
-            scale_in_place(&mut self.bufs.u, 1.0 / beta);
-        }
+        // beta > 0 here: the beta == 0 lucky breakdown returned above.
+        scale_in_place(&mut self.bufs.u, 1.0 / beta);
 
         // α_{k+1} v_{k+1} = Aᵀ u_{k+1} − β_{k+1} v_k
         self.operator
@@ -330,7 +329,8 @@ impl<A: Operator + ?Sized, M: Operator + ?Sized> Bidiagonalization
             self.beta_prev_inv = 0.0;
             return Ok(BidiagStep { alpha: 0.0, beta });
         }
-        let beta_inv = if beta > 0.0 { 1.0 / beta } else { 0.0 };
+        // beta > 0 here: the beta == 0 lucky breakdown returned above.
+        let beta_inv = 1.0 / beta;
 
         // Phase 2 — fold the adjoint matvec into the p̃ recurrence.
         self.update_p_tilde(beta, beta_inv)?;

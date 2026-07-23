@@ -24,6 +24,29 @@ def as_solver_categories(cats):
     return np.asfortranarray(np.column_stack(cats).astype(np.uint32))
 
 
+def assert_normal_equations_satisfied(cats, y, result, tol, weights=None):
+    """Independent optimality oracle for a categorical fixed-effects design.
+
+    Recomputes the relative normal-equation residual
+    ``||D^T W (y - Dx)|| / ||D^T W y||`` from ``result.demeaned`` (``y - Dx``,
+    produced separately from the LSMR recurrence) and the raw categories. Unlike
+    ``result.residual`` -- now the solver's own stopping estimate -- this cannot
+    be satisfied by the solver merely reporting convergence.
+    """
+    y = np.asarray(y, dtype=np.float64)
+    demeaned = np.asarray(result.demeaned, dtype=np.float64)
+    w = np.ones_like(y) if weights is None else np.asarray(weights, dtype=np.float64)
+    num_sq = den_sq = 0.0
+    for c in cats:
+        c = np.asarray(c)
+        num_sq += np.square(np.bincount(c, weights=w * demeaned)).sum()
+        den_sq += np.square(np.bincount(c, weights=w * y)).sum()
+    relative = num_sq**0.5 / max(den_sq**0.5, 1e-15)
+    assert relative < tol, (
+        f"independent normal-equation residual {relative} exceeds {tol}"
+    )
+
+
 def test_coefficient_layout_locates_unidentified_and_round_trips():
     # firm level 2 is a singleton in the (non-first) slope term, so its slope
     # direction is unidentified.
@@ -123,6 +146,7 @@ class TestSolveDefaults:
         assert result.converged
         assert result.iterations > 0
         assert result.residual < 1e-6
+        assert_normal_equations_satisfied(cats, y, result, 1e-6)
 
     def test_unpreconditioned(self, problem):
         cats, y = problem
