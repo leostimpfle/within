@@ -43,6 +43,7 @@ and this project follows [Semantic Versioning](https://semver.org/).
 
 ### Removed
 
+- `scipy` is no longer a runtime dependency of `within-py` — the package never imported it.
 - **BREAKING:** The `Store` trait and its `ArrayStore` / `FactorMajorStore` backends, superseded by `ObservationFrame` (#68).
 - **BREAKING (`schwarz-precond`):** `LsmrStopReason::BidiagonalizationBreakdown` — the variant was unreachable. A Golub–Kahan breakdown drives the LSMR convergence estimates (proportional to the bidiagonal entries α, β) to zero on the same step, so it is always reported as `ResidualTolerance` or `NormalEquationTolerance`. Not exposed through `within`'s public API (#111).
 
