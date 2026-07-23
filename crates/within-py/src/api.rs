@@ -160,7 +160,7 @@ fn validate_batch_rows(y_rows: usize, n_obs: usize) -> PyResult<()> {
 ///
 /// Holds its columns natively (copied out of numpy) so the borrowed [`Effect`]
 /// it lowers to can be rebuilt off-GIL, where `Py` handles can't reach.
-#[pyclass(frozen, module = "within._within")]
+#[pyclass(frozen, skip_from_py_object, module = "within._within")]
 #[pyo3(name = "Effect")]
 #[derive(Clone)]
 pub struct PyEffect {
@@ -218,7 +218,7 @@ enum DesignSource<'py> {
 /// Interpret the Python `design` argument: a 2-D `uint32` categories matrix
 /// (borrowed) or a list of [`Effect`] terms (cloned out of Python).
 fn extract_design<'py>(py: Python<'_>, design: &Bound<'py, PyAny>) -> PyResult<DesignSource<'py>> {
-    if design.downcast::<PyUntypedArray>().is_ok() {
+    if design.cast::<PyUntypedArray>().is_ok() {
         let categories = readonly_u32_2d("design", design)?;
         warn_c_contiguous(py, &categories.as_array())?;
         return Ok(DesignSource::Categories(categories));
@@ -269,12 +269,12 @@ impl PySolver {
         let solver = match extract_design(py, design)? {
             DesignSource::Categories(categories) => {
                 let cats = categories.as_array();
-                py.allow_threads(move || -> Result<Solver<'static>, BuildError> {
+                py.detach(move || -> Result<Solver<'static>, BuildError> {
                     Solver::new(cats.into_design()?.into_owned(), weights_vec, precond)
                 })
             }
             DesignSource::Effects(terms) => {
-                py.allow_threads(move || -> Result<Solver<'static>, BuildError> {
+                py.detach(move || -> Result<Solver<'static>, BuildError> {
                     let effects: Vec<_> = terms.iter().map(PyEffect::as_effect).collect();
                     // The design borrows the terms' buffers; the solver outlives
                     // them, so lower to owned columns first.

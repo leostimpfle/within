@@ -3,7 +3,7 @@
 
 //! Thin PyO3 bridge exposing the [`within`] crate to Python as `within._within`.
 //! Converts Python/numpy types to the native API and delegates all computation
-//! to [`within`]; every heavy call releases the GIL via [`Python::allow_threads`].
+//! to [`within`]; every heavy call releases the GIL via [`Python::detach`].
 //! Usage docs live in `python/within/` and the `within._within.pyi` stub.
 
 use pyo3::prelude::*;
