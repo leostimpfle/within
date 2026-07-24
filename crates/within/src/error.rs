@@ -24,12 +24,12 @@ pub enum BuildError {
     /// An effect with neither an intercept nor a slope.
     #[error("an effect must have an intercept or at least one slope")]
     EmptyEffect,
-    /// A slope covariate's length does not match the effect's level count.
+    /// A slope covariate's length does not match the observation count.
     #[error("slope {slope} has {got} values, expected {expected}")]
     SlopeLengthMismatch {
         /// Index of the slope covariate within its effect.
         slope: usize,
-        /// Expected length (the effect's level count).
+        /// Expected length (the observation count — one value per row).
         expected: usize,
         /// Actual length.
         got: usize,
