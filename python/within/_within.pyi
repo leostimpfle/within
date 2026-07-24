@@ -60,9 +60,12 @@ class LsmrOptions:
             unpreconditioned, ``2 * local_size * n_dofs`` preconditioned.
     """
 
-    tol: float
-    maxiter: int
-    local_size: int | None
+    @property
+    def tol(self) -> float: ...
+    @property
+    def maxiter(self) -> int: ...
+    @property
+    def local_size(self) -> int | None: ...
     def __init__(
         self,
         tol: float = 1e-8,
@@ -239,7 +242,10 @@ def solve(
         info, and timing breakdown.
 
     Raises:
-        ValueError: If dimensions are inconsistent or the solve fails.
+        ValueError: If dimensions or values are inconsistent.
+        TypeError: If an argument has the wrong type or dtype.
+        RuntimeError: If the solve fails at runtime (poisoned lock, or a
+            subdomain solve diverges).
 
     Note:
         A single-threaded run (``RAYON_NUM_THREADS=1``) is bitwise-reproducible.
@@ -290,7 +296,10 @@ def solve_batch(
         A ``BatchSolveResult`` with stacked coefficients and per-RHS metadata.
 
     Raises:
-        ValueError: If dimensions are inconsistent.
+        ValueError: If dimensions or values are inconsistent.
+        TypeError: If an argument has the wrong type or dtype.
+        RuntimeError: If the solve fails at runtime (poisoned lock, or a
+            subdomain solve diverges).
     """
     ...
 
@@ -359,15 +368,19 @@ class Solver:
 class ApproxCholConfig:
     """Configuration for approximate Cholesky factorization."""
 
-    seed: int
-    split_merge: int | None
+    @property
+    def seed(self) -> int: ...
+    @property
+    def split_merge(self) -> int | None: ...
     def __init__(self, seed: int = 0, split_merge: int | None = None) -> None: ...
 
 class ApproxSchurConfig:
     """Configuration for approximate Schur complement via clique-tree sampling."""
 
-    seed: int
-    split: int
+    @property
+    def seed(self) -> int: ...
+    @property
+    def split(self) -> int: ...
     def __init__(self, seed: int = 0, split: int = 1) -> None: ...
 
 class Schur:
@@ -389,9 +402,12 @@ class ScalingConfig:
     quality only — and emit a ``UserWarning``) or ``"error"`` (fail the build).
     """
 
-    tolerance: float
-    max_sweeps: int
-    on_failure: str
+    @property
+    def tolerance(self) -> float: ...
+    @property
+    def max_sweeps(self) -> int: ...
+    @property
+    def on_failure(self) -> str: ...
     def __init__(
         self,
         tolerance: float | None = None,
@@ -406,10 +422,14 @@ class LocalSolverConfig:
     ``Schur.exact()`` for the exact complement.
     """
 
-    approx_chol: ApproxCholConfig | None
-    schur: Schur | None
-    dense_threshold: int
-    scaling: ScalingConfig | None
+    @property
+    def approx_chol(self) -> ApproxCholConfig | None: ...
+    @property
+    def schur(self) -> Schur | None: ...
+    @property
+    def dense_threshold(self) -> int: ...
+    @property
+    def scaling(self) -> ScalingConfig | None: ...
     def __init__(
         self,
         approx_chol: ApproxCholConfig | None = None,
@@ -421,8 +441,10 @@ class LocalSolverConfig:
 class AdditiveSchwarz:
     """Additive Schwarz preconditioner with configurable local solver."""
 
-    local_solver: LocalSolverConfig | None
-    reduction: ReductionStrategy
+    @property
+    def local_solver(self) -> LocalSolverConfig | None: ...
+    @property
+    def reduction(self) -> ReductionStrategy: ...
     def __init__(
         self,
         local_solver: LocalSolverConfig | None = None,
