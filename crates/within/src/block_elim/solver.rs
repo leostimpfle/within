@@ -517,9 +517,23 @@ impl BlockElimSolver {
             SolveSpace::Signed => {}
         }
 
-        // Solve the reduced system in place. The `rhs` tail past the reduced
-        // block is the reduced factor's embed scratch (empty unless Cover).
+        // Anchored at the kept block, the reduced solve spills past it into the
+        // eliminated block (eliminate-r) or scratch tail (eliminate-q); those slots
+        // are dead except the grounded gauge slot, a transient the subtraction below
+        // consumes. The `rhs` tail is the factor's embed scratch (unused unless Cover).
         let reduced = roles.keep.start..roles.keep.start + self.n_reduced;
+        debug_assert!(
+            n_keep <= self.n_reduced,
+            "reduced region must cover the kept block",
+        );
+        debug_assert!(
+            reduced.end <= sol.len() && n + self.n_reduced <= rhs.len(),
+            "reduced solve and its RHS copy must fit sol and rhs",
+        );
+        debug_assert!(
+            explicit_ground.is_none_or(|g| n_keep <= g && g < self.n_reduced),
+            "grounded gauge slot must spill past the kept block into a solved slot",
+        );
         sol[reduced.clone()].copy_from_slice(&rhs[n..n + self.n_reduced]);
         let embed = &mut rhs[n + self.n_reduced..];
         self.reduced_factor
@@ -531,7 +545,8 @@ impl BlockElimSolver {
             }
         }
 
-        // Back-substitute to recover the eliminated block.
+        // Back-substitute for the eliminated block; it reads the gauged kept block,
+        // so the gauge subtraction above must run first.
         let (sol_output, sol_source) = roles.split_sol(sol);
         backsub_block_from_scaled_rhs(
             sol_output,

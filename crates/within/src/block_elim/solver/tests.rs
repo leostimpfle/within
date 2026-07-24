@@ -91,6 +91,70 @@ fn test_block_elim_solver_eliminate_q_false() {
 }
 
 #[test]
+fn eliminate_r_explicit_ground_overlap_is_consumed_not_leaked() {
+    // Eliminate-r + grounded sparse factor: the reduced solve spills past the kept
+    // q-block into the eliminated r-block, landing the gauge in the first eliminated
+    // slot. Pins no-leak (pre-dirtying must not move the result) and A·x = r.
+    let (cross_tab, diagonals) = make_cross_tab_q_lt_r();
+    let config = LocalSolverConfig {
+        approx_chol: ApproxCholConfig::default(),
+        schur: SchurMode::Exact,
+        dense_threshold: 0, // force the sparse grounded path → explicit ground vertex
+        scaling: Default::default(),
+    };
+    let component = LocalComponent::general_for_test(cross_tab, diagonals);
+    let solver = BlockElimSolver::build(component, &config).expect("block-elim build failed");
+    let n_q = solver.cross_tab.n_q();
+    assert!(
+        !solver.eliminate_q,
+        "expected eliminate_q=false when n_q < n_r"
+    );
+    assert_eq!(
+        solver.explicit_ground_index(n_q),
+        Some(n_q),
+        "test must drive the eliminate-r explicit-ground overlap path",
+    );
+
+    // Original bipartite Gram A the solver inverts (diagonals + the two cross entries).
+    let n = solver.n_local();
+    let mut a = vec![vec![0.0; n]; n];
+    for (i, d) in [2.0, 3.0, 2.0, 3.0, 1.0, 1.0, 1.0].into_iter().enumerate() {
+        a[i][i] = d;
+    }
+    for (i, j) in [(0, 2), (1, 3)] {
+        a[i][j] = 1.0;
+        a[j][i] = 1.0;
+    }
+
+    let r = [1.0, -2.0, 0.5, 3.0, -1.25, 0.75, 2.0];
+    let solve_with_dirty = |dirty: f64| {
+        let mut rhs = vec![dirty; solver.scratch_size()];
+        rhs[..n].copy_from_slice(&r);
+        let mut sol = vec![dirty; solver.scratch_size()];
+        solver
+            .solve_local(&mut rhs, &mut sol, false)
+            .expect("solve_local failed");
+        sol
+    };
+    let clean = solve_with_dirty(0.0);
+    let dirty = solve_with_dirty(1e6);
+    assert_eq!(
+        clean[..n],
+        dirty[..n],
+        "pre-dirtied overlap/scratch slots leaked into the solution",
+    );
+
+    for i in 0..n {
+        let ax: f64 = (0..n).map(|j| a[i][j] * clean[j]).sum();
+        assert!(
+            (ax - r[i]).abs() < 1e-9,
+            "row {i}: A·x = {ax}, expected {}",
+            r[i],
+        );
+    }
+}
+
+#[test]
 fn trivial_singleton_component_solves_r_over_d() {
     // Live 1×1 components (positive diagonal, cancelled cross row) keep
     // n_keep = 0: the whole solve must degenerate to x = r/d exactly, in
