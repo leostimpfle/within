@@ -5,6 +5,7 @@ use std::borrow::Cow;
 
 use numpy::{PyReadonlyArray1, PyReadonlyArray2};
 use pyo3::prelude::*;
+use within::{SolveError, WithinError};
 
 // ---------------------------------------------------------------------------
 // Shared conversion helpers
@@ -21,6 +22,32 @@ pub(crate) fn coerce_to_slice<'a>(arr: &'a numpy::ndarray::ArrayView1<'_, f64>) 
 /// Wrap a display-able error as a `PyValueError`.
 pub(crate) fn value_err(e: impl std::fmt::Display) -> PyErr {
     PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string())
+}
+
+/// Maps a native solver error to the Python exception class matching its kind:
+/// caller input-validation failures become `ValueError`; runtime/environment
+/// failures (a poisoned lock, a diverged subdomain solve) become `RuntimeError`,
+/// so Python callers can branch on the distinction.
+pub(crate) trait IntoPyErr {
+    fn into_py_err(self) -> PyErr;
+}
+
+impl IntoPyErr for SolveError {
+    fn into_py_err(self) -> PyErr {
+        match self {
+            SolveError::InvalidInput { .. } => value_err(self),
+            _ => PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(self.to_string()),
+        }
+    }
+}
+
+impl IntoPyErr for WithinError {
+    fn into_py_err(self) -> PyErr {
+        match self {
+            WithinError::Solve(e) => e.into_py_err(),
+            _ => value_err(self),
+        }
+    }
 }
 
 /// A `TypeError` naming the dtype an input array must have (and the dtype it

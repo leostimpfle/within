@@ -9,7 +9,7 @@ use pyo3::prelude::*;
 
 use within::{BatchSolveResult, BuildWarning, CoefficientLayout, SolveResult};
 
-use crate::convert::value_err;
+use crate::convert::{value_err, IntoPyErr};
 
 // ---------------------------------------------------------------------------
 // Result types
@@ -220,15 +220,16 @@ pub(crate) fn into_py_batch_result(
 
 /// Run a native single-response solve with the GIL released, then convert.
 ///
-/// The closure produces a [`SolveResult`] off-GIL (`detach`); its native
-/// error is mapped to a `PyValueError` and the result to its Python wrapper.
-/// Shared by the free `solve` function and the persistent `Solver.solve`.
+/// The closure produces a [`SolveResult`] off-GIL (`detach`); its native error
+/// is mapped to the matching Python exception class (see [`IntoPyErr`]) and the
+/// result to its Python wrapper. Shared by the free `solve` function and the
+/// persistent `Solver.solve`.
 pub(crate) fn run_solve<E, F>(py: Python<'_>, solve: F) -> PyResult<PySolveResult>
 where
-    E: std::fmt::Display + Send,
+    E: IntoPyErr + Send,
     F: Send + FnOnce() -> Result<SolveResult, E>,
 {
-    let result = py.detach(solve).map_err(value_err)?;
+    let result = py.detach(solve).map_err(IntoPyErr::into_py_err)?;
     Ok(into_py_result(py, result))
 }
 
@@ -238,10 +239,10 @@ where
 /// (re-shaping the flat column buffers into 2-D arrays).
 pub(crate) fn run_batch<E, F>(py: Python<'_>, solve: F) -> PyResult<PyBatchSolveResult>
 where
-    E: std::fmt::Display + Send,
+    E: IntoPyErr + Send,
     F: Send + FnOnce() -> Result<BatchSolveResult, E>,
 {
-    let result = py.detach(solve).map_err(value_err)?;
+    let result = py.detach(solve).map_err(IntoPyErr::into_py_err)?;
     into_py_batch_result(py, result)
 }
 
@@ -260,10 +261,10 @@ pub(crate) fn emit_build_warnings(py: Python<'_>, warnings: &[BuildWarning]) -> 
 /// build warnings collected during construction, which are re-emitted on-GIL.
 pub(crate) fn run_solve_with_warnings<E, F>(py: Python<'_>, solve: F) -> PyResult<PySolveResult>
 where
-    E: std::fmt::Display + Send,
+    E: IntoPyErr + Send,
     F: Send + FnOnce() -> Result<(SolveResult, Vec<BuildWarning>), E>,
 {
-    let (result, warnings) = py.detach(solve).map_err(value_err)?;
+    let (result, warnings) = py.detach(solve).map_err(IntoPyErr::into_py_err)?;
     emit_build_warnings(py, &warnings)?;
     Ok(into_py_result(py, result))
 }
@@ -274,10 +275,10 @@ pub(crate) fn run_batch_with_warnings<E, F>(
     solve: F,
 ) -> PyResult<PyBatchSolveResult>
 where
-    E: std::fmt::Display + Send,
+    E: IntoPyErr + Send,
     F: Send + FnOnce() -> Result<(BatchSolveResult, Vec<BuildWarning>), E>,
 {
-    let (result, warnings) = py.detach(solve).map_err(value_err)?;
+    let (result, warnings) = py.detach(solve).map_err(IntoPyErr::into_py_err)?;
     emit_build_warnings(py, &warnings)?;
     into_py_batch_result(py, result)
 }
