@@ -267,6 +267,10 @@ pub struct BatchSolveResult {
     pub residual: Vec<f64>,
     /// Per-RHS solve times in seconds.
     pub time_solve: Vec<f64>,
+    /// Wall-clock time for the shared batch setup -- solver and preconditioner
+    /// construction (`Solver::new`) -- in seconds; 0 when a pre-built
+    /// preconditioner was reused.
+    pub time_setup: f64,
     /// Total wall-clock time for the entire batch (setup + all solves), in seconds.
     pub time_total: f64,
     /// Number of coefficients per RHS (rows of the underlying design).
@@ -573,6 +577,7 @@ impl<'a> Solver<'a> {
             iterations,
             residual,
             time_solve,
+            time_setup: 0.0,
             time_total: t_start.elapsed().as_secs_f64(),
             n_dofs: self.design.n_dofs,
             n_obs: self.design.n_obs,
@@ -645,7 +650,9 @@ pub fn solve_batch<'a, 'o>(
 ) -> Result<BatchSolveResult, WithinError> {
     let t_start = Instant::now();
     let solver = Solver::new(design, weights.map(|w| w.to_vec()), preconditioner)?;
+    let time_setup = t_start.elapsed().as_secs_f64();
     let mut result = solver.solve_batch(ys, lsmr)?;
+    result.time_setup += time_setup;
     result.time_total = t_start.elapsed().as_secs_f64();
     Ok(result)
 }

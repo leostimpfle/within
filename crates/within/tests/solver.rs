@@ -131,6 +131,10 @@ fn test_solver_batch() {
 
     assert_eq!(batch.converged.len(), 3);
     assert!(batch.converged.iter().all(|&c| c));
+
+    // The method reuses the already-built preconditioner, so it reports no
+    // build cost; the free solve_batch is what folds construction in.
+    assert_eq!(batch.time_setup, 0.0);
 }
 
 #[test]
