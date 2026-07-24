@@ -40,6 +40,7 @@ and this project follows [Semantic Versioning](https://semver.org/).
 - Corrected published examples and type stubs: `PreconditionerConfig` / `ReductionStrategy` are documented as (non-iterable) attribute holders rather than `IntEnum`, examples use the current argument order and `Schur` / `split_merge` spellings, and the varying-slopes workflow and minimal-norm normalization convention are documented (#102).
 - `SolveResult.residual` / `BatchSolveResult.residual` now report the LSMR recurrence's normal-equation residual *estimate* instead of recomputing it exactly, saving two passes per solve; exact when unpreconditioned, in the preconditioner's metric otherwise (#149).
 - **BREAKING (`schwarz-precond`):** `LsmrResult` gains a public `normal_eq_residual` field, the relative normal-equation residual estimate (#149).
+- All crates declare `#![forbid(unsafe_code)]` via workspace lints; the workspace is unsafe-free and reintroducing `unsafe` is now a compile error (#183).
 
 ### Fixed
 
