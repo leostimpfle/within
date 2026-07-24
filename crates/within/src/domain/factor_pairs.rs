@@ -231,6 +231,7 @@ mod tests {
     use super::*;
     use crate::domain::Design;
     use crate::observation::ObservationFrame;
+    use crate::Effect;
 
     fn make_test_design() -> Design<'static> {
         let frame = ObservationFrame::new(
@@ -273,6 +274,46 @@ mod tests {
                 assert!((ws - 1.0).abs() < 1e-12, "Weight² sum {ws} != 1.0");
             }
         }
+    }
+
+    #[test]
+    fn slope_design_keeps_uniform_partition_weights() {
+        // Slope designs keep uniform weights; 1/√c reweighting collapses their convergence (#94).
+        let levels_a = [0u32, 1, 2, 0, 1, 2];
+        let levels_b = [0u32, 1, 0, 1, 0, 1];
+        let levels_c = [0u32, 0, 1, 1, 0, 1];
+        let z = [1.0, -2.0, 0.5, 3.0, -1.5, 2.5];
+        let design = Design::new(vec![
+            Effect::new(&levels_a, true, [&z[..]]).expect("slope effect"),
+            Effect::new(&levels_b, true, []).expect("effect b"),
+            Effect::new(&levels_c, true, []).expect("effect c"),
+        ])
+        .expect("valid slope design");
+
+        let (domain_pairs, _) = build_local_domains(&design, None, &ScalingConfig::default())
+            .expect("slope domains build");
+
+        for ld in &domain_pairs {
+            for i in 0..ld.core.global_indices().len() {
+                assert_eq!(
+                    ld.core.partition_weights().get(i),
+                    1.0,
+                    "slope design must keep uniform partition weights"
+                );
+            }
+        }
+
+        // Non-vacuity: without a shared DOF, uniform vs 1/√c weights are indistinguishable.
+        let mut counts = vec![0u32; design.n_dofs];
+        for ld in &domain_pairs {
+            for &idx in ld.core.global_indices() {
+                counts[idx as usize] += 1;
+            }
+        }
+        assert!(
+            counts.iter().any(|&c| c > 1),
+            "test is vacuous: build a design whose subdomains share a DOF"
+        );
     }
 
     #[test]
