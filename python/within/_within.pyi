@@ -172,6 +172,9 @@ class BatchSolveResult:
         residual: Per-RHS relative normal-equation residual estimate
             (see ``SolveResult.residual``).
         time_solve: Wall-clock solve time for each RHS, in seconds.
+        time_setup: Wall-clock time for the shared setup phase (solver and
+            preconditioner construction), in seconds; 0 when a pre-built
+            preconditioner was reused.
         time_total: Wall-clock time for the entire batch (including shared setup),
             in seconds.
     """
@@ -192,6 +195,8 @@ class BatchSolveResult:
     def residual(self) -> list[float]: ...
     @property
     def time_solve(self) -> list[float]: ...
+    @property
+    def time_setup(self) -> float: ...
     @property
     def time_total(self) -> float: ...
 

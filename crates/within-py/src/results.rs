@@ -60,6 +60,8 @@ pub struct PyBatchSolveResult {
     #[pyo3(get)]
     pub time_solve: Vec<f64>,
     #[pyo3(get)]
+    pub time_setup: f64,
+    #[pyo3(get)]
     pub time_total: f64,
 }
 
@@ -210,6 +212,7 @@ pub(crate) fn into_py_batch_result(
         iterations: result.iterations,
         residual: result.residual,
         time_solve: result.time_solve,
+        time_setup: result.time_setup,
         time_total: result.time_total,
     })
 }

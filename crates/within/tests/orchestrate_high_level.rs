@@ -140,6 +140,11 @@ fn test_batch_result_accessors() {
     assert_eq!(batch.time_solve.len(), 2);
     assert!(batch.time_solve.iter().all(|&t| t >= 0.0));
 
+    // The free solve_batch folds the shared preconditioner build into
+    // time_setup; a dropped build cost would read as exactly 0.
+    assert!(batch.time_setup > 0.0);
+    assert!(batch.time_setup <= batch.time_total);
+
     // time_total
     assert!(batch.time_total >= 0.0);
 

@@ -382,6 +382,8 @@ class TestSolverBatch:
         assert len(batch.iterations) == 2
         assert len(batch.residual) == 2
         assert len(batch.time_solve) == 2
+        # The method reuses the built preconditioner, so it reports no build cost.
+        assert batch.time_setup == 0.0
         assert batch.time_total >= 0
         assert batch.unidentified == []
 
@@ -478,6 +480,10 @@ class TestSolveBatchFreeFunction:
 
         result = solve_batch(categories, Y)
         assert all(result.converged)
+        # The free solve_batch folds the shared preconditioner build into
+        # time_setup; a dropped build cost would read as exactly 0.
+        assert result.time_setup > 0
+        assert result.time_setup <= result.time_total
 
     def test_solve_batch_matches_individual(self, problem):
         cats, y = problem

@@ -49,7 +49,9 @@ fn build_and_solve_batch<'a>(
 ) -> Result<(BatchSolveResult, Vec<BuildWarning>), WithinError> {
     let t_start = Instant::now();
     let solver = Solver::new(design, weights.map(|w| w.to_vec()), precond)?;
+    let time_setup = t_start.elapsed().as_secs_f64();
     let mut result = solver.solve_batch(ys, lsmr)?;
+    result.time_setup += time_setup;
     result.time_total = t_start.elapsed().as_secs_f64();
     Ok((result, solver.warnings().to_vec()))
 }
