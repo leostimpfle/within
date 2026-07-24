@@ -20,7 +20,7 @@
 ///
 /// Block elimination produces these by construction, so [`CsrMatrix::new`] is
 /// infallible and the invariants are guarded only in debug builds.
-#[derive(Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Clone)]
 pub(crate) struct CsrMatrix {
     indptr: Vec<u32>,
     indices: Vec<u32>,
