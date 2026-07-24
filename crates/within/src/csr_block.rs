@@ -354,4 +354,49 @@ mod tests {
         assert_eq!(bt.ncols, 2);
         assert_eq!(bt.nnz(), 0);
     }
+
+    // Above PAR_SPMV_THRESHOLD the parallel path must reproduce the sequential
+    // result exactly: each chunk reconstructs its global rows as
+    // `chunk_idx * chunk + local_i`, so a wrong reconstruction (or a no-op body)
+    // yields wrong output. Chunk *sizing* is a perf knob that cannot change the
+    // result — it is used consistently for both the split and the row offset —
+    // so it is deliberately not asserted.
+    #[test]
+    fn par_spmv_matches_seq_above_threshold() {
+        let nrows = PAR_SPMV_THRESHOLD + 2_000;
+        let ncols = 64;
+        let half = ncols / 2;
+
+        // Two nonzeros per row, columns kept distinct and ascending so the block
+        // is structurally valid; values vary with the row so a misindexed row is
+        // observable.
+        let mut indptr = vec![0u32; nrows + 1];
+        let mut indices = Vec::with_capacity(2 * nrows);
+        let mut data = Vec::with_capacity(2 * nrows);
+        for i in 0..nrows {
+            indices.push((i % half) as u32);
+            data.push(i as f64 * 0.5 + 1.0);
+            indices.push((half + i % half) as u32);
+            data.push(i as f64 * -0.25 - 2.0);
+            indptr[i + 1] = indptr[i] + 2;
+        }
+        let block = CsrBlock {
+            indptr,
+            indices,
+            data,
+            nrows,
+            ncols,
+        };
+
+        let x: Vec<f64> = (0..ncols).map(|j| (j as f64).sin()).collect();
+        let base: Vec<f64> = (0..nrows).map(|i| i as f64 * 1e-3).collect();
+
+        let mut y_par = vec![0.0; nrows];
+        block.par_spmv_assign_add(&x, &base, &mut y_par);
+
+        let mut y_seq = vec![0.0; nrows];
+        block.seq_spmv_assign_add(&x, &base, &mut y_seq);
+
+        assert_eq!(y_par, y_seq);
+    }
 }
