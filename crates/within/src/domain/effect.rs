@@ -1,7 +1,7 @@
 use crate::BuildError;
 
 /// One factor's contribution to a design: level codes, an optional per-level
-/// intercept, and per-level slope covariates.
+/// intercept, and per-observation slope covariates.
 #[derive(Clone, Debug)]
 pub struct Effect<'a> {
     levels: &'a [u32],
@@ -10,7 +10,7 @@ pub struct Effect<'a> {
 }
 
 impl<'a> Effect<'a> {
-    /// Validates the effect is non-empty and every slope matches the level count.
+    /// Validates the effect is non-empty and every slope has one value per observation.
     pub fn new(
         levels: &'a [u32],
         intercept: bool,
