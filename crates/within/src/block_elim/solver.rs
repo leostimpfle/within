@@ -300,6 +300,11 @@ fn assemble_bipartite_cover(
     let n_q = c.nrows;
     let n_r = c.ncols;
     let n_r_u32 = u32::try_from(n_r).expect("cover columns exceed u32::MAX");
+    // The cover doubles both dimensions: transpose stores source rows (0..2*n_q)
+    // as u32 indices and the cross-sheet shift emits columns up to 2*n_r - 1, so
+    // both doubled sizes — not just n_r — must fit the u32 index.
+    u32::try_from(2 * n_q).expect("doubled cover rows exceed u32::MAX");
+    u32::try_from(2 * n_r).expect("doubled cover columns exceed u32::MAX");
 
     let mut indptr = Vec::with_capacity(2 * n_q + 1);
     let mut indices = Vec::with_capacity(2 * c.nnz());
