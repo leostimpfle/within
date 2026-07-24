@@ -1,8 +1,8 @@
 //! PyO3 config wrapper classes exposed via `within._within`.
 //!
 //! These mirror the native [`within::config`] types and host the
-//! Python→native config conversions (`to_native`,
-//! `resolve_precond_input`, `resolve_lsmr_config`).
+//! Python→native config conversions (`to_native`, `resolve_precond_input`,
+//! `resolve_lsmr_config`). The low-level classes are exposed for benchmark tuning.
 
 use numpy::PyReadonlyArray1;
 use pyo3::prelude::*;
@@ -14,10 +14,6 @@ use within::config::{
 use within::{Preconditioner, PreconditionerInput};
 
 use crate::convert::IntoPyErr;
-
-// ---------------------------------------------------------------------------
-// Low-level config classes (available via `_within` for benchmarks)
-// ---------------------------------------------------------------------------
 
 #[pyclass(frozen, module = "within._within")]
 #[pyo3(name = "ApproxCholConfig")]
@@ -188,10 +184,6 @@ impl PyScalingConfig {
     }
 }
 
-// ---------------------------------------------------------------------------
-// PreconditionerConfig enum (IntEnum shortcut)
-// ---------------------------------------------------------------------------
-
 /// Preconditioner selection shortcut for the LSMR solver.
 ///
 /// - ``PreconditionerConfig.Additive`` — additive Schwarz (default)
@@ -224,10 +216,6 @@ impl PyReductionStrategy {
         }
     }
 }
-
-// ---------------------------------------------------------------------------
-// Local solver config (available via `_within` for benchmarks)
-// ---------------------------------------------------------------------------
 
 #[pyclass(frozen, module = "within._within")]
 #[pyo3(name = "LocalSolverConfig")]
@@ -262,9 +250,31 @@ impl PyLocalSolverConfig {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Schwarz preconditioner config (available via `_within` for benchmarks)
-// ---------------------------------------------------------------------------
+impl PyLocalSolverConfig {
+    pub(crate) fn to_native(&self, py: Python<'_>) -> LocalSolverConfig {
+        let approx_chol = self
+            .approx_chol
+            .as_ref()
+            .map(|c| c.bind(py).get().to_native())
+            .unwrap_or_else(|| LocalSolverConfig::default().approx_chol);
+        let schur = self
+            .schur
+            .as_ref()
+            .map(|s| s.bind(py).get().to_native())
+            .unwrap_or_default();
+        let scaling = self
+            .scaling
+            .as_ref()
+            .map(|c| c.bind(py).get().to_native())
+            .unwrap_or_default();
+        LocalSolverConfig {
+            approx_chol,
+            schur,
+            dense_threshold: self.dense_threshold,
+            scaling,
+        }
+    }
+}
 
 #[pyclass(frozen, module = "within._within")]
 #[pyo3(name = "AdditiveSchwarz")]
@@ -286,10 +296,6 @@ impl PyAdditiveSchwarz {
         }
     }
 }
-
-// ---------------------------------------------------------------------------
-// LSMR config
-// ---------------------------------------------------------------------------
 
 #[pyclass(frozen, module = "within._within")]
 #[pyo3(name = "LsmrOptions")]
@@ -314,10 +320,6 @@ impl PyLsmrOptions {
         }
     }
 }
-
-// ---------------------------------------------------------------------------
-// Built preconditioner (returned by Solver, picklable)
-// ---------------------------------------------------------------------------
 
 /// A pre-built preconditioner that can be pickled and reused.
 ///
@@ -400,10 +402,6 @@ impl PyPreconditioner {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Python → native config conversion
-// ---------------------------------------------------------------------------
-
 /// Native interpretation of the Python `preconditioner` argument.
 ///
 /// A pre-built [`Preconditioner`] takes the reuse path; everything else is a
@@ -452,7 +450,6 @@ fn extract_preconditioner_config(
         return Ok(None);
     };
 
-    // Enum shorthand
     if let Ok(p) = obj.extract::<PyPreconditionerConfig>() {
         return Ok(Some(match p {
             PyPreconditionerConfig::Off => PreconditionerConfig::Off,
@@ -461,7 +458,6 @@ fn extract_preconditioner_config(
         }));
     }
 
-    // Advanced: AdditiveSchwarz object
     if let Ok(schwarz) = obj.cast::<PyAdditiveSchwarz>() {
         let s = schwarz.get();
         let local = match &s.local_solver {
@@ -473,28 +469,7 @@ fn extract_preconditioner_config(
                         "local_solver must be LocalSolverConfig or None",
                     ));
                 };
-                let sc = sc.get();
-                let approx_chol = sc
-                    .approx_chol
-                    .as_ref()
-                    .map(|c| c.bind(py).get().to_native())
-                    .unwrap_or_else(|| LocalSolverConfig::default().approx_chol);
-                let schur = sc
-                    .schur
-                    .as_ref()
-                    .map(|s| s.bind(py).get().to_native())
-                    .unwrap_or_default();
-                let scaling = sc
-                    .scaling
-                    .as_ref()
-                    .map(|c| c.bind(py).get().to_native())
-                    .unwrap_or_default();
-                LocalSolverConfig {
-                    approx_chol,
-                    schur,
-                    dense_threshold: sc.dense_threshold,
-                    scaling,
-                }
+                sc.get().to_native(py)
             }
         };
         let reduction = s.reduction.to_native();
