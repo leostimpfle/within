@@ -323,6 +323,21 @@ impl std::fmt::Debug for Solver<'_> {
     }
 }
 
+/// Per-RHS solve output shared by [`Solver::solve`] and [`Solver::solve_batch`].
+///
+/// The design-level fields (`layout`, `warnings`, `unidentified`) are identical
+/// across RHS, so the batch path attaches them once instead of cloning them per
+/// RHS as it would if each worker returned a full [`SolveResult`].
+struct RhsSolution {
+    x: Vec<f64>,
+    demeaned: Vec<f64>,
+    converged: bool,
+    iterations: usize,
+    residual: f64,
+    time_setup: f64,
+    time_solve: f64,
+}
+
 impl<'a> Solver<'a> {
     /// Construct a solver.
     ///
@@ -401,14 +416,11 @@ impl<'a> Solver<'a> {
         &self.warnings
     }
 
-    /// Solve for a single RHS vector with the given LSMR tuning.
-    pub fn solve<'o>(
-        &self,
-        y: &[f64],
-        lsmr: impl Into<Option<&'o LsmrOptions>>,
-    ) -> Result<SolveResult, SolveError> {
-        let default = LsmrOptions::default();
-        let lsmr = lsmr.into().unwrap_or(&default);
+    /// Shared per-RHS solve: validate `y`, run (m)lsmr, demean, and
+    /// back-transform slopes. Excludes the design-level `layout` / `warnings` /
+    /// `unidentified`, which the public entry points attach once (see
+    /// [`RhsSolution`]).
+    fn solve_rhs(&self, y: &[f64], lsmr: &LsmrOptions) -> Result<RhsSolution, SolveError> {
         // Guard the silent-truncation hole: weighted_rhs zips y with sqrt-weights,
         // which would otherwise discard trailing values when y.len() > n_rows.
         if y.len() != self.design.n_obs {
@@ -460,32 +472,58 @@ impl<'a> Solver<'a> {
             *d = yi - *d;
         }
 
-        // Relative normal-equation residual estimate, read from the LSMR
-        // recurrence at no extra cost; see `SolveResult::residual`.
-        let residual = r.normal_eq_residual;
-
         let mut x = r.x;
-        let unidentified = match &self.reparam {
-            Some(rp) => {
-                rp.back_transform(&mut x);
-                rp.unidentified.clone()
-            }
-            None => Vec::new(),
-        };
+        if let Some(rp) = &self.reparam {
+            rp.back_transform(&mut x);
+        }
 
-        Ok(SolveResult {
+        Ok(RhsSolution {
             x,
-            unidentified,
-            warnings: self.warnings.clone(),
-            layout: CoefficientLayout::from_design(&self.design),
             // Back to the caller's observation order (no-op if not reordered).
             demeaned: self.design.permute_obs_out(demeaned),
             converged: r.converged,
             iterations: r.iterations,
-            residual,
-            time_total: t_start.elapsed().as_secs_f64(),
+            // Relative normal-equation residual estimate, read from the LSMR
+            // recurrence at no extra cost; see `SolveResult::residual`.
+            residual: r.normal_eq_residual,
             time_setup,
             time_solve,
+        })
+    }
+
+    /// Per-level directions the data cannot identify, shared across all RHS:
+    /// identification depends only on the design and weights, never on `y`.
+    fn unidentified(&self) -> Vec<UnidentifiedDirection> {
+        self.reparam
+            .as_ref()
+            .map(|rp| rp.unidentified.clone())
+            .unwrap_or_default()
+    }
+
+    /// Solve for a single RHS vector with the given LSMR tuning.
+    pub fn solve<'o>(
+        &self,
+        y: &[f64],
+        lsmr: impl Into<Option<&'o LsmrOptions>>,
+    ) -> Result<SolveResult, SolveError> {
+        let default = LsmrOptions::default();
+        let lsmr = lsmr.into().unwrap_or(&default);
+
+        let t_start = Instant::now();
+        let solution = self.solve_rhs(y, lsmr)?;
+
+        Ok(SolveResult {
+            x: solution.x,
+            unidentified: self.unidentified(),
+            warnings: self.warnings.clone(),
+            layout: CoefficientLayout::from_design(&self.design),
+            demeaned: solution.demeaned,
+            converged: solution.converged,
+            iterations: solution.iterations,
+            residual: solution.residual,
+            time_total: t_start.elapsed().as_secs_f64(),
+            time_setup: solution.time_setup,
+            time_solve: solution.time_solve,
         })
     }
 
@@ -500,11 +538,13 @@ impl<'a> Solver<'a> {
         let lsmr = lsmr.into().unwrap_or(&default);
         let n_rhs = ys.len();
 
-        // Fail fast on the first per-RHS error rather than materializing a
-        // `Vec<Result<..>>` and only surfacing the failure during the fold.
-        let results: Vec<SolveResult> = ys
+        // Each worker returns only the per-RHS fields; the design-level `layout`
+        // / `warnings` / `unidentified` are built once below, not once per RHS.
+        // Collecting into `Result` fails fast on the first per-RHS error rather
+        // than surfacing it during the fold.
+        let solutions: Vec<RhsSolution> = ys
             .par_iter()
-            .map(|y| self.solve(y, lsmr))
+            .map(|y| self.solve_rhs(y, lsmr))
             .collect::<Result<Vec<_>, _>>()?;
 
         let mut x = Vec::with_capacity(self.design.n_dofs * n_rhs);
@@ -514,25 +554,18 @@ impl<'a> Solver<'a> {
         let mut residual = Vec::with_capacity(n_rhs);
         let mut time_solve = Vec::with_capacity(n_rhs);
 
-        // Identical for every RHS: identification depends only on the design
-        // and weights, never on `y`.
-        let unidentified = results
-            .first()
-            .map(|r| r.unidentified.clone())
-            .unwrap_or_default();
-
-        for r in results {
-            x.extend_from_slice(&r.x);
-            demeaned.extend_from_slice(&r.demeaned);
-            converged.push(r.converged);
-            iterations.push(r.iterations);
-            residual.push(r.residual);
-            time_solve.push(r.time_solve);
+        for solution in solutions {
+            x.extend_from_slice(&solution.x);
+            demeaned.extend_from_slice(&solution.demeaned);
+            converged.push(solution.converged);
+            iterations.push(solution.iterations);
+            residual.push(solution.residual);
+            time_solve.push(solution.time_solve);
         }
 
         Ok(BatchSolveResult {
             x,
-            unidentified,
+            unidentified: self.unidentified(),
             warnings: self.warnings.clone(),
             layout: CoefficientLayout::from_design(&self.design),
             demeaned,

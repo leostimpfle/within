@@ -30,3 +30,6 @@ pub(crate) fn compensated_sum(values: &[f64]) -> f64 {
     }
     sum + compensation
 }
+
+#[cfg(test)]
+mod tests;
