@@ -14,7 +14,7 @@ jobs:
     name: Check + Coverage (Linux)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: prefix-dev/setup-pixi@v0.10.0
         with:
           cache: true
@@ -34,7 +34,7 @@ jobs:
     name: MSRV (1.85.0)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@1.85.0
       - uses: Swatinem/rust-cache@v2
       - name: cargo check (workspace, all features, at the declared MSRV)
@@ -44,7 +44,7 @@ jobs:
     name: SemVer (public API)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       # within-py is a PyO3 cdylib whose real public surface is the Python ABI,
       # not a Rust library API, so cargo-semver-checks can't check it; scope to
       # the two crates actually published to crates.io.
@@ -64,7 +64,7 @@ jobs:
           - macos-latest
           - windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: prefix-dev/setup-pixi@v0.10.0
         with:
           cache: true
