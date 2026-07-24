@@ -79,8 +79,8 @@ class TestDegenerateY:
         )
         y = np.full(100, 5.0)
         result = solve(cats, y)
-        if result.converged:
-            np.testing.assert_allclose(result.demeaned, 0.0, atol=1e-4)
+        assert result.converged
+        np.testing.assert_allclose(result.demeaned, 0.0, atol=1e-4)
 
     def test_all_same_category_assignments(self):
         """All observations in one group per factor leaves no variation to explain."""
@@ -185,10 +185,8 @@ class TestNonContiguousInputs:
         result_contiguous = solve(cats, y_direct)
         result_strided = solve(cats, y_strided)
 
-        if result_contiguous.converged and result_strided.converged:
-            np.testing.assert_allclose(
-                result_contiguous.x, result_strided.x, atol=1e-12
-            )
+        assert result_contiguous.converged and result_strided.converged
+        np.testing.assert_allclose(result_contiguous.x, result_strided.x, atol=1e-12)
 
     def test_non_contiguous_weights_gives_same_result_as_contiguous(self):
         """Non-contiguous weights should give the same result as contiguous."""
@@ -206,10 +204,8 @@ class TestNonContiguousInputs:
         result_contiguous = solve(cats, y, weights=w_direct)
         result_strided = solve(cats, y, weights=w_strided)
 
-        if result_contiguous.converged and result_strided.converged:
-            np.testing.assert_allclose(
-                result_contiguous.x, result_strided.x, atol=1e-12
-            )
+        assert result_contiguous.converged and result_strided.converged
+        np.testing.assert_allclose(result_contiguous.x, result_strided.x, atol=1e-12)
 
     def test_c_contiguous_categories_emits_warning(self):
         """C-contiguous (row-major) categories should emit a UserWarning."""

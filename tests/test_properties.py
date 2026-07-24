@@ -136,8 +136,8 @@ class TestAdvancedPreconditioners:
                 reduction=ReductionStrategy.ParallelReduction
             ),
         )
-        if r_atomic.converged and r_parallel.converged:
-            np.testing.assert_allclose(r_atomic.x, r_parallel.x, atol=1e-4)
+        assert r_atomic.converged and r_parallel.converged
+        np.testing.assert_allclose(r_atomic.x, r_parallel.x, atol=1e-4)
 
 
 class TestBatchProperties:
@@ -171,8 +171,8 @@ class TestBatchProperties:
         solver = Solver(categories)
         batch = solver.solve_batch(Y)
         single = solver.solve(y)
-        if batch.converged[0] and single.converged:
-            np.testing.assert_allclose(batch.x[:, 0], single.x, atol=1e-12)
+        assert batch.converged[0] and single.converged
+        np.testing.assert_allclose(batch.x[:, 0], single.x, atol=1e-12)
 
     def test_batch_x_shape(self):
         """batch.x should have shape (n_dofs, k) where k is the number of columns."""
@@ -232,5 +232,5 @@ class TestBatchProperties:
         solver = Solver(categories)
         batch = solver.solve_batch(Y)
         for col in range(k):
-            if batch.converged[col]:
-                np.testing.assert_allclose(batch.x[:, col], 0.0, atol=1e-10)
+            assert batch.converged[col]
+            np.testing.assert_allclose(batch.x[:, col], 0.0, atol=1e-10)
