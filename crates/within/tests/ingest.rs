@@ -1,7 +1,7 @@
 //! Ingest boundary: `ArrayView2<u32>` categories arrays of any layout
 //! normalize to the same contiguous-column frame.
 
-use ndarray::{array, s, Array2, ShapeBuilder};
+use ndarray::{array, Array2, Axis, ShapeBuilder, Slice};
 use within::{solve, LsmrOptions, PreconditionerConfig};
 
 #[path = "common/orchestrate_helpers.rs"]
@@ -101,7 +101,7 @@ fn column_reversed_view_ingests_in_logical_order() {
         f.assign(&cats);
         f
     };
-    let reversed = cats_f.slice(s![.., ..;-1]);
+    let reversed = cats_f.slice_axis(Axis(1), Slice::new(0, None, -1));
     assert!(reversed.strides()[1] < 1, "column stride must be negative");
 
     let y = vec![1.0, 2.0, 3.0, 4.0, 5.0];

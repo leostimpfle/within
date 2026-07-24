@@ -19,3 +19,6 @@ faer.workspace = true
 serde = { workspace = true, optional = true }
 thiserror.workspace = true
 thread_local = "1.1"
+
+[lints]
+workspace = true
