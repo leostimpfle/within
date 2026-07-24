@@ -11,14 +11,13 @@ on:
     branches:
       - main
   workflow_dispatch:
-    inputs:
-      update-reference:
-        description: "Bootstrap/refresh the committed wall-clock reference from this run (on CI hardware)"
-        type: boolean
-        default: false
 
 permissions:
-  contents: write
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 env:
   CARGO_TERM_COLOR: always
@@ -27,6 +26,9 @@ jobs:
   wallclock:
     name: Wall-clock 1M 3FE (alert only)
     runs-on: ubuntu-latest
+    env:
+      RUSTC_WRAPPER: sccache
+      SCCACHE_GHA_ENABLED: "true"
     steps:
       - uses: actions/checkout@v7
       - uses: prefix-dev/setup-pixi@v0.10.0
@@ -34,44 +36,17 @@ jobs:
           environments: ci
           cache: true
           cache-write: ${{ github.ref == 'refs/heads/main' }}
+      - uses: mozilla-actions/sccache-action@v0.0.10
       - uses: Swatinem/rust-cache@v2
 
-      # Multi-threaded on purpose (default Rayon width = all runner cores): this
-      # tier is the multi-threaded safety net, not the deterministic path. The
-      # harness prints WALLCLOCK_BEST_NS=<ns> (best of N runs).
       - name: Time 1M-row 3FE solve (release, best-of-N)
         id: bench
         run: |
           out="$(pixi run -e ci cargo bench -p within --bench wallclock_1m3fe)"
           echo "$out"
-          best="$(printf '%s\n' "$out" | grep -oE 'WALLCLOCK_BEST_NS=[0-9]+' | tail -n1 | cut -d= -f2)"
+          best="$(printf '%s\n' "$out" | grep -oE 'WALLCLOCK_BEST_NS=[0-9]+' | tail -n1 | cut -d= -f2 || true)"
           echo "best_ns=${best:-}" >> "$GITHUB_OUTPUT"
 
-      - name: Bootstrap reference
-        if: github.event_name == 'workflow_dispatch' && inputs.update-reference && steps.bench.outputs.best_ns != ''
-        run: python3 scripts/check-wallclock-reference.py --measured-ns "${{ steps.bench.outputs.best_ns }}" --update
-
       - name: Compare against committed reference (alert only)
-        if: steps.bench.outputs.best_ns != '' && !(github.event_name == 'workflow_dispatch' && inputs.update-reference)
+        if: steps.bench.outputs.best_ns != ''
         run: python3 scripts/check-wallclock-reference.py --measured-ns "${{ steps.bench.outputs.best_ns }}" --commit "${{ github.sha }}"
-
-      - name: Commit refreshed reference
-        if: github.event_name == 'workflow_dispatch' && inputs.update-reference
-        run: |
-          if git diff --quiet -- benches/wallclock_reference.json; then
-            exit 0
-          fi
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add benches/wallclock_reference.json
-          git commit -m "chore(perf): bootstrap wall-clock reference (#147) [skip ci]"
-          # The bench takes minutes; a merge to main can land in that window and
-          # make the push a non-fast-forward. Rebase our single-file commit onto
-          # the new tip (no concurrent merge touches this file) and retry.
-          for attempt in 1 2 3 4 5; do
-            git push && exit 0
-            echo "push rejected (raced a merge to main); rebasing and retrying ($attempt)…"
-            git pull --rebase origin main
-          done
-          echo "::error::could not push refreshed wall-clock reference after retries"
-          exit 1

@@ -1,0 +1,71 @@
+name: Perf Reference
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  refresh:
+    name: Refresh wall-clock reference
+    runs-on: ubuntu-latest
+    env:
+      RUSTC_WRAPPER: sccache
+      SCCACHE_GHA_ENABLED: "true"
+    steps:
+      - name: Require main
+        if: github.ref != 'refs/heads/main'
+        run: |
+          echo "::error::dispatch this workflow on main"
+          exit 1
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: prefix-dev/setup-pixi@a09b6247153796b190642a2b53fac4241043cf6f # v0.10.0
+        with:
+          environments: ci
+          cache: true
+          cache-write: ${{ github.ref == 'refs/heads/main' }}
+      - uses: mozilla-actions/sccache-action@9e7fa8a12102821edf02ca5dbea1acd0f89a2696 # v0.0.10
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+
+      - name: Time 1M-row 3FE solve (release, best-of-N)
+        id: bench
+        run: |
+          out="$(pixi run -e ci cargo bench -p within --bench wallclock_1m3fe)"
+          echo "$out"
+          best="$(printf '%s\n' "$out" | grep -oE 'WALLCLOCK_BEST_NS=[0-9]+' | tail -n1 | cut -d= -f2 || true)"
+          echo "best_ns=${best:-}" >> "$GITHUB_OUTPUT"
+
+      - name: Write reference
+        run: |
+          if [ -z "${{ steps.bench.outputs.best_ns }}" ]; then
+            echo "::error::bench emitted no WALLCLOCK_BEST_NS; reference unchanged"
+            exit 1
+          fi
+          python3 scripts/check-wallclock-reference.py --measured-ns "${{ steps.bench.outputs.best_ns }}" --update
+
+      - name: Commit refreshed reference
+        run: |
+          if git diff --quiet -- benches/wallclock_reference.json; then
+            echo "reference already matches this run; nothing to commit"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add benches/wallclock_reference.json
+          git commit -m "chore(perf): refresh wall-clock reference (#147) [skip ci]"
+          for attempt in 1 2 3 4 5; do
+            git push && exit 0
+            echo "push rejected (raced a merge to main); rebasing and retrying ($attempt)…"
+            git pull --rebase origin main
+          done
+          echo "::error::could not push refreshed wall-clock reference after retries"
+          exit 1
