@@ -37,3 +37,6 @@ harness = false
 [[bench]]
 name = "wallclock_1m3fe"
 harness = false
+
+[lints]
+workspace = true
