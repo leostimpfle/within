@@ -43,6 +43,7 @@ and this project follows [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- Python `Preconditioner.apply` releases the GIL around the native Schwarz apply, matching the rest of the binding surface (#180).
 - Python `solve_batch` no longer emits the F-contiguity `UserWarning` twice for a C-order categories array.
 
 ### Removed

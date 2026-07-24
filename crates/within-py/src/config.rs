@@ -13,6 +13,8 @@ use within::config::{
 };
 use within::{Preconditioner, PreconditionerInput};
 
+use crate::convert::IntoPyErr;
+
 // ---------------------------------------------------------------------------
 // Low-level config classes (available via `_within` for benchmarks)
 // ---------------------------------------------------------------------------
@@ -345,12 +347,12 @@ impl PyPreconditioner {
                 self.inner.ncols()
             )));
         }
-        let mut y = vec![0.0; self.inner.nrows()];
-        self.inner
-            .apply(x_slice, &mut y)
-            .map_err(|e: within::SolveError| {
-                pyo3::exceptions::PyValueError::new_err(e.to_string())
-            })?;
+        let y = py
+            .detach(|| {
+                let mut y = vec![0.0; self.inner.nrows()];
+                self.inner.apply(x_slice, &mut y).map(|()| y)
+            })
+            .map_err(IntoPyErr::into_py_err)?;
         Ok(numpy::PyArray1::from_vec(py, y))
     }
     /// Number of rows (DOFs).
