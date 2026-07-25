@@ -1,8 +1,11 @@
+use std::borrow::Cow;
+
 use super::reparam::SlopeReparam;
-use super::{CoefficientAddress, CoefficientLayout};
+use super::{CoefficientAddress, CoefficientLayout, Solver};
 use crate::channel::Channel;
-use crate::config::{ScalingConfig, DEFAULT_DENSE_SCHUR_THRESHOLD};
+use crate::config::{PreconditionerConfig, ScalingConfig, DEFAULT_DENSE_SCHUR_THRESHOLD};
 use crate::domain::{build_local_domains, Design, Grounding, MatrixForm};
+use crate::observation::ObservationFrame;
 use crate::Effect;
 
 /// DGP kept in lockstep with `surplus_component_sampled_matches_exact_reduction`
@@ -87,5 +90,35 @@ fn coefficient_layout_translates_addresses_both_ways() {
     // `address` inverts `index` for every flat slot.
     for i in 0..layout.n_dofs() {
         assert_eq!(layout.index(layout.address(i).expect("in range")), Some(i));
+    }
+}
+
+#[test]
+fn solver_filters_caller_rhs_and_restores_removed_rows_as_nan() {
+    let frame = ObservationFrame::new(vec![Cow::Owned(vec![0, 1, 0, 1, 2])], Vec::new()).unwrap();
+    let mut design = Design::from_frame_unsorted(frame).unwrap();
+    design.remap_internal_rows(&[3, 0, 2]).unwrap();
+
+    let solver = Solver::new(design, None, PreconditionerConfig::default()).unwrap();
+    let y = [1.0, f64::NAN, 3.0, 4.0, f64::NAN];
+    let result = solver.solve(&y, None).unwrap();
+
+    assert_eq!(solver.n_obs(), 5);
+    assert_eq!(solver.n_retained_obs(), 3);
+    assert_eq!(result.demeaned.len(), 5);
+    assert!((result.demeaned[0] + 1.0).abs() < 1e-10);
+    assert!(result.demeaned[1].is_nan());
+    assert!((result.demeaned[2] - 1.0).abs() < 1e-10);
+    assert!(result.demeaned[3].abs() < 1e-10);
+    assert!(result.demeaned[4].is_nan());
+
+    let batch = solver.solve_batch(&[&y, &y], None).unwrap();
+    assert_eq!(batch.n_obs, 5);
+    for demeaned in [batch.demeaned(0), batch.demeaned(1)] {
+        assert!((demeaned[0] + 1.0).abs() < 1e-10);
+        assert!(demeaned[1].is_nan());
+        assert!((demeaned[2] - 1.0).abs() < 1e-10);
+        assert!(demeaned[3].abs() < 1e-10);
+        assert!(demeaned[4].is_nan());
     }
 }

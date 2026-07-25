@@ -217,7 +217,9 @@ pub struct SolveResult {
     pub warnings: Vec<BuildWarning>,
     /// Address ↔ flat-`x`-index translation for this design's coefficients.
     pub layout: CoefficientLayout,
-    /// Demeaned response: `y - D x` (length = n_obs), in caller order.
+    /// Demeaned response: `y - D x` in the original caller shape.
+    ///
+    /// Rows removed during design processing are `NaN`.
     ///
     /// Invariant: any per-observation field added here must be translated
     /// back from internal order via `Design::permute_obs_out` before being
@@ -258,7 +260,8 @@ pub struct BatchSolveResult {
     pub warnings: Vec<BuildWarning>,
     /// Address ↔ flat-`x`-index translation for this design's coefficients.
     pub layout: CoefficientLayout,
-    /// All demeaned responses concatenated (length = n_obs * n_rhs).
+    /// All demeaned responses concatenated in original caller shape
+    /// (length = n_obs * n_rhs). Removed rows are `NaN`.
     pub demeaned: Vec<f64>,
     /// Per-RHS convergence flags.
     pub converged: Vec<bool>,
@@ -277,7 +280,7 @@ pub struct BatchSolveResult {
     pub time_total: f64,
     /// Number of coefficients per RHS (rows of the underlying design).
     pub n_dofs: usize,
-    /// Number of observations (columns of the underlying design).
+    /// Number of caller observations per RHS, including removed rows.
     pub n_obs: usize,
 }
 
@@ -317,7 +320,8 @@ pub struct Solver<'a> {
 impl std::fmt::Debug for Solver<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Solver")
-            .field("n_obs", &self.design.n_obs)
+            .field("n_obs", &self.design.input_n_obs)
+            .field("n_retained_obs", &self.design.n_obs)
             .field("n_dofs", &self.design.n_dofs)
             .field("has_weights", &self.sqrt_weights.is_some())
             .field("has_preconditioner", &self.preconditioner.is_some())
@@ -366,8 +370,10 @@ impl<'a> Solver<'a> {
         let mut design = design.into_design()?;
         design.validate_weights(weights.as_deref())?;
 
-        // The match keeps the unpermuted arm a plain move rather than a borrow-and-copy.
-        let weights = match &design.obs_perm {
+        // Align weights with the design's internal (possibly locality-sorted)
+        // observation order. The match keeps the unpermuted arm a plain move
+        // (`permute_obs_in` would borrow and `into_owned` would copy).
+        let weights = match &design.rows {
             Some(_) => weights.map(|w| design.permute_obs_in(&w).into_owned()),
             None => weights,
         };
@@ -421,18 +427,33 @@ impl<'a> Solver<'a> {
     /// `unidentified`, which the public entry points attach once (see
     /// [`RhsSolution`]).
     fn solve_rhs(&self, y: &[f64], lsmr: &LsmrOptions) -> Result<RhsSolution, SolveError> {
-        // `weighted_rhs` zips y with sqrt-weights, silently truncating when `y.len() > n_rows`.
-        if y.len() != self.design.n_obs {
+        // Guard the silent-truncation hole: weighted_rhs zips y with sqrt-weights,
+        // which would otherwise discard trailing values when y.len() > n_rows.
+        if y.len() != self.design.input_n_obs {
             return Err(SolveError::InvalidInput {
                 context: "Solver::solve",
                 message: format!(
                     "response vector length ({}) does not match number of observations ({})",
                     y.len(),
-                    self.design.n_obs
+                    self.design.input_n_obs
                 ),
             });
         }
-        if let Some((index, &value)) = y.iter().enumerate().find(|&(_, &v)| !v.is_finite()) {
+        let invalid = match &self.design.rows {
+            None => y
+                .iter()
+                .enumerate()
+                .find(|&(_, &value)| !value.is_finite())
+                .map(|(caller, &value)| (caller, value)),
+            Some(rows) => rows
+                .iter()
+                .filter_map(|&caller| {
+                    let value = y[caller as usize];
+                    (!value.is_finite()).then_some((caller as usize, value))
+                })
+                .min_by_key(|&(caller, _)| caller),
+        };
+        if let Some((index, value)) = invalid {
             return Err(SolveError::InvalidInput {
                 context: "Solver::solve",
                 message: format!("response at index {index} must be finite, got {value}"),
@@ -440,10 +461,6 @@ impl<'a> Solver<'a> {
         }
 
         let t_start = Instant::now();
-
-        // The gather is a recurring per-solve cost of the locality sort, so it counts as setup.
-        let y_internal = self.design.permute_obs_in(y);
-        let y: &[f64] = &y_internal;
 
         let rect_op = DesignOperator::new(&self.design, self.sqrt_weights.as_deref());
         let b = rect_op.weighted_rhs(y);
@@ -462,8 +479,8 @@ impl<'a> Solver<'a> {
         // Shapes are guaranteed here, so the bare `D x` matvec is infallible.
         let mut demeaned = vec![0.0; self.design.n_obs];
         gather_apply(&self.design, &r.x, &mut demeaned, None);
-        for (d, &yi) in demeaned.iter_mut().zip(y.iter()) {
-            *d = yi - *d;
+        for (internal, d) in demeaned.iter_mut().enumerate() {
+            *d = y[self.design.caller_row(internal)] - *d;
         }
 
         let mut x = r.x;
@@ -538,7 +555,7 @@ impl<'a> Solver<'a> {
             .collect::<Result<Vec<_>, _>>()?;
 
         let mut x = Vec::with_capacity(self.design.n_dofs * n_rhs);
-        let mut demeaned = Vec::with_capacity(self.design.n_obs * n_rhs);
+        let mut demeaned = Vec::with_capacity(self.design.input_n_obs * n_rhs);
         let mut converged = Vec::with_capacity(n_rhs);
         let mut iterations = Vec::with_capacity(n_rhs);
         let mut residual = Vec::with_capacity(n_rhs);
@@ -566,7 +583,7 @@ impl<'a> Solver<'a> {
             time_setup: 0.0,
             time_total: t_start.elapsed().as_secs_f64(),
             n_dofs: self.design.n_dofs,
-            n_obs: self.design.n_obs,
+            n_obs: self.design.input_n_obs,
         })
     }
 
@@ -580,8 +597,13 @@ impl<'a> Solver<'a> {
         self.design.n_dofs
     }
 
-    /// Number of observations.
+    /// Number of observations expected in each caller-provided RHS.
     pub fn n_obs(&self) -> usize {
+        self.design.input_n_obs()
+    }
+
+    /// Number of observations retained by the numerical design.
+    pub fn n_retained_obs(&self) -> usize {
         self.design.n_obs
     }
 }

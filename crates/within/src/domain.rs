@@ -145,10 +145,16 @@ pub struct Design<'a> {
     /// Columns in internal row order (caller's, or an owned locality-sorted copy).
     pub(crate) frame: ObservationFrame<'a>,
     pub(crate) terms: Vec<TermMeta>,
+    /// Number of rows expected in caller-provided observation vectors.
+    pub(crate) input_n_obs: usize,
+    /// Number of retained rows represented by the design and numerical operator.
     pub(crate) n_obs: usize,
     pub(crate) n_dofs: usize,
-    /// `obs_perm[k]` = caller's original index of the observation at internal position `k`.
-    pub(crate) obs_perm: Option<Vec<u32>>,
+    /// `rows[k]` = caller's original row represented at internal position `k`.
+    ///
+    /// This single map composes semantic row selection with locality sorting.
+    /// `None` is the identity map and preserves zero-copy observation input.
+    pub(crate) rows: Option<Vec<u32>>,
 }
 
 impl<'a> Design<'a> {
@@ -222,28 +228,66 @@ impl<'a> Design<'a> {
             return Err(BuildError::DofSpaceExceedsU32 { n_dofs: offset });
         }
 
-        // Sort by the term contributing the most DOFs so its gather/scatter runs sequentially.
+        // Sort by the term contributing the most DOFs (for plain factors, the
+        // highest-cardinality one) so its gather/scatter runs sequentially.
+        // `rows` indexes observations as u32; beyond u32::MAX rows skip
+        // the optimization — the solve itself has no such limit.
         let dominant = (0..terms.len()).max_by_key(|&q| terms[q].n_dofs());
-        let (frame, obs_perm) = match dominant {
+        let row_order = match dominant {
             Some(d) if locality_sort && !terms[d].sorted && u32::try_from(n_obs).is_ok() => {
                 let perm = stable_argsort(frame.level_column(d), terms[d].n_levels);
-                let sorted_frame = frame.permuted(&perm);
-                // Factors nested in the dominant one come out sorted, keeping coalesced scatter.
-                for (q, meta) in terms.iter_mut().enumerate() {
-                    meta.sorted = sorted_frame.level_column(q).is_sorted();
-                }
-                (sorted_frame, Some(perm))
+                Some(perm)
             }
-            _ => (frame, None),
+            _ => None,
         };
 
-        Ok(Design {
+        let mut design = Design {
             frame,
             terms,
+            input_n_obs: n_obs,
             n_obs,
             n_dofs: offset,
-            obs_perm,
-        })
+            rows: None,
+        };
+        if let Some(row_order) = row_order {
+            design.remap_internal_rows(&row_order)?;
+        }
+        Ok(design)
+    }
+
+    /// Replace the represented internal rows with a reordered subset.
+    ///
+    /// `internal_rows` indexes the current internal representation. Its mapping
+    /// to original caller rows is composed into [`Design::rows`] while every
+    /// observation column is gathered exactly once.
+    pub(crate) fn remap_internal_rows(&mut self, internal_rows: &[u32]) -> Result<(), BuildError> {
+        if internal_rows.is_empty() {
+            return Err(BuildError::EmptyObservations);
+        }
+        debug_assert!(internal_rows.iter().all(|&row| (row as usize) < self.n_obs));
+
+        self.frame = self.frame.permuted(internal_rows);
+        let composed: Vec<u32> = match &self.rows {
+            None => internal_rows.to_vec(),
+            Some(rows) => internal_rows
+                .iter()
+                .map(|&internal| rows[internal as usize])
+                .collect(),
+        };
+        self.n_obs = internal_rows.len();
+        self.rows = ((self.n_obs != self.input_n_obs)
+            || composed
+                .iter()
+                .enumerate()
+                .any(|(internal, &caller)| internal != caller as usize))
+        .then_some(composed);
+
+        // A subsequence can make a previously unsorted factor sorted. Rescan
+        // every term so gather/scatter can retain the coalesced fast path.
+        for (term, meta) in self.terms.iter_mut().enumerate() {
+            meta.sorted = self.frame.level_column(term).is_sorted();
+        }
+        Ok(())
     }
 
     /// Convert the frame's columns to owned, dropping ties to caller buffers.
@@ -251,50 +295,68 @@ impl<'a> Design<'a> {
         Design {
             frame: self.frame.into_owned(),
             terms: self.terms,
+            input_n_obs: self.input_n_obs,
             n_obs: self.n_obs,
             n_dofs: self.n_dofs,
-            obs_perm: self.obs_perm,
+            rows: self.rows,
         }
     }
 
     /// Validate that an optional weight slice matches this design's observation count.
     pub(crate) fn validate_weights(&self, weights: Option<&[f64]>) -> Result<(), BuildError> {
         if let Some(w) = weights {
-            if w.len() != self.n_obs {
+            if w.len() != self.input_n_obs {
                 return Err(BuildError::WeightCountMismatch {
-                    expected: self.n_obs,
+                    expected: self.input_n_obs,
                     got: w.len(),
                 });
             }
-            // `wi >= 0.0` already rejects NaN; `is_finite` additionally rejects `+∞`.
-            if let Some((index, &value)) = w
-                .iter()
-                .enumerate()
-                .find(|&(_, &wi)| !(wi >= 0.0 && wi.is_finite()))
-            {
+            // `W^{1/2}` is applied to the design, so each weight must be finite and
+            // non-negative; otherwise `sqrt(w)` is NaN and the solution is silently
+            // corrupted. `wi >= 0.0` already rejects NaN (comparisons with NaN are
+            // false); `is_finite` additionally rejects `+∞`.
+            let invalid = match &self.rows {
+                None => w
+                    .iter()
+                    .enumerate()
+                    .find(|&(_, &value)| !(value >= 0.0 && value.is_finite()))
+                    .map(|(caller, &value)| (caller, value)),
+                Some(rows) => rows
+                    .iter()
+                    .filter_map(|&caller| {
+                        let value = w[caller as usize];
+                        (!(value >= 0.0 && value.is_finite())).then_some((caller as usize, value))
+                    })
+                    .min_by_key(|&(caller, _)| caller),
+            };
+            if let Some((index, value)) = invalid {
                 return Err(BuildError::InvalidWeight { index, value });
             }
         }
         Ok(())
     }
 
-    /// Caller order → internal order: `out[k] = v[obs_perm[k]]`; borrows when unpermuted.
+    /// Caller order → retained internal order: `out[k] = v[rows[k]]`.
+    ///
+    /// Borrows when every caller row is retained in its original order.
     pub(crate) fn permute_obs_in<'v>(&self, v: &'v [f64]) -> Cow<'v, [f64]> {
-        debug_assert_eq!(v.len(), self.n_obs);
-        match &self.obs_perm {
+        debug_assert_eq!(v.len(), self.input_n_obs);
+        match &self.rows {
             None => Cow::Borrowed(v),
-            Some(perm) => Cow::Owned(perm.iter().map(|&i| v[i as usize]).collect()),
+            Some(rows) => Cow::Owned(rows.iter().map(|&i| v[i as usize]).collect()),
         }
     }
 
-    /// Internal order → caller order: `out[obs_perm[k]] = v[k]`.
+    /// Retained internal order → original caller shape.
+    ///
+    /// Dropped caller rows are represented by `NaN`.
     pub(crate) fn permute_obs_out(&self, v: Vec<f64>) -> Vec<f64> {
         debug_assert_eq!(v.len(), self.n_obs);
-        match &self.obs_perm {
+        match &self.rows {
             None => v,
-            Some(perm) => {
-                let mut out = vec![0.0; v.len()];
-                for (k, &orig) in perm.iter().enumerate() {
+            Some(rows) => {
+                let mut out = vec![f64::NAN; self.input_n_obs];
+                for (k, &orig) in rows.iter().enumerate() {
                     out[orig as usize] = v[k];
                 }
                 out
@@ -322,6 +384,20 @@ impl<'a> Design<'a> {
     #[inline]
     pub fn n_obs(&self) -> usize {
         self.n_obs
+    }
+
+    /// Number of rows expected in caller-provided observation vectors.
+    #[inline]
+    pub fn input_n_obs(&self) -> usize {
+        self.input_n_obs
+    }
+
+    /// Original caller row represented by an internal observation position.
+    #[inline]
+    pub(crate) fn caller_row(&self, internal: usize) -> usize {
+        self.rows
+            .as_ref()
+            .map_or(internal, |rows| rows[internal] as usize)
     }
 
     /// Total degrees of freedom (columns of D).
@@ -430,7 +506,7 @@ mod tests {
             Design::from_frame(frame(vec![vec![2, 0, 1, 0], vec![0, 0, 1, 1]], vec![])).unwrap();
 
         // Stable argsort of [2,0,1,0] → original indices [1,3,2,0].
-        assert_eq!(design.obs_perm.as_deref(), Some(&[1u32, 3, 2, 0][..]));
+        assert_eq!(design.rows.as_deref(), Some(&[1u32, 3, 2, 0][..]));
         assert!(design.terms[0].sorted);
         // Factor 1's permuted column [0,1,1,0] is no longer non-decreasing.
         assert!(!design.terms[1].sorted);
@@ -445,7 +521,7 @@ mod tests {
         let col0 = vec![3u32, 0, 2, 1];
         let col1: Vec<u32> = col0.iter().map(|&v| v / 2).collect();
         let design = Design::from_frame(frame(vec![col0, col1], vec![])).unwrap();
-        assert!(design.obs_perm.is_some());
+        assert!(design.rows.is_some());
         assert!(design.terms[0].sorted);
         assert!(design.terms[1].sorted);
     }
@@ -454,7 +530,7 @@ mod tests {
     fn from_frame_keeps_sorted_input() {
         let design =
             Design::from_frame(frame(vec![vec![0, 0, 1, 2], vec![1, 0, 1, 0]], vec![])).unwrap();
-        assert!(design.obs_perm.is_none());
+        assert!(design.rows.is_none());
         assert!(design.terms[0].sorted);
         assert!(!design.terms[1].sorted);
     }
@@ -467,10 +543,67 @@ mod tests {
         ))
         .unwrap();
 
-        let perm = design.obs_perm.as_ref().expect("permutation applied");
+        let perm = design.rows.as_ref().expect("permutation applied");
         assert_eq!(perm, &[1, 3, 2, 0]);
         assert_eq!(design.frame.level_column(0), [0, 0, 1, 2]);
         assert_eq!(design.frame.loading_column(0), [20.0, 40.0, 30.0, 10.0]);
+    }
+
+    #[test]
+    fn composed_rows_select_and_restore_without_intermediate_order() {
+        let mut design =
+            Design::from_frame_unsorted(frame(vec![vec![0, 1, 0, 1, 2]], vec![])).unwrap();
+        design.remap_internal_rows(&[3, 0, 2]).unwrap();
+
+        assert_eq!(design.input_n_obs, 5);
+        assert_eq!(design.n_obs, 3);
+        assert_eq!(design.rows.as_deref(), Some(&[3, 0, 2][..]));
+        assert_eq!(design.frame.level_column(0), &[1, 0, 0]);
+
+        let caller = [10.0, 20.0, 30.0, 40.0, 50.0];
+        assert_eq!(&*design.permute_obs_in(&caller), &[40.0, 10.0, 30.0]);
+
+        let restored = design.permute_obs_out(vec![4.0, 1.0, 3.0]);
+        assert_eq!(restored[0], 1.0);
+        assert!(restored[1].is_nan());
+        assert_eq!(restored[2], 3.0);
+        assert_eq!(restored[3], 4.0);
+        assert!(restored[4].is_nan());
+    }
+
+    #[test]
+    fn validation_ignores_weights_on_removed_rows() {
+        let mut design =
+            Design::from_frame_unsorted(frame(vec![vec![0, 1, 0, 1, 2]], vec![])).unwrap();
+        design.remap_internal_rows(&[3, 0, 2]).unwrap();
+
+        assert!(design
+            .validate_weights(Some(&[1.0, f64::NAN, 1.0, 1.0, f64::NAN]))
+            .is_ok());
+        assert!(matches!(
+            design.validate_weights(Some(&[1.0, f64::NAN, -1.0, 1.0, f64::NAN])),
+            Err(BuildError::InvalidWeight {
+                index: 2,
+                value: -1.0
+            })
+        ));
+    }
+
+    #[test]
+    fn repeated_row_remapping_composes_to_original_caller_rows() {
+        let mut design = Design::from_frame(frame(vec![vec![2, 0, 1, 0]], vec![])).unwrap();
+        assert_eq!(design.rows.as_deref(), Some(&[1, 3, 2, 0][..]));
+
+        design.remap_internal_rows(&[3, 0]).unwrap();
+
+        assert_eq!(design.input_n_obs, 4);
+        assert_eq!(design.n_obs, 2);
+        assert_eq!(design.rows.as_deref(), Some(&[0, 1][..]));
+        assert_eq!(design.frame.level_column(0), &[2, 0]);
+        assert_eq!(
+            &*design.permute_obs_in(&[10.0, 20.0, 30.0, 40.0]),
+            &[10.0, 20.0]
+        );
     }
 
     #[test]

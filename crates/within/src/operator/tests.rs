@@ -8,6 +8,8 @@ fn design_of(columns: Vec<Vec<u32>>) -> Design<'static> {
 }
 
 mod design_tests {
+    use std::borrow::Cow;
+
     use super::design_of;
     use crate::domain::Design;
     use crate::operator::DesignOperator;
@@ -64,6 +66,24 @@ mod design_tests {
         op.apply_adjoint(&r, &mut x)
             .expect("apply_adjoint succeeds");
         assert_eq!(x, vec![6.0, 5.0, 4.0, 3.0, 3.0, 4.0, 5.0]);
+    }
+
+    #[test]
+    fn weighted_rhs_fuses_row_mapping_and_scaling() {
+        let identity = make_single_factor_design();
+        let caller = [1.0, 2.0, 3.0, 4.0, 5.0];
+        let rhs = DesignOperator::new(&identity, None).weighted_rhs(&caller);
+        assert!(matches!(rhs, Cow::Borrowed(_)));
+
+        let mut mapped = identity;
+        mapped.remap_internal_rows(&[3, 0, 2]).unwrap();
+        let rhs = DesignOperator::new(&mapped, None).weighted_rhs(&caller);
+        assert!(matches!(rhs, Cow::Owned(_)));
+        assert_eq!(&*rhs, &[4.0, 1.0, 3.0]);
+
+        let sqrt_weights = [2.0, 3.0, 4.0];
+        let rhs = DesignOperator::new(&mapped, Some(&sqrt_weights)).weighted_rhs(&caller);
+        assert_eq!(&*rhs, &[8.0, 3.0, 12.0]);
     }
 
     fn dot(a: &[f64], b: &[f64]) -> f64 {
@@ -124,7 +144,7 @@ mod design_tests {
         let fa: Vec<u32> = (0..n_obs as u32).collect();
         let fb: Vec<u32> = (0..n_obs).map(|i| (i % 50) as u32).collect();
         let dm = design_of(vec![fa, fb]);
-        assert!(dm.obs_perm.is_none(), "dominant factor is sorted; no perm");
+        assert!(dm.rows.is_none(), "dominant factor is sorted; no perm");
 
         let op = DesignOperator::new(&dm, None);
         let x: Vec<f64> = (0..dm.n_dofs)
@@ -266,7 +286,7 @@ mod design_tests {
         let fa: Vec<u32> = (0..n_obs as u32).collect();
         let fb: Vec<u32> = (0..n_obs).map(|i| ((i * 7919) % 100_000) as u32).collect();
         let dm = design_of(vec![fa, fb]);
-        assert!(dm.obs_perm.is_none(), "dominant factor is sorted; no perm");
+        assert!(dm.rows.is_none(), "dominant factor is sorted; no perm");
         assert_scratch_reuse_matches_fresh(&dm, "atomic: non-dominant unsorted 100K levels");
     }
 
@@ -474,12 +494,18 @@ mod weighted_adjoint_proptests {
             op_unweighted.apply(&x, &mut dx).unwrap();
             let lhs: f64 = dx
                 .iter()
-                .zip(r.iter())
                 .enumerate()
-                .map(|(i, (dxi, ri))| weights[i] * dxi * ri)
+                .map(|(internal, dxi)| {
+                    let caller = dm.caller_row(internal);
+                    weights[caller] * dxi * r[caller]
+                })
                 .sum();
 
-            let sqrt_weights: Vec<f64> = weights.iter().map(|w| w.sqrt()).collect();
+            let sqrt_weights: Vec<f64> = dm
+                .permute_obs_in(&weights)
+                .iter()
+                .map(|w| w.sqrt())
+                .collect();
             let op_weighted = DesignOperator::new(&dm, Some(&sqrt_weights));
             let wr = op_weighted.weighted_rhs(&r);
             let mut wdtr = vec![0.0f64; n_dofs];

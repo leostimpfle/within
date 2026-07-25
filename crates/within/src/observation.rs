@@ -92,7 +92,7 @@ impl<'a> ObservationFrame<'a> {
         }
     }
 
-    /// Owned copy with row `i` holding observation `perm[i]` (matches `Design::obs_perm`).
+    /// Owned copy with row `i` holding observation `perm[i]` (matches `Design::rows`).
     pub fn permuted(&self, perm: &[u32]) -> ObservationFrame<'static> {
         ObservationFrame {
             categorical: self
