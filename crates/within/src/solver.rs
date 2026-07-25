@@ -320,7 +320,7 @@ pub struct Solver<'a> {
 impl std::fmt::Debug for Solver<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Solver")
-            .field("n_obs", &self.design.input_n_obs)
+            .field("n_obs", &self.design.n_obs_input)
             .field("n_retained_obs", &self.design.n_obs)
             .field("n_dofs", &self.design.n_dofs)
             .field("has_weights", &self.sqrt_weights.is_some())
@@ -429,13 +429,13 @@ impl<'a> Solver<'a> {
     fn solve_rhs(&self, y: &[f64], lsmr: &LsmrOptions) -> Result<RhsSolution, SolveError> {
         // Guard the silent-truncation hole: weighted_rhs zips y with sqrt-weights,
         // which would otherwise discard trailing values when y.len() > n_rows.
-        if y.len() != self.design.input_n_obs {
+        if y.len() != self.design.n_obs_input {
             return Err(SolveError::InvalidInput {
                 context: "Solver::solve",
                 message: format!(
                     "response vector length ({}) does not match number of observations ({})",
                     y.len(),
-                    self.design.input_n_obs
+                    self.design.n_obs_input
                 ),
             });
         }
@@ -555,7 +555,7 @@ impl<'a> Solver<'a> {
             .collect::<Result<Vec<_>, _>>()?;
 
         let mut x = Vec::with_capacity(self.design.n_dofs * n_rhs);
-        let mut demeaned = Vec::with_capacity(self.design.input_n_obs * n_rhs);
+        let mut demeaned = Vec::with_capacity(self.design.n_obs_input * n_rhs);
         let mut converged = Vec::with_capacity(n_rhs);
         let mut iterations = Vec::with_capacity(n_rhs);
         let mut residual = Vec::with_capacity(n_rhs);
@@ -583,7 +583,7 @@ impl<'a> Solver<'a> {
             time_setup: 0.0,
             time_total: t_start.elapsed().as_secs_f64(),
             n_dofs: self.design.n_dofs,
-            n_obs: self.design.input_n_obs,
+            n_obs: self.design.n_obs_input,
         })
     }
 

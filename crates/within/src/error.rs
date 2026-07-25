@@ -99,6 +99,15 @@ pub enum BuildError {
         /// Total degrees of freedom implied by the design.
         n_dofs: usize,
     },
+    /// Row processing requires an internal-to-caller map whose indices are
+    /// wider than the design's `u32` row-index representation.
+    #[error(
+        "design has {n_obs} observations, exceeding the u32 row-index limit for row processing"
+    )]
+    RowIndexSpaceExceedsU32 {
+        /// Number of caller observations in the design input.
+        n_obs: usize,
+    },
 }
 
 /// A non-fatal preconditioner-build event.

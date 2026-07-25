@@ -55,7 +55,7 @@ impl<'a> DesignOperator<'a> {
     /// into one pass and at most one allocation. The identity, unweighted case
     /// borrows `y` without allocating.
     pub(crate) fn weighted_rhs<'y>(&self, y: &'y [f64]) -> Cow<'y, [f64]> {
-        debug_assert_eq!(y.len(), self.design.input_n_obs);
+        debug_assert_eq!(y.len(), self.design.n_obs_input);
         match (&self.design.rows, self.sqrt_weights) {
             (None, None) => Cow::Borrowed(y),
             (None, Some(sw)) => Cow::Owned(y.iter().zip(sw).map(|(&yi, &swi)| swi * yi).collect()),

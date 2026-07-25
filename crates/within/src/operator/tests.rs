@@ -11,7 +11,8 @@ mod design_tests {
     use std::borrow::Cow;
 
     use super::design_of;
-    use crate::domain::Design;
+    use crate::domain::{Design, DesignOptions};
+    use crate::observation::ObservationFrame;
     use crate::operator::DesignOperator;
     use schwarz_precond::Operator;
 
@@ -75,15 +76,18 @@ mod design_tests {
         let rhs = DesignOperator::new(&identity, None).weighted_rhs(&caller);
         assert!(matches!(rhs, Cow::Borrowed(_)));
 
-        let mut mapped = identity;
-        mapped.remap_internal_rows(&[3, 0, 2]).unwrap();
+        let frame = ObservationFrame::new(vec![vec![0u32, 1, 0, 0, 2].into()], Vec::new()).unwrap();
+        let mapped = DesignOptions::default()
+            .drop_singletons(true)
+            .from_frame(frame)
+            .unwrap();
         let rhs = DesignOperator::new(&mapped, None).weighted_rhs(&caller);
         assert!(matches!(rhs, Cow::Owned(_)));
-        assert_eq!(&*rhs, &[4.0, 1.0, 3.0]);
+        assert_eq!(&*rhs, &[1.0, 3.0, 4.0]);
 
         let sqrt_weights = [2.0, 3.0, 4.0];
         let rhs = DesignOperator::new(&mapped, Some(&sqrt_weights)).weighted_rhs(&caller);
-        assert_eq!(&*rhs, &[8.0, 3.0, 12.0]);
+        assert_eq!(&*rhs, &[2.0, 9.0, 16.0]);
     }
 
     fn dot(a: &[f64], b: &[f64]) -> f64 {

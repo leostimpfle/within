@@ -76,6 +76,73 @@ impl<T> Loading<T> {
     }
 }
 
+/// Configuration applied while constructing a [`Design`].
+///
+/// Options operate on the observation data before the design's internal row
+/// order is finalized. Use [`DesignOptions::from_effects`] or
+/// [`DesignOptions::from_frame`] to construct a configured design; the
+/// convenience constructors on [`Design`] use [`DesignOptions::default`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct DesignOptions {
+    drop_singletons: bool,
+    locality_sort: bool,
+}
+
+impl DesignOptions {
+    /// Remove observations belonging to a singleton level in any fixed-effect
+    /// term.
+    ///
+    /// Removal is iterative: dropping one observation can make another level a
+    /// singleton, so processing continues until every retained level occurs at
+    /// least twice. The default is `false`.
+    #[must_use]
+    pub fn drop_singletons(mut self, enabled: bool) -> Self {
+        self.drop_singletons = enabled;
+        self
+    }
+
+    /// Lower effect terms into a configured design.
+    pub fn from_effects<'a>(
+        self,
+        effects: impl IntoIterator<Item = Effect<'a>>,
+    ) -> Result<Design<'a>, BuildError> {
+        let mut categorical: Vec<Cow<'a, [u32]>> = Vec::new();
+        let mut continuous: Vec<Cow<'a, [f64]>> = Vec::new();
+        let mut structure: Vec<NonEmpty<Loading<u32>>> = Vec::new();
+        for effect in effects {
+            structure.push(effect.columns().map(|column| {
+                column.map(|&z| {
+                    continuous.push(Cow::Borrowed(z));
+                    (continuous.len() - 1) as u32
+                })
+            }));
+            categorical.push(Cow::Borrowed(effect.levels()));
+        }
+        let frame = ObservationFrame::new(categorical, continuous)?;
+        Design::build(frame, structure, self)
+    }
+
+    /// Construct a configured design from a frame of plain factors.
+    pub fn from_frame<'a>(self, frame: ObservationFrame<'a>) -> Result<Design<'a>, BuildError> {
+        let structure = vec![NonEmpty::of(Loading::Constant); frame.n_factors()];
+        Design::build(frame, structure, self)
+    }
+
+    fn with_locality_sort(mut self, enabled: bool) -> Self {
+        self.locality_sort = enabled;
+        self
+    }
+}
+
+impl Default for DesignOptions {
+    fn default() -> Self {
+        Self {
+            drop_singletons: false,
+            locality_sort: true,
+        }
+    }
+}
+
 /// Per-term metadata; coefficient `c` of `level` lives at `offset + c · n_levels + level`.
 #[derive(Debug, Clone)]
 pub(crate) struct TermMeta {
@@ -139,15 +206,81 @@ fn stable_argsort(key: &[u32], n_levels: usize) -> Vec<u32> {
     perm
 }
 
+/// Return caller rows surviving iterative singleton removal.
+///
+/// Adapted from pyfixest's [`_detect_singletons_rs`](https://github.com/py-econometrics/pyfixest/blob/0f608eb6e13930b355b4dac9b3f34ad5974e95a1/src/detect_singletons.rs#L25-L93)
+fn retained_non_singletons(frame: &ObservationFrame<'_>) -> Result<Option<Vec<u32>>, BuildError> {
+    let n_obs = frame.n_obs();
+    if frame.n_factors() == 0 {
+        return Ok(None);
+    }
+    if u32::try_from(n_obs).is_err() {
+        return Err(BuildError::RowIndexSpaceExceedsU32 { n_obs });
+    }
+
+    let max_level = (0..frame.n_factors())
+        .filter_map(|term| frame.level_column(term).iter().max().copied())
+        .max()
+        .unwrap_or(0) as usize;
+    let mut counts = vec![0u32; max_level + 1];
+    let mut retained: Vec<u32> = (0..n_obs as u32).collect();
+    let mut n_retained = n_obs;
+
+    loop {
+        let previous_n_retained = n_retained;
+
+        for term in 0..frame.n_factors() {
+            let levels = frame.level_column(term);
+            counts.fill(0);
+
+            let mut n_singleton_levels = 0i32;
+            for &row in &retained[..n_retained] {
+                let level = levels[row as usize] as usize;
+                let count = counts[level];
+                n_singleton_levels += i32::from(count == 0) - i32::from(count == 1);
+                counts[level] += 1;
+            }
+
+            if n_singleton_levels == 0 {
+                continue;
+            }
+
+            let mut write = 0;
+            for read in 0..n_retained {
+                let row = retained[read];
+                if counts[levels[row as usize] as usize] != 1 {
+                    retained[write] = row;
+                    write += 1;
+                }
+            }
+            n_retained = write;
+        }
+
+        if previous_n_retained == n_retained {
+            break;
+        }
+    }
+
+    if n_retained == n_obs {
+        return Ok(None);
+    }
+    if n_retained == 0 {
+        return Err(BuildError::EmptyObservations);
+    }
+
+    retained.truncate(n_retained);
+    Ok(Some(retained))
+}
+
 /// Fixed-effects design: observation columns plus coefficient-space layout.
 #[derive(Clone, Debug)]
 pub struct Design<'a> {
     /// Columns in internal row order (caller's, or an owned locality-sorted copy).
     pub(crate) frame: ObservationFrame<'a>,
     pub(crate) terms: Vec<TermMeta>,
-    /// Number of rows expected in caller-provided observation vectors.
-    pub(crate) input_n_obs: usize,
-    /// Number of retained rows represented by the design and numerical operator.
+    /// Number of observations provided by caller.
+    pub(crate) n_obs_input: usize,
+    /// Number of retained observations.
     pub(crate) n_obs: usize,
     pub(crate) n_dofs: usize,
     /// `rows[k]` = caller's original row represented at internal position `k`.
@@ -160,47 +293,34 @@ pub struct Design<'a> {
 impl<'a> Design<'a> {
     /// Lower effect terms into a design, laid out term-major (`offset[t] + c · L_t + level`).
     pub fn new(effects: impl IntoIterator<Item = Effect<'a>>) -> Result<Self, BuildError> {
-        let mut categorical: Vec<Cow<'a, [u32]>> = Vec::new();
-        let mut continuous: Vec<Cow<'a, [f64]>> = Vec::new();
-        let mut structure: Vec<NonEmpty<Loading<u32>>> = Vec::new();
-        for effect in effects {
-            structure.push(effect.columns().map(|column| {
-                column.map(|&z| {
-                    continuous.push(Cow::Borrowed(z));
-                    (continuous.len() - 1) as u32
-                })
-            }));
-            categorical.push(Cow::Borrowed(effect.levels()));
-        }
-        let frame = ObservationFrame::new(categorical, continuous)?;
-        Self::build(frame, structure, true)
+        DesignOptions::default().from_effects(effects)
     }
 
     /// Intercept-only factors, level count `max + 1`; locality-sorts an unsorted dominant factor.
     pub fn from_frame(frame: ObservationFrame<'a>) -> Result<Self, BuildError> {
-        let structure = vec![NonEmpty::of(Loading::Constant); frame.n_factors()];
-        Self::build(frame, structure, true)
+        DesignOptions::default().from_frame(frame)
     }
 
     /// [`from_frame`](Self::from_frame) without the locality sort — profiling escape hatch.
     #[doc(hidden)]
     pub fn from_frame_unsorted(frame: ObservationFrame<'a>) -> Result<Self, BuildError> {
-        let structure = vec![NonEmpty::of(Loading::Constant); frame.n_factors()];
-        Self::build(frame, structure, false)
+        DesignOptions::default()
+            .with_locality_sort(false)
+            .from_frame(frame)
     }
 
     /// `column_structure[term]` = that term's coefficient columns, aligned with the frame.
     fn build(
         frame: ObservationFrame<'a>,
         column_structure: Vec<NonEmpty<Loading<u32>>>,
-        locality_sort: bool,
+        options: DesignOptions,
     ) -> Result<Self, BuildError> {
         if frame.n_obs() == 0 {
             return Err(BuildError::EmptyObservations);
         }
         debug_assert_eq!(column_structure.len(), frame.n_factors());
 
-        let n_obs = frame.n_obs();
+        let n_obs_input = frame.n_obs();
         let mut terms = Vec::with_capacity(frame.n_factors());
         let mut offset = 0;
         for (q, columns) in column_structure.into_iter().enumerate() {
@@ -233,61 +353,50 @@ impl<'a> Design<'a> {
         // `rows` indexes observations as u32; beyond u32::MAX rows skip
         // the optimization — the solve itself has no such limit.
         let dominant = (0..terms.len()).max_by_key(|&q| terms[q].n_dofs());
-        let row_order = match dominant {
-            Some(d) if locality_sort && !terms[d].sorted && u32::try_from(n_obs).is_ok() => {
-                let perm = stable_argsort(frame.level_column(d), terms[d].n_levels);
-                Some(perm)
-            }
-            _ => None,
+        let mut rows = if options.drop_singletons {
+            retained_non_singletons(&frame)?
+        } else {
+            None
         };
 
-        let mut design = Design {
+        if let Some(dominant_term) = dominant {
+            let should_sort = options.locality_sort
+                && !terms[dominant_term].sorted
+                && u32::try_from(n_obs_input).is_ok();
+
+            if should_sort {
+                let key = frame.level_column(dominant_term);
+                match &mut rows {
+                    Some(retained) => {
+                        retained.sort_by_cached_key(|&caller_row| key[caller_row as usize]);
+                    }
+                    None => {
+                        rows = Some(stable_argsort(key, terms[dominant_term].n_levels));
+                    }
+                }
+            }
+        }
+
+        let n_obs_retained = rows.as_ref().map_or(n_obs_input, Vec::len);
+        let frame = match rows.as_deref() {
+            Some(selected_rows) => frame.permuted(selected_rows),
+            None => frame,
+        };
+
+        // Filtering and locality sorting can change whether any factor is
+        // non-decreasing in internal row order.
+        for (term, meta) in terms.iter_mut().enumerate() {
+            meta.sorted = frame.level_column(term).is_sorted();
+        }
+
+        Ok(Design {
             frame,
             terms,
-            input_n_obs: n_obs,
-            n_obs,
+            n_obs_input: n_obs_input,
+            n_obs: n_obs_retained,
             n_dofs: offset,
-            rows: None,
-        };
-        if let Some(row_order) = row_order {
-            design.remap_internal_rows(&row_order)?;
-        }
-        Ok(design)
-    }
-
-    /// Replace the represented internal rows with a reordered subset.
-    ///
-    /// `internal_rows` indexes the current internal representation. Its mapping
-    /// to original caller rows is composed into [`Design::rows`] while every
-    /// observation column is gathered exactly once.
-    pub(crate) fn remap_internal_rows(&mut self, internal_rows: &[u32]) -> Result<(), BuildError> {
-        if internal_rows.is_empty() {
-            return Err(BuildError::EmptyObservations);
-        }
-        debug_assert!(internal_rows.iter().all(|&row| (row as usize) < self.n_obs));
-
-        self.frame = self.frame.permuted(internal_rows);
-        let composed: Vec<u32> = match &self.rows {
-            None => internal_rows.to_vec(),
-            Some(rows) => internal_rows
-                .iter()
-                .map(|&internal| rows[internal as usize])
-                .collect(),
-        };
-        self.n_obs = internal_rows.len();
-        self.rows = ((self.n_obs != self.input_n_obs)
-            || composed
-                .iter()
-                .enumerate()
-                .any(|(internal, &caller)| internal != caller as usize))
-        .then_some(composed);
-
-        // A subsequence can make a previously unsorted factor sorted. Rescan
-        // every term so gather/scatter can retain the coalesced fast path.
-        for (term, meta) in self.terms.iter_mut().enumerate() {
-            meta.sorted = self.frame.level_column(term).is_sorted();
-        }
-        Ok(())
+            rows,
+        })
     }
 
     /// Convert the frame's columns to owned, dropping ties to caller buffers.
@@ -295,7 +404,7 @@ impl<'a> Design<'a> {
         Design {
             frame: self.frame.into_owned(),
             terms: self.terms,
-            input_n_obs: self.input_n_obs,
+            n_obs_input: self.n_obs_input,
             n_obs: self.n_obs,
             n_dofs: self.n_dofs,
             rows: self.rows,
@@ -305,9 +414,9 @@ impl<'a> Design<'a> {
     /// Validate that an optional weight slice matches this design's observation count.
     pub(crate) fn validate_weights(&self, weights: Option<&[f64]>) -> Result<(), BuildError> {
         if let Some(w) = weights {
-            if w.len() != self.input_n_obs {
+            if w.len() != self.n_obs_input {
                 return Err(BuildError::WeightCountMismatch {
-                    expected: self.input_n_obs,
+                    expected: self.n_obs_input,
                     got: w.len(),
                 });
             }
@@ -340,7 +449,7 @@ impl<'a> Design<'a> {
     ///
     /// Borrows when every caller row is retained in its original order.
     pub(crate) fn permute_obs_in<'v>(&self, v: &'v [f64]) -> Cow<'v, [f64]> {
-        debug_assert_eq!(v.len(), self.input_n_obs);
+        debug_assert_eq!(v.len(), self.n_obs_input);
         match &self.rows {
             None => Cow::Borrowed(v),
             Some(rows) => Cow::Owned(rows.iter().map(|&i| v[i as usize]).collect()),
@@ -355,7 +464,7 @@ impl<'a> Design<'a> {
         match &self.rows {
             None => v,
             Some(rows) => {
-                let mut out = vec![f64::NAN; self.input_n_obs];
+                let mut out = vec![f64::NAN; self.n_obs_input];
                 for (k, &orig) in rows.iter().enumerate() {
                     out[orig as usize] = v[k];
                 }
@@ -389,7 +498,7 @@ impl<'a> Design<'a> {
     /// Number of rows expected in caller-provided observation vectors.
     #[inline]
     pub fn input_n_obs(&self) -> usize {
-        self.input_n_obs
+        self.n_obs_input
     }
 
     /// Original caller row represented by an internal observation position.
@@ -536,6 +645,90 @@ mod tests {
     }
 
     #[test]
+    fn design_options_default_preserves_singletons() {
+        let design = DesignOptions::default()
+            .from_frame(frame(vec![vec![0, 0, 1], vec![0, 1, 1]], vec![]))
+            .unwrap();
+
+        assert_eq!(design.input_n_obs(), 3);
+        assert_eq!(design.n_obs(), 3);
+    }
+
+    #[test]
+    fn singleton_detection_matches_pyfixest_fixtures() {
+        let cases = [
+            (
+                vec![
+                    vec![0, 0, 0, 0, 0],
+                    vec![2, 2, 1, 1, 1],
+                    vec![1, 1, 3, 2, 2],
+                ],
+                Some(vec![0, 1, 3, 4]),
+            ),
+            (
+                vec![
+                    vec![0, 0, 3, 0, 0],
+                    vec![2, 2, 1, 1, 1],
+                    vec![1, 1, 2, 1, 2],
+                ],
+                Some(vec![0, 1]),
+            ),
+            (
+                vec![
+                    vec![0, 0, 0, 0, 0],
+                    vec![2, 2, 1, 1, 1],
+                    vec![1, 1, 1, 2, 2],
+                ],
+                None,
+            ),
+        ];
+
+        for (categorical, expected) in cases {
+            let input = frame(categorical, vec![]);
+            assert_eq!(retained_non_singletons(&input).unwrap(), expected);
+        }
+    }
+
+    #[test]
+    fn design_options_iteratively_drop_singletons_before_one_final_gather() {
+        // Rows 0..4 form a 2-core. Rows 4..7 form a path:
+        //
+        //     B2 -- A2 -- B3 -- A3
+        //
+        // Its endpoint singleton levels trigger a cascading removal of all
+        // three path observations, while the four-row core survives.
+        let design = DesignOptions::default()
+            .drop_singletons(true)
+            .from_frame(frame(
+                vec![vec![1, 0, 1, 0, 2, 2, 3], vec![1, 0, 0, 1, 2, 3, 3]],
+                vec![vec![10.0, 11.0, 12.0, 13.0, 14.0, 15.0, 16.0]],
+            ))
+            .unwrap();
+
+        // The surviving caller rows [0,1,2,3] are locality-sorted by the
+        // dominant second factor in the same composed mapping.
+        assert_eq!(design.rows.as_deref(), Some(&[1, 2, 0, 3][..]));
+        assert_eq!(design.input_n_obs(), 7);
+        assert_eq!(design.n_obs(), 4);
+        assert_eq!(design.frame.level_column(0), &[0, 1, 1, 0]);
+        assert_eq!(design.frame.level_column(1), &[0, 0, 1, 1]);
+        assert_eq!(design.frame.loading_column(0), &[11.0, 12.0, 10.0, 13.0]);
+
+        let restored = design.permute_obs_out(vec![1.0, 2.0, 3.0, 4.0]);
+        assert_eq!(&restored[..4], &[3.0, 1.0, 2.0, 4.0]);
+        assert!(restored[4..].iter().all(|value| value.is_nan()));
+    }
+
+    #[test]
+    fn design_options_reject_when_singletons_remove_every_observation() {
+        let result = DesignOptions::default()
+            .drop_singletons(true)
+            .from_frame(frame(vec![vec![0, 1], vec![0, 1]], vec![]));
+
+        assert!(matches!(result, Err(BuildError::EmptyObservations)));
+    }
+
+    #[test]
     fn continuous_column_stays_row_aligned_after_locality_sort() {
         let design = Design::from_frame(frame(
             vec![vec![2, 0, 1, 0]],
@@ -550,32 +743,11 @@ mod tests {
     }
 
     #[test]
-    fn composed_rows_select_and_restore_without_intermediate_order() {
-        let mut design =
-            Design::from_frame_unsorted(frame(vec![vec![0, 1, 0, 1, 2]], vec![])).unwrap();
-        design.remap_internal_rows(&[3, 0, 2]).unwrap();
-
-        assert_eq!(design.input_n_obs, 5);
-        assert_eq!(design.n_obs, 3);
-        assert_eq!(design.rows.as_deref(), Some(&[3, 0, 2][..]));
-        assert_eq!(design.frame.level_column(0), &[1, 0, 0]);
-
-        let caller = [10.0, 20.0, 30.0, 40.0, 50.0];
-        assert_eq!(&*design.permute_obs_in(&caller), &[40.0, 10.0, 30.0]);
-
-        let restored = design.permute_obs_out(vec![4.0, 1.0, 3.0]);
-        assert_eq!(restored[0], 1.0);
-        assert!(restored[1].is_nan());
-        assert_eq!(restored[2], 3.0);
-        assert_eq!(restored[3], 4.0);
-        assert!(restored[4].is_nan());
-    }
-
-    #[test]
     fn validation_ignores_weights_on_removed_rows() {
-        let mut design =
-            Design::from_frame_unsorted(frame(vec![vec![0, 1, 0, 1, 2]], vec![])).unwrap();
-        design.remap_internal_rows(&[3, 0, 2]).unwrap();
+        let design = DesignOptions::default()
+            .drop_singletons(true)
+            .from_frame(frame(vec![vec![0, 1, 0, 0, 2]], vec![]))
+            .unwrap();
 
         assert!(design
             .validate_weights(Some(&[1.0, f64::NAN, 1.0, 1.0, f64::NAN]))
@@ -587,23 +759,6 @@ mod tests {
                 value: -1.0
             })
         ));
-    }
-
-    #[test]
-    fn repeated_row_remapping_composes_to_original_caller_rows() {
-        let mut design = Design::from_frame(frame(vec![vec![2, 0, 1, 0]], vec![])).unwrap();
-        assert_eq!(design.rows.as_deref(), Some(&[1, 3, 2, 0][..]));
-
-        design.remap_internal_rows(&[3, 0]).unwrap();
-
-        assert_eq!(design.input_n_obs, 4);
-        assert_eq!(design.n_obs, 2);
-        assert_eq!(design.rows.as_deref(), Some(&[0, 1][..]));
-        assert_eq!(design.frame.level_column(0), &[2, 0]);
-        assert_eq!(
-            &*design.permute_obs_in(&[10.0, 20.0, 30.0, 40.0]),
-            &[10.0, 20.0]
-        );
     }
 
     #[test]
