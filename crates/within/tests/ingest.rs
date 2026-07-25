@@ -43,6 +43,7 @@ fn f_order_view_matches_owned_columns() {
 
     let result_view = solve(
         cats_f.view(),
+        Default::default(),
         &y,
         None,
         &default_params(),
@@ -74,10 +75,18 @@ fn c_order_view_matches_f_order_bitwise() {
         f
     };
 
-    let result_c =
-        solve(cats.view(), &y, None, &default_params(), additive_precond()).expect("C-order solve");
+    let result_c = solve(
+        cats.view(),
+        Default::default(),
+        &y,
+        None,
+        &default_params(),
+        additive_precond(),
+    )
+    .expect("C-order solve");
     let result_f = solve(
         cats_f.view(),
+        Default::default(),
         &y,
         None,
         &default_params(),
@@ -105,8 +114,15 @@ fn column_reversed_view_ingests_in_logical_order() {
     assert!(reversed.strides()[1] < 1, "column stride must be negative");
 
     let y = vec![1.0, 2.0, 3.0, 4.0, 5.0];
-    let result_rev =
-        solve(reversed, &y, None, &default_params(), additive_precond()).expect("reversed solve");
+    let result_rev = solve(
+        reversed,
+        Default::default(),
+        &y,
+        None,
+        &default_params(),
+        additive_precond(),
+    )
+    .expect("reversed solve");
 
     // Oracle: the same columns handed over owned, in swapped order.
     let design =
@@ -124,6 +140,7 @@ fn weighted_view_solve_converges() {
 
     let result = solve(
         cats.view(),
+        Default::default(),
         &y,
         Some(&weights),
         &default_params(),

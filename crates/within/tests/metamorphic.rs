@@ -53,11 +53,19 @@ proptest! {
         let params = tight_params();
         let precond = additive_precond();
 
-        let base = solve(cats.view(), &y, None, &params, &precond).unwrap();
+        let base = solve(cats.view(), Default::default(), &y, None, &params, &precond).unwrap();
         prop_assert!(base.converged);
 
         let y_scaled: Vec<f64> = y.iter().map(|v| c * v).collect();
-        let scaled = solve(cats.view(), &y_scaled, None, &params, &precond).unwrap();
+        let scaled = solve(
+            cats.view(),
+            Default::default(),
+            &y_scaled,
+            None,
+            &params,
+            &precond,
+        )
+        .unwrap();
         prop_assert!(scaled.converged);
 
         let expected: Vec<f64> = base.demeaned.iter().map(|v| c * v).collect();
@@ -82,11 +90,27 @@ proptest! {
         let params = tight_params();
         let precond = additive_precond();
 
-        let base = solve(cats.view(), &y, Some(w.as_slice()), &params, &precond).unwrap();
+        let base = solve(
+            cats.view(),
+            Default::default(),
+            &y,
+            Some(w.as_slice()),
+            &params,
+            &precond,
+        )
+        .unwrap();
         prop_assert!(base.converged);
 
         let w_scaled: Vec<f64> = w.iter().map(|v| k * v).collect();
-        let scaled = solve(cats.view(), &y, Some(w_scaled.as_slice()), &params, &precond).unwrap();
+        let scaled = solve(
+            cats.view(),
+            Default::default(),
+            &y,
+            Some(w_scaled.as_slice()),
+            &params,
+            &precond,
+        )
+        .unwrap();
         prop_assert!(scaled.converged);
 
         let (num, tol) = l2_close(&scaled.demeaned, &base.demeaned);
@@ -113,11 +137,20 @@ proptest! {
         let precond = additive_precond();
 
         let refs: Vec<&[f64]> = ys.iter().map(Vec::as_slice).collect();
-        let batch = solve_batch(cats.view(), &refs, None, &params, &precond).unwrap();
+        let batch = solve_batch(
+            cats.view(),
+            Default::default(),
+            &refs,
+            None,
+            &params,
+            &precond,
+        )
+        .unwrap();
         prop_assert!(batch.converged.iter().all(|&c| c));
 
         for (j, y) in ys.iter().enumerate() {
-            let single = solve(cats.view(), y, None, &params, &precond).unwrap();
+            let single =
+                solve(cats.view(), Default::default(), y, None, &params, &precond).unwrap();
             prop_assert!(single.converged);
             let (num, tol) = l2_close(batch.demeaned(j), &single.demeaned);
             prop_assert!(
@@ -136,7 +169,8 @@ proptest! {
     fn prop_unidentified_slots_are_zero((cats, y) in random_fe_problem_strategy()) {
         let params = tight_params();
         let precond = additive_precond();
-        let result = solve(cats.view(), &y, None, &params, &precond).unwrap();
+        let result =
+            solve(cats.view(), Default::default(), &y, None, &params, &precond).unwrap();
         prop_assert!(result.converged);
 
         for u in &result.unidentified {
@@ -167,7 +201,7 @@ fn saturated_single_factor_recovers_level_means() {
     let y = vec![1.0, 3.0, 2.0, 4.0, 6.0, 5.0];
     let params = tight_params();
     let precond = additive_precond();
-    let result = solve(cats.view(), &y, None, &params, &precond).unwrap();
+    let result = solve(cats.view(), Default::default(), &y, None, &params, &precond).unwrap();
     assert!(result.converged);
 
     for (level, &mean) in [2.0, 4.0, 5.0].iter().enumerate() {

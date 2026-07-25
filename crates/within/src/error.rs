@@ -108,6 +108,9 @@ pub enum BuildError {
         /// Number of caller observations in the design input.
         n_obs: usize,
     },
+    /// Non-default construction options were supplied for an already-built design.
+    #[error("design options cannot be applied to a prebuilt Design")]
+    OptionsForPrebuiltDesign,
 }
 
 /// A non-fatal preconditioner-build event.

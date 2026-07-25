@@ -392,7 +392,7 @@ impl<'a> Design<'a> {
         Ok(Design {
             frame,
             terms,
-            n_obs_input: n_obs_input,
+            n_obs_input,
             n_obs: n_obs_retained,
             n_dofs: offset,
             rows,

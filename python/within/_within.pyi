@@ -210,6 +210,18 @@ class Effect:
         slopes: list[NDArray[np.float64]] | None = None,
     ) -> None: ...
 
+class DesignOptions:
+    """Processing applied while constructing a fixed-effects design.
+
+    Attributes:
+        drop_singletons: Iteratively remove observations belonging to a
+            singleton level in any fixed-effect term.
+    """
+
+    @property
+    def drop_singletons(self) -> bool: ...
+    def __init__(self, drop_singletons: bool = False) -> None: ...
+
 def solve(
     design: NDArray[np.uint32] | list[Effect],
     y: NDArray[np.float64],
@@ -218,6 +230,8 @@ def solve(
     preconditioner: (
         PreconditionerConfig | AdditiveSchwarz | Preconditioner | None
     ) = None,
+    *,
+    design_options: DesignOptions | None = None,
 ) -> SolveResult:
     """Solve fixed-effects normal equations for a single response vector.
 
@@ -241,6 +255,10 @@ def solve(
             ``AdditiveSchwarz(...)`` overrides the local-solver / reduction
             settings. A previously-built ``Preconditioner`` instance reuses an
             existing factorisation.
+        design_options: Processing applied while constructing the design.
+            Omitted by default; use ``DesignOptions(drop_singletons=True)`` to
+            iteratively remove singleton observations. Removed rows are
+            represented by ``NaN`` in ``demeaned``.
 
     Returns:
         A ``SolveResult`` with coefficients, demeaned response, convergence
@@ -280,6 +298,8 @@ def solve_batch(
     preconditioner: (
         PreconditionerConfig | AdditiveSchwarz | Preconditioner | None
     ) = None,
+    *,
+    design_options: DesignOptions | None = None,
 ) -> BatchSolveResult:
     """Solve fixed-effects normal equations for multiple response vectors.
 
@@ -296,6 +316,8 @@ def solve_batch(
         options: LSMR solver tuning. Default: ``LsmrOptions(tol=1e-8, maxiter=1000)``.
         preconditioner: Preconditioner configuration; see :func:`solve` for the
             accepted forms.
+        design_options: Processing applied while constructing the design; see
+            :func:`solve`.
 
     Returns:
         A ``BatchSolveResult`` with stacked coefficients and per-RHS metadata.
@@ -342,6 +364,8 @@ class Solver:
         preconditioner: (
             PreconditionerConfig | AdditiveSchwarz | Preconditioner | None
         ) = None,
+        *,
+        design_options: DesignOptions | None = None,
     ) -> None: ...
     def solve(
         self,

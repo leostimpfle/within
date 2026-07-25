@@ -19,7 +19,7 @@ pip install within_py
 `within`'s main user-facing function is `solve`. Provide a 2-D `uint32` array of category codes (one column per fixed-effect factor) and a response vector `y`. The solver finds x in the normal equations **D'D x = D'y**, where D is the sparse categorical design matrix.
 
 ```python
-from within import PreconditionerConfig, solve, solve_batch
+from within import DesignOptions, PreconditionerConfig, solve, solve_batch
 import numpy as np
 
 np.random.seed(1)
@@ -33,6 +33,11 @@ y = np.random.randn(n)
 result = solve(fe, y)                          # Schwarz-preconditioned LSMR
 result = solve(fe, y, weights=np.ones(n))      # weighted solve
 result = solve(fe, y, preconditioner=PreconditionerConfig.Diagonal)
+result = solve(
+    fe,
+    y,
+    design_options=DesignOptions(drop_singletons=True),
+)
 ```
 
 ### FWL regression example
@@ -54,8 +59,8 @@ print(np.round(beta_hat, 4))  # [ 0.9982 -2.006   0.5005]
 
 | Function | Description |
 |---|---|
-| `solve(design, y, weights?, options?, preconditioner?)` | Solve a single right-hand side. Returns `SolveResult`. |
-| `solve_batch(design, Y, weights?, options?, preconditioner?)` | Solve multiple RHS vectors in parallel. `Y` has shape `(n_obs, k)`. Returns `BatchSolveResult`. |
+| `solve(design, y, weights?, options?, preconditioner?, *, design_options?)` | Solve a single right-hand side. Returns `SolveResult`. |
+| `solve_batch(design, Y, weights?, options?, preconditioner?, *, design_options?)` | Solve multiple RHS vectors in parallel. `Y` has shape `(n_obs, k)`. Returns `BatchSolveResult`. |
 
 `design` is a 2-D `uint32` array of category codes with shape `(n_obs, n_factors)`, or a list of `Effect` terms for varying slopes. A `UserWarning` is emitted when a C-contiguous array is passed — if the data is already sorted by the largest factor, `np.asfortranarray(design)` gives faster solves; unsorted input is copied internally either way.
 
@@ -66,7 +71,7 @@ For repeated solves with the same design matrix, `Solver` builds the preconditio
 ```python
 from within import Solver
 
-solver = Solver(fe)
+solver = Solver(fe, design_options=DesignOptions(drop_singletons=True))
 r = solver.solve(y)                            # reuses preconditioner
 r = solver.solve_batch(np.column_stack([y, X]))
 
@@ -76,7 +81,7 @@ solver2 = Solver(fe, preconditioner=precond)   # skip re-factorization
 
 | Property / Method | Description |
 |---|---|
-| `Solver(design, weights?, preconditioner?)` | Build solver. Factorizes the preconditioner at construction. |
+| `Solver(design, weights?, preconditioner?, *, design_options?)` | Build solver. Factorizes the preconditioner at construction. |
 | `.solve(y, options?)` | Solve a single RHS with the given LSMR tuning. Returns `SolveResult`. |
 | `.solve_batch(Y, options?)` | Solve multiple RHS columns in parallel. Returns `BatchSolveResult`. |
 | `.preconditioner` | Return the built `Preconditioner` (picklable), or `None`. Reuse via `Solver(..., preconditioner=p)`. |

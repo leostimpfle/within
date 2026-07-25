@@ -10,7 +10,15 @@ fn test_high_level_solve() {
 
     let params = LsmrOptions::default();
     let precond = PreconditionerConfig::default();
-    let result = solve(categories.view(), &y, None, &params, &precond).expect("solve");
+    let result = solve(
+        categories.view(),
+        Default::default(),
+        &y,
+        None,
+        &params,
+        &precond,
+    )
+    .expect("solve");
     common::assert_converged_with_small_residual(&result, 1e-6);
     common::assert_solution_finite(&result);
     common::assert_normal_equations_satisfied(&common::test_categories(), None, &y, &result, 1e-6);
@@ -24,8 +32,15 @@ fn test_high_level_solve_weighted() {
 
     let params = LsmrOptions::default();
     let precond = PreconditionerConfig::default();
-    let result =
-        solve(categories.view(), &y, Some(&weights), &params, &precond).expect("solve weighted");
+    let result = solve(
+        categories.view(),
+        Default::default(),
+        &y,
+        Some(&weights),
+        &params,
+        &precond,
+    )
+    .expect("solve weighted");
     common::assert_converged_with_small_residual(&result, 1e-6);
     common::assert_solution_finite(&result);
     common::assert_normal_equations_satisfied(
@@ -46,11 +61,34 @@ fn test_solve_batch_matches_individual() {
     let params = LsmrOptions::default();
     let precond = PreconditionerConfig::default();
 
-    let r1 = solve(categories.view(), &y1, None, &params, &precond).expect("solve y1");
-    let r2 = solve(categories.view(), &y2, None, &params, &precond).expect("solve y2");
+    let r1 = solve(
+        categories.view(),
+        Default::default(),
+        &y1,
+        None,
+        &params,
+        &precond,
+    )
+    .expect("solve y1");
+    let r2 = solve(
+        categories.view(),
+        Default::default(),
+        &y2,
+        None,
+        &params,
+        &precond,
+    )
+    .expect("solve y2");
 
-    let batch =
-        solve_batch(categories.view(), &[&y1, &y2], None, &params, &precond).expect("solve batch");
+    let batch = solve_batch(
+        categories.view(),
+        Default::default(),
+        &[&y1, &y2],
+        None,
+        &params,
+        &precond,
+    )
+    .expect("solve batch");
 
     assert_eq!(batch.converged.len(), 2);
     for (a, b) in batch.x(0).iter().zip(r1.x.iter()) {
@@ -69,8 +107,15 @@ fn test_solve_batch_single_rhs() {
     let params = LsmrOptions::default();
     let precond = PreconditionerConfig::default();
 
-    let batch = solve_batch(categories.view(), &[&y[..]], None, &params, &precond)
-        .expect("solve batch single");
+    let batch = solve_batch(
+        categories.view(),
+        Default::default(),
+        &[&y[..]],
+        None,
+        &params,
+        &precond,
+    )
+    .expect("solve batch single");
 
     assert_eq!(batch.converged.len(), 1);
     assert!(batch.converged[0]);
@@ -89,6 +134,7 @@ fn test_solve_batch_weighted() {
 
     let batch = solve_batch(
         categories.view(),
+        Default::default(),
         &[&y1, &y2],
         Some(&weights),
         &params,
@@ -109,8 +155,15 @@ fn test_batch_result_accessors() {
     let params = LsmrOptions::default();
     let precond = PreconditionerConfig::default();
 
-    let batch =
-        solve_batch(categories.view(), &[&y1, &y2], None, &params, &precond).expect("solve batch");
+    let batch = solve_batch(
+        categories.view(),
+        Default::default(),
+        &[&y1, &y2],
+        None,
+        &params,
+        &precond,
+    )
+    .expect("solve batch");
 
     // n_rhs
     assert_eq!(batch.converged.len(), 2);

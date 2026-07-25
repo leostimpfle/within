@@ -8,12 +8,14 @@ import pytest
 from within import (
     BatchSolveResult,
     CoefficientLayout,
+    DesignOptions,
     Effect,
     LsmrOptions,
     Preconditioner,
     PreconditionerConfig,
     Solver,
     solve,
+    solve_batch,
 )
 from within.config import AdditiveSchwarz, LocalSolverConfig, ScalingConfig
 
@@ -99,6 +101,34 @@ def test_free_solve_positional_order_is_weights_then_options():
     w = rng.uniform(0.5, 2.0, size=300)
     result = solve(cats, y, w, LsmrOptions(maxiter=2000))
     assert result.converged
+
+
+def test_design_options_drop_singletons_across_python_apis():
+    # Rows 0..3 form a two-factor 2-core. Rows 4..6 form a path whose
+    # endpoint singleton levels trigger iterative removal of the whole path.
+    categories = as_solver_categories(
+        [
+            np.array([1, 0, 1, 0, 2, 2, 3]),
+            np.array([1, 0, 0, 1, 2, 3, 3]),
+        ]
+    )
+    y = np.array([1.0, 2.0, 4.0, 8.0, 16.0, 32.0, 64.0])
+    Y = np.column_stack([y, 2.0 * y])
+    design_options = DesignOptions(drop_singletons=True)
+
+    assert design_options.drop_singletons
+
+    single = solve(categories, y, design_options=design_options)
+    batch = solve_batch(categories, Y, design_options=design_options)
+    solver = Solver(categories, design_options=design_options)
+    persistent = solver.solve(y)
+
+    assert solver.n_obs == len(y)
+    assert np.all(np.isfinite(single.demeaned[:4]))
+    assert np.all(np.isnan(single.demeaned[4:]))
+    np.testing.assert_array_equal(single.demeaned, persistent.demeaned)
+    np.testing.assert_array_equal(batch.demeaned[:, 0], single.demeaned)
+    np.testing.assert_array_equal(batch.demeaned[:, 1], 2.0 * single.demeaned)
 
 
 def test_one_shot_solve_surfaces_build_warnings():

@@ -23,7 +23,8 @@ fn test_single_observation() {
     let y = vec![5.0f64];
     let params = LsmrOptions::default();
 
-    let result = solve(cats.view(), &y, None, &params, None).expect("single-obs solve");
+    let result =
+        solve(cats.view(), Default::default(), &y, None, &params, None).expect("single-obs solve");
     assert!(
         result.x.iter().all(|v| v.is_finite()),
         "non-finite x for single observation"
@@ -49,7 +50,8 @@ fn test_trivial_factor_all_same_level() {
     let params = LsmrOptions::default();
     let precond = additive_precond();
 
-    let result = solve(cats.view(), &y, None, &params, &precond).expect("trivial-factor solve");
+    let result = solve(cats.view(), Default::default(), &y, None, &params, &precond)
+        .expect("trivial-factor solve");
     assert!(
         result.converged,
         "solver did not converge with constant factor"
@@ -79,6 +81,7 @@ fn test_zero_weight_additive_preconditioner_returns_zero() {
 
     let result = solve(
         cats.view(),
+        Default::default(),
         &y,
         Some(&weights),
         &LsmrOptions::default(),
@@ -107,6 +110,7 @@ fn test_zero_weight_diagonal_preconditioner_returns_zero() {
 
     let result = solve(
         cats.view(),
+        Default::default(),
         &y,
         Some(&weights),
         &LsmrOptions::default(),
@@ -134,6 +138,7 @@ fn test_zero_weight_no_preconditioner_returns_zero() {
 
     let result = solve(
         cats.view(),
+        Default::default(),
         &y,
         Some(&weights),
         &LsmrOptions::default(),
@@ -166,14 +171,22 @@ fn test_diagonal_matches_unpreconditioned_solution() {
 
     let diagonal = solve(
         cats.view(),
+        Default::default(),
         &y,
         None,
         &params,
         &PreconditionerConfig::Diagonal,
     )
     .expect("diagonal solve");
-    let unpreconditioned = solve(cats.view(), &y, None, &params, &PreconditionerConfig::Off)
-        .expect("unpreconditioned solve");
+    let unpreconditioned = solve(
+        cats.view(),
+        Default::default(),
+        &y,
+        None,
+        &params,
+        &PreconditionerConfig::Off,
+    )
+    .expect("unpreconditioned solve");
 
     common::assert_solution_finite(&diagonal);
     common::assert_solutions_close(&diagonal.x, &unpreconditioned.x, 1e-6);
@@ -194,14 +207,22 @@ fn test_diagonal_matches_unpreconditioned_on_gap_design() {
 
     let diagonal = solve(
         cats.view(),
+        Default::default(),
         &y,
         None,
         &params,
         &PreconditionerConfig::Diagonal,
     )
     .expect("diagonal solve must succeed on a gap design (pseudo-inverse of zero diagonal)");
-    let unpreconditioned = solve(cats.view(), &y, None, &params, &PreconditionerConfig::Off)
-        .expect("unpreconditioned solve");
+    let unpreconditioned = solve(
+        cats.view(),
+        Default::default(),
+        &y,
+        None,
+        &params,
+        &PreconditionerConfig::Off,
+    )
+    .expect("unpreconditioned solve");
 
     assert!(diagonal.converged, "diagonal solve must converge");
     common::assert_solutions_close(&diagonal.x, &unpreconditioned.x, 1e-6);
@@ -328,9 +349,17 @@ fn test_uniform_weights_matches_unweighted() {
     let params = LsmrOptions::default();
     let precond = additive_precond();
 
-    let r_unit = solve(cats.view(), &y, None, &params, &precond).expect("unweighted solve");
-    let r_uniform = solve(cats.view(), &y, Some(&uniform_weights), &params, &precond)
-        .expect("uniform-weight solve");
+    let r_unit = solve(cats.view(), Default::default(), &y, None, &params, &precond)
+        .expect("unweighted solve");
+    let r_uniform = solve(
+        cats.view(),
+        Default::default(),
+        &y,
+        Some(&uniform_weights),
+        &params,
+        &precond,
+    )
+    .expect("uniform-weight solve");
 
     // Constant scaling of W leaves G and D^T W y proportional, so the solution
     // is identical.

@@ -11,9 +11,32 @@ use within::config::{
     ApproxCholConfig, ApproxSchurConfig, LocalSolverConfig, LsmrOptions, PreconditionerConfig,
     ReductionStrategy, ScalingConfig, ScalingFailure, SchurMode,
 };
-use within::{Preconditioner, PreconditionerInput};
+use within::{DesignOptions, Preconditioner, PreconditionerInput};
 
 use crate::convert::IntoPyErr;
+
+/// Processing applied while constructing a fixed-effects design.
+#[pyclass(frozen, module = "within._within")]
+#[pyo3(name = "DesignOptions")]
+pub struct PyDesignOptions {
+    #[pyo3(get)]
+    pub drop_singletons: bool,
+}
+
+#[pymethods]
+impl PyDesignOptions {
+    #[new]
+    #[pyo3(signature = (drop_singletons=false))]
+    fn new(drop_singletons: bool) -> Self {
+        Self { drop_singletons }
+    }
+}
+
+impl PyDesignOptions {
+    pub(crate) fn to_native(&self) -> DesignOptions {
+        DesignOptions::default().drop_singletons(self.drop_singletons)
+    }
+}
 
 #[pyclass(frozen, module = "within._within")]
 #[pyo3(name = "ApproxCholConfig")]

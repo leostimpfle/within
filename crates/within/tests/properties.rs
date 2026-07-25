@@ -53,7 +53,15 @@ proptest! {
             ..default_params()
         };
         let precond = additive_precond();
-        let result = solve(cats.view(), &y, None, &params, &precond).unwrap();
+        let result = solve(
+            cats.view(),
+            Default::default(),
+            &y,
+            None,
+            &params,
+            &precond,
+        )
+        .unwrap();
 
         prop_assert!(
             result.converged,
@@ -66,7 +74,15 @@ proptest! {
     fn prop_demeaned_orthogonality((cats, y) in random_fe_problem_strategy()) {
         let params = default_params();
         let precond = additive_precond();
-        let result = solve(cats.view(), &y, None, &params, &precond).unwrap();
+        let result = solve(
+            cats.view(),
+            Default::default(),
+            &y,
+            None,
+            &params,
+            &precond,
+        )
+        .unwrap();
 
         prop_assume!(result.converged);
 

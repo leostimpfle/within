@@ -60,7 +60,7 @@ fn test_empty_categories_via_solve() {
     let y: Vec<f64> = vec![];
     let params = LsmrOptions::default();
     let precond = PreconditionerConfig::default();
-    let result = solve(cats.view(), &y, None, &params, &precond);
+    let result = solve(cats.view(), Default::default(), &y, None, &params, &precond);
     assert!(result.is_err());
     match result.unwrap_err() {
         WithinError::Build(BuildError::EmptyObservations) => {}
@@ -105,7 +105,7 @@ fn test_non_finite_response_rejected() {
     let precond = PreconditionerConfig::default();
 
     let y = [1.0, f64::NAN, 3.0];
-    match solve(cats.view(), &y, None, &params, &precond).unwrap_err() {
+    match solve(cats.view(), Default::default(), &y, None, &params, &precond).unwrap_err() {
         WithinError::Solve(SolveError::InvalidInput { message, .. }) => {
             assert!(
                 message.contains("index 1"),
@@ -130,7 +130,16 @@ fn test_non_finite_response_rejected() {
     // solve_batch funnels every column through Solver::solve; the bad value is in the 2nd RHS.
     let good = [1.0, 2.0, 3.0];
     let bad = [1.0, 2.0, f64::INFINITY];
-    match solve_batch(cats.view(), &[&good[..], &bad[..]], None, &params, &precond).unwrap_err() {
+    match solve_batch(
+        cats.view(),
+        Default::default(),
+        &[&good[..], &bad[..]],
+        None,
+        &params,
+        &precond,
+    )
+    .unwrap_err()
+    {
         WithinError::Solve(SolveError::InvalidInput { message, .. }) => {
             assert!(
                 message.contains("index 2"),
@@ -151,7 +160,8 @@ fn test_collinear_finite_slope_is_unidentified_not_rejected() {
     let params = LsmrOptions::default();
     let precond = PreconditionerConfig::default();
 
-    let r = solve(effects, &y, None, &params, &precond).expect("collinear-but-finite must solve");
+    let r = solve(effects, Default::default(), &y, None, &params, &precond)
+        .expect("collinear-but-finite must solve");
     assert!(
         !r.unidentified.is_empty(),
         "a duplicated finite slope must report an unidentified direction"

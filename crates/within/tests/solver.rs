@@ -24,7 +24,15 @@ fn test_solver_matches_oneshot() {
     let params = default_params();
     let precond = additive_precond();
 
-    let oneshot = solve(categories.view(), &y, None, &params, &precond).expect("oneshot");
+    let oneshot = solve(
+        categories.view(),
+        Default::default(),
+        &y,
+        None,
+        &params,
+        &precond,
+    )
+    .expect("oneshot");
 
     let solver = Solver::new(categories.view(), None, &precond).expect("solver build");
     let result = solver.solve(&y, &params).expect("solver solve");

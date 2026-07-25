@@ -15,8 +15,9 @@ mod results;
 
 use api::{solve, solve_batch, PyEffect, PySolver};
 use config::{
-    PyAdditiveSchwarz, PyApproxCholConfig, PyApproxSchurConfig, PyLocalSolverConfig, PyLsmrOptions,
-    PyPreconditioner, PyPreconditionerConfig, PyReductionStrategy, PyScalingConfig, PySchur,
+    PyAdditiveSchwarz, PyApproxCholConfig, PyApproxSchurConfig, PyDesignOptions,
+    PyLocalSolverConfig, PyLsmrOptions, PyPreconditioner, PyPreconditionerConfig,
+    PyReductionStrategy, PyScalingConfig, PySchur,
 };
 use results::{PyBatchSolveResult, PyCoefficientLayout, PySolveResult, PyUnidentifiedDirection};
 
@@ -27,6 +28,7 @@ fn _within(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyUnidentifiedDirection>()?;
     m.add_class::<PyCoefficientLayout>()?;
     m.add_class::<PyLsmrOptions>()?;
+    m.add_class::<PyDesignOptions>()?;
     m.add_class::<PyAdditiveSchwarz>()?;
     m.add_class::<PyReductionStrategy>()?;
     m.add_class::<PyPreconditionerConfig>()?;

@@ -40,7 +40,8 @@ fn test_three_factor_design_solve_converges() {
         ..LsmrOptions::default()
     };
     let precond = PreconditionerConfig::default();
-    let result = solve(cats.view(), &y, None, &params, &precond).expect("solve should not error");
+    let result = solve(cats.view(), Default::default(), &y, None, &params, &precond)
+        .expect("solve should not error");
 
     assert!(
         result.converged,
@@ -78,7 +79,8 @@ fn test_disconnected_design_larger_converges() {
         ..LsmrOptions::default()
     };
     let precond = PreconditionerConfig::default();
-    let result = solve(cats.view(), &y, None, &params, &precond).expect("solve should not error");
+    let result = solve(cats.view(), Default::default(), &y, None, &params, &precond)
+        .expect("solve should not error");
 
     assert!(
         result.converged,
@@ -110,7 +112,8 @@ fn test_disconnected_design_solve_converges() {
         ..LsmrOptions::default()
     };
     let precond = PreconditionerConfig::default();
-    let result = solve(cats.view(), &y, None, &params, &precond).expect("solve should not error");
+    let result = solve(cats.view(), Default::default(), &y, None, &params, &precond)
+        .expect("solve should not error");
 
     assert!(
         result.converged,
@@ -155,7 +158,8 @@ fn test_single_factor_design_solve_without_precond() {
         maxiter: 500,
         ..LsmrOptions::default()
     };
-    let result = solve(cats.view(), &y, None, &params, None).expect("solve should not error");
+    let result = solve(cats.view(), Default::default(), &y, None, &params, None)
+        .expect("solve should not error");
 
     assert!(
         result.converged,

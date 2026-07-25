@@ -47,7 +47,7 @@ fn free_solve_surfaces_build_warnings() {
     let y = [1.0, 2.0, 0.5, -1.0];
     let cfg = strict_scaling();
 
-    let result = solve(warning_effects(), &y, None, None, &cfg).expect("solve");
+    let result = solve(warning_effects(), Default::default(), &y, None, None, &cfg).expect("solve");
     assert!(
         has_scaling_warning(&result.warnings),
         "free solve dropped the preconditioner build warning: {:?}",
@@ -66,7 +66,8 @@ fn free_solve_batch_surfaces_build_warnings() {
     let ys: [&[f64]; 2] = [&y0, &y1];
     let cfg = strict_scaling();
 
-    let result = solve_batch(warning_effects(), &ys, None, None, &cfg).expect("solve_batch");
+    let result = solve_batch(warning_effects(), Default::default(), &ys, None, None, &cfg)
+        .expect("solve_batch");
     assert!(
         has_scaling_warning(&result.warnings),
         "free solve_batch dropped the preconditioner build warning: {:?}",

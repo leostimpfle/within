@@ -16,7 +16,7 @@ use crate::observation::ObservationFrame;
 use crate::operator::design::gather_apply;
 use crate::operator::schwarz::{build_preconditioner, Preconditioner};
 use crate::operator::DesignOperator;
-use crate::{BuildError, BuildWarning, SolveError, WithinError};
+use crate::{BuildError, BuildWarning, DesignOptions, SolveError, WithinError};
 
 mod reparam;
 #[cfg(test)]
@@ -28,12 +28,13 @@ use reparam::SlopeReparam;
 /// [`Design`].
 pub trait IntoDesign<'a> {
     /// Build the [`Design`], validating inputs along the way.
-    fn into_design(self) -> Result<Design<'a>, BuildError>;
+    fn into_design(self, options: DesignOptions) -> Result<Design<'a>, BuildError>;
 }
 
 impl<'a> IntoDesign<'a> for ArrayView2<'a, u32> {
-    fn into_design(self) -> Result<Design<'a>, BuildError> {
-        // Gather strided (C-order) columns once so every downstream read is contiguous.
+    fn into_design(self, options: DesignOptions) -> Result<Design<'a>, BuildError> {
+        // Borrow F-contiguous columns zero-copy; gather strided (C-order)
+        // columns once here so every downstream read is a contiguous slice.
         let categorical = (0..self.ncols())
             .map(|factor| {
                 let col = self.index_axis_move(Axis(1), factor);
@@ -43,19 +44,23 @@ impl<'a> IntoDesign<'a> for ArrayView2<'a, u32> {
                 }
             })
             .collect();
-        Design::from_frame(ObservationFrame::new(categorical, Vec::new())?)
+        let frame = ObservationFrame::new(categorical, Vec::new())?;
+        options.from_frame(frame)
     }
 }
 
 impl<'a> IntoDesign<'a> for Design<'a> {
-    fn into_design(self) -> Result<Design<'a>, BuildError> {
+    fn into_design(self, options: DesignOptions) -> Result<Design<'a>, BuildError> {
+        if options != DesignOptions::default() {
+            return Err(BuildError::OptionsForPrebuiltDesign);
+        }
         Ok(self)
     }
 }
 
 impl<'a> IntoDesign<'a> for Vec<Effect<'a>> {
-    fn into_design(self) -> Result<Design<'a>, BuildError> {
-        Design::new(self)
+    fn into_design(self, options: DesignOptions) -> Result<Design<'a>, BuildError> {
+        options.from_effects(self)
     }
 }
 
@@ -367,7 +372,7 @@ impl<'a> Solver<'a> {
         weights: Option<Vec<f64>>,
         preconditioner: impl Into<PreconditionerInput>,
     ) -> Result<Self, BuildError> {
-        let mut design = design.into_design()?;
+        let mut design = design.into_design(DesignOptions::default())?;
         design.validate_weights(weights.as_deref())?;
 
         // Align weights with the design's internal (possibly locality-sorted)
@@ -626,12 +631,14 @@ impl<'a> Solver<'a> {
 /// This is a convenience wrapper around [`Solver::new`] + [`Solver::solve`].
 pub fn solve<'a, 'o>(
     design: impl IntoDesign<'a>,
+    options: DesignOptions,
     y: &[f64],
     weights: Option<&[f64]>,
     lsmr: impl Into<Option<&'o LsmrOptions>>,
     preconditioner: impl Into<PreconditionerInput>,
 ) -> Result<SolveResult, WithinError> {
     let t_start = Instant::now();
+    let design = design.into_design(options)?;
     let solver = Solver::new(design, weights.map(|w| w.to_vec()), preconditioner)?;
     let time_setup = t_start.elapsed().as_secs_f64();
     let mut result = solver.solve(y, lsmr)?;
@@ -647,12 +654,14 @@ pub fn solve<'a, 'o>(
 /// reusing the preconditioner across all solves.
 pub fn solve_batch<'a, 'o>(
     design: impl IntoDesign<'a>,
+    options: DesignOptions,
     ys: &[&[f64]],
     weights: Option<&[f64]>,
     lsmr: impl Into<Option<&'o LsmrOptions>>,
     preconditioner: impl Into<PreconditionerInput>,
 ) -> Result<BatchSolveResult, WithinError> {
     let t_start = Instant::now();
+    let design = design.into_design(options)?;
     let solver = Solver::new(design, weights.map(|w| w.to_vec()), preconditioner)?;
     let time_setup = t_start.elapsed().as_secs_f64();
     let mut result = solver.solve_batch(ys, lsmr)?;

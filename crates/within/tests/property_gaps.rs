@@ -66,7 +66,15 @@ proptest! {
         };
         let precond = additive_precond();
         // LSMR converges on the least-squares system min ||y - Dx||^2 for any y.
-        let result = solve(cats.view(), &y, None, &params, &precond).unwrap();
+        let result = solve(
+            cats.view(),
+            Default::default(),
+            &y,
+            None,
+            &params,
+            &precond,
+        )
+        .unwrap();
         prop_assert!(
             result.converged,
             "4-factor solve did not converge (n_obs={}, residual={:.2e})",
@@ -89,7 +97,15 @@ proptest! {
         let precond = additive_precond();
 
         // Path A: convenience `solve()` (ingests the view internally)
-        let result_a = solve(cats.view(), &y, None, &params, &precond).unwrap();
+        let result_a = solve(
+            cats.view(),
+            Default::default(),
+            &y,
+            None,
+            &params,
+            &precond,
+        )
+        .unwrap();
 
         // Path B: Solver::new() — identical to solve() but without timing wrapper
         let solver_b = Solver::new(cats.view(), None, &precond).unwrap();
@@ -118,7 +134,15 @@ proptest! {
             ..LsmrOptions::default()
         };
         let precond = additive_precond();
-        let result = solve(cats.view(), &y, None, &params, &precond).unwrap();
+        let result = solve(
+            cats.view(),
+            Default::default(),
+            &y,
+            None,
+            &params,
+            &precond,
+        )
+        .unwrap();
 
         if !result.converged {
             return Ok(());
@@ -163,7 +187,15 @@ proptest! {
             maxiter: n_levels + 10,
             ..LsmrOptions::default()
         };
-        let result = solve(cats.view(), &y, None, &params, None).unwrap();
+        let result = solve(
+            cats.view(),
+            Default::default(),
+            &y,
+            None,
+            &params,
+            None,
+        )
+        .unwrap();
 
         prop_assert!(
             result.converged,

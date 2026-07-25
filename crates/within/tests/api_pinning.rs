@@ -61,23 +61,94 @@ fn solve_free_function_precond_call_shapes_compile() {
         .expect("default solver has a preconditioner")
         .clone();
 
-    let _ = solve(categories.view(), &y, None, &lsmr, None).expect("None form");
-    let _ = solve(categories.view(), &y, None, &lsmr, &cfg).expect("&Cfg form");
-    let _ = solve(categories.view(), &y, None, &lsmr, Some(&cfg)).expect("Some(&Cfg) form");
-    let _ = solve(categories.view(), &y, None, &lsmr, prec.clone()).expect("owned Prec form");
-    let _ = solve(categories.view(), &y, None, &lsmr, &prec).expect("&Prec form");
-    let _ = solve(categories.view(), &y, None, &lsmr, cfg.clone()).expect("owned Cfg form");
+    let _ = solve(categories.view(), Default::default(), &y, None, &lsmr, None).expect("None form");
+    let _ = solve(categories.view(), Default::default(), &y, None, &lsmr, &cfg).expect("&Cfg form");
+    let _ = solve(
+        categories.view(),
+        Default::default(),
+        &y,
+        None,
+        &lsmr,
+        Some(&cfg),
+    )
+    .expect("Some(&Cfg) form");
+    let _ = solve(
+        categories.view(),
+        Default::default(),
+        &y,
+        None,
+        &lsmr,
+        prec.clone(),
+    )
+    .expect("owned Prec form");
+    let _ = solve(
+        categories.view(),
+        Default::default(),
+        &y,
+        None,
+        &lsmr,
+        &prec,
+    )
+    .expect("&Prec form");
+    let _ = solve(
+        categories.view(),
+        Default::default(),
+        &y,
+        None,
+        &lsmr,
+        cfg.clone(),
+    )
+    .expect("owned Cfg form");
 
     // solve_batch accepts the same shapes.
     let ys: Vec<&[f64]> = vec![&y];
-    let _ = solve_batch(categories.view(), &ys, None, &lsmr, None).expect("batch None form");
-    let _ = solve_batch(categories.view(), &ys, None, &lsmr, &cfg).expect("batch &Cfg form");
-    let _ = solve_batch(categories.view(), &ys, None, &lsmr, Some(&cfg))
-        .expect("batch Some(&Cfg) form");
-    let _ = solve_batch(categories.view(), &ys, None, &lsmr, prec.clone())
-        .expect("batch owned Prec form");
-    let _ = solve_batch(categories.view(), &ys, None, &lsmr, &prec).expect("batch &Prec form");
-    let _ = solve_batch(categories.view(), &ys, None, &lsmr, cfg).expect("batch owned Cfg form");
+    let _ = solve_batch(
+        categories.view(),
+        Default::default(),
+        &ys,
+        None,
+        &lsmr,
+        None,
+    )
+    .expect("batch None form");
+    let _ = solve_batch(
+        categories.view(),
+        Default::default(),
+        &ys,
+        None,
+        &lsmr,
+        &cfg,
+    )
+    .expect("batch &Cfg form");
+    let _ = solve_batch(
+        categories.view(),
+        Default::default(),
+        &ys,
+        None,
+        &lsmr,
+        Some(&cfg),
+    )
+    .expect("batch Some(&Cfg) form");
+    let _ = solve_batch(
+        categories.view(),
+        Default::default(),
+        &ys,
+        None,
+        &lsmr,
+        prec.clone(),
+    )
+    .expect("batch owned Prec form");
+    let _ = solve_batch(
+        categories.view(),
+        Default::default(),
+        &ys,
+        None,
+        &lsmr,
+        &prec,
+    )
+    .expect("batch &Prec form");
+    let _ = solve_batch(categories.view(), Default::default(), &ys, None, &lsmr, cfg)
+        .expect("batch owned Cfg form");
 }
 
 #[test]
@@ -126,7 +197,8 @@ fn options_are_optional_and_tuned_additive_builds_from_crate_root() {
         .expect("solve_batch, default options");
 
     // Free functions accept `None` options too (previously `&LsmrOptions::default()`).
-    let _ = solve(categories.view(), &y, None, None, None).expect("free solve, None options");
-    let _ = solve_batch(categories.view(), &ys, None, None, None)
+    let _ = solve(categories.view(), Default::default(), &y, None, None, None)
+        .expect("free solve, None options");
+    let _ = solve_batch(categories.view(), Default::default(), &ys, None, None, None)
         .expect("free solve_batch, None options");
 }
