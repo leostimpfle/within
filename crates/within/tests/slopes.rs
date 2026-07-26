@@ -61,11 +61,8 @@ fn solve_with(
     config: &PreconditionerConfig,
 ) -> SolveResult {
     let effects = vec![Effect::new(levels, intercept, [z]).expect("effect")];
-    let options = match weights {
-        Some(weights) => DesignOptions::default().weights(weights),
-        None => DesignOptions::default(),
-    };
-    let design = options.from_effects(effects).expect("design");
+    let options = DesignOptions::new(false, weights.map(Into::into));
+    let design = Design::from_effects(effects, options).expect("design");
     Solver::new(design, config)
         .expect("solver")
         .solve(y, &LsmrOptions::default())
@@ -250,8 +247,11 @@ fn batch_solve_shares_unidentified_and_back_transforms_each_rhs() {
     let y1 = synthetic_y(levels.len());
     let y2: Vec<f64> = y1.iter().map(|v| v * -1.5 + 0.3).collect();
 
-    let design =
-        Design::new(vec![Effect::new(&levels, true, [&z[..]]).expect("effect")]).expect("design");
+    let design = Design::from_effects(
+        vec![Effect::new(&levels, true, [&z[..]]).expect("effect")],
+        DesignOptions::default(),
+    )
+    .expect("design");
     let solver = Solver::new(design, PreconditionerConfig::default()).expect("solver");
     let opts = LsmrOptions::default();
     let batch = solver.solve_batch(&[&y1, &y2], &opts).expect("batch");
@@ -290,9 +290,10 @@ fn three_slopes_solve_bounded_with_exact_rank_drops() {
         .collect();
     let y = synthetic_y(n);
 
-    let design = Design::new(vec![
-        Effect::new(&levels, true, [&z1[..], &z2, &z3]).expect("effect")
-    ])
+    let design = Design::from_effects(
+        vec![Effect::new(&levels, true, [&z1[..], &z2, &z3]).expect("effect")],
+        DesignOptions::default(),
+    )
     .expect("design");
     let r = Solver::new(design, PreconditionerConfig::default())
         .expect("solver")

@@ -2,67 +2,23 @@
 //! multiple solves on the same design) and the one-shot [`solve`] / [`solve_batch`]
 //! convenience wrappers built on top of it.
 
-use std::borrow::Cow;
 use std::time::Instant;
 
-use ndarray::{ArrayView2, Axis};
 use rayon::prelude::*;
 use schwarz_precond::{lsmr as lsmr_solve, mlsmr};
 
 use crate::channel::Channel;
 use crate::config::{LsmrOptions, PreconditionerConfig};
-use crate::domain::{map_to_internal_order, Design, Effect};
-use crate::observation::ObservationFrame;
+use crate::domain::Design;
 use crate::operator::design::gather_apply;
 use crate::operator::schwarz::{build_preconditioner, Preconditioner};
 use crate::operator::DesignOperator;
-use crate::{BuildError, BuildWarning, DesignOptions, SolveError, WithinError};
+use crate::{BuildError, BuildWarning, SolveError, WithinError};
 
 mod reparam;
 #[cfg(test)]
 mod tests;
 use reparam::SlopeReparam;
-
-/// Fallible construction of a [`Design`] from a categories matrix
-/// (`ArrayView2<u32>`), a list of [`Effect`] terms, or a pass-through
-/// [`Design`].
-pub trait IntoDesign<'a> {
-    /// Build the [`Design`], validating inputs along the way.
-    fn into_design(self, options: DesignOptions<'a>) -> Result<Design<'a>, BuildError>;
-}
-
-impl<'a> IntoDesign<'a> for ArrayView2<'a, u32> {
-    fn into_design(self, options: DesignOptions<'a>) -> Result<Design<'a>, BuildError> {
-        // Borrow F-contiguous columns zero-copy; gather strided (C-order)
-        // columns once here so every downstream read is a contiguous slice.
-        let categorical = (0..self.ncols())
-            .map(|factor| {
-                let col = self.index_axis_move(Axis(1), factor);
-                match col.to_slice() {
-                    Some(s) => Cow::Borrowed(s),
-                    None => Cow::Owned(col.to_vec()),
-                }
-            })
-            .collect();
-        let frame = ObservationFrame::new(categorical, Vec::new())?;
-        options.from_frame(frame)
-    }
-}
-
-impl<'a> IntoDesign<'a> for Design<'a> {
-    fn into_design(self, options: DesignOptions<'a>) -> Result<Design<'a>, BuildError> {
-        if options != DesignOptions::default() {
-            return Err(BuildError::OptionsForPrebuiltDesign);
-        }
-        Ok(self)
-    }
-}
-
-impl<'a> IntoDesign<'a> for Vec<Effect<'a>> {
-    fn into_design(self, options: DesignOptions<'a>) -> Result<Design<'a>, BuildError> {
-        options.from_effects(self)
-    }
-}
 
 /// Preconditioner input for [`Solver::new`].
 ///
@@ -227,7 +183,7 @@ pub struct SolveResult {
     /// Rows removed during design processing are `NaN`.
     ///
     /// Invariant: any per-observation field added here must be translated
-    /// back from internal order via `Design::from_internal_order` before being
+    /// back to input row order via `Design::to_input_row_order` before being
     /// stored, or it leaks the locality-sorted row order to the caller.
     pub demeaned: Vec<f64>,
     /// Whether the iterative solver converged within `maxiter` iterations.
@@ -368,9 +324,10 @@ impl<'a> Solver<'a> {
     ) -> Result<Self, BuildError> {
         // Align caller-order weights with the design's retained internal rows.
         // Identity mappings stay borrowed through setup.
-        let weights = design.options.weight_values().map(|weights| {
-            map_to_internal_order(design.rows.as_deref(), design.n_obs_input, weights)
-        });
+        let weights = design
+            .options
+            .weights()
+            .map(|weights| design.to_internal_row_order(weights));
 
         // Reparametrize the slope columns (if any) before the preconditioner reads the frame.
         let reparam = SlopeReparam::build(&mut design.frame, &design.terms, weights.as_deref());
@@ -486,7 +443,7 @@ impl<'a> Solver<'a> {
         Ok(RhsSolution {
             x,
             // Back to the caller's observation order (no-op if not reordered).
-            demeaned: self.design.from_internal_order(demeaned),
+            demeaned: self.design.to_input_row_order(demeaned),
             converged: r.converged,
             iterations: r.iterations,
             // Read from the LSMR recurrence at no extra cost; see `SolveResult::residual`.
@@ -605,7 +562,7 @@ impl<'a> Solver<'a> {
 
 /// Solve fixed-effects least squares for a configured design.
 ///
-/// Construct `design` first through [`IntoDesign`] or [`DesignOptions`].
+/// Construct `design` first with one of the explicit [`Design`] constructors.
 /// `y` is in caller row order and has the design's input observation count.
 ///
 /// `preconditioner` accepts the same input shapes as [`Solver::new`]:

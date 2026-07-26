@@ -4,7 +4,7 @@ use ndarray::Array2;
 use schwarz_precond::SolveError;
 use within::observation::ObservationFrame;
 use within::{
-    solve, solve_batch, BuildError, Design, DesignOptions, Effect, IntoDesign, LsmrOptions,
+    solve, solve_batch, BuildError, Design, DesignOptions, Effect, LsmrOptions,
     PreconditionerConfig, Solver, WithinError,
 };
 
@@ -15,7 +15,7 @@ fn test_empty_observations_error() {
     // A zero-row frame is valid; EmptyObservations is raised by Design::from_frame.
     let frame =
         ObservationFrame::new(vec![vec![].into(), vec![].into()], Vec::new()).expect("frame ok");
-    let result = Design::from_frame(frame);
+    let result = Design::from_frame(frame, DesignOptions::default());
     assert!(result.is_err());
     match result.unwrap_err() {
         BuildError::EmptyObservations => {}
@@ -45,9 +45,10 @@ fn test_weight_count_mismatch_error() {
         Vec::new(),
     )
     .expect("frame ok");
-    let result = DesignOptions::default()
-        .weights(vec![1.0, 2.0])
-        .from_frame(frame);
+    let result = Design::from_frame(
+        frame,
+        DesignOptions::new(false, Some(vec![1.0, 2.0].into())),
+    );
     let err = result.expect_err("expected WeightCountMismatch error, got Ok");
     match err {
         BuildError::WeightCountMismatch { .. } => {}
@@ -58,7 +59,7 @@ fn test_weight_count_mismatch_error() {
 #[test]
 fn test_empty_categories_via_solve() {
     let cats = Array2::<u32>::zeros((0, 2));
-    let result = cats.view().into_design(DesignOptions::default());
+    let result = Design::from_categories(cats.view(), DesignOptions::default());
     assert!(matches!(result, Err(BuildError::EmptyObservations)));
 }
 
@@ -68,20 +69,16 @@ fn test_preconditioner_dimension_mismatch_error() {
     let big = Array2::from_shape_vec((4, 2), vec![0u32, 0, 1, 1, 2, 0, 3, 1]).expect("big array");
     let small = Array2::from_shape_vec((3, 2), vec![0u32, 0, 1, 1, 0, 0]).expect("small array");
 
-    let big_design = big
-        .view()
-        .into_design(DesignOptions::default())
-        .expect("big design");
+    let big_design =
+        Design::from_categories(big.view(), DesignOptions::default()).expect("big design");
     let big_solver = Solver::new(big_design, None).expect("big solver");
     let prebuilt = big_solver
         .preconditioner()
         .expect("default solver has a preconditioner")
         .clone();
 
-    let small_design = small
-        .view()
-        .into_design(DesignOptions::default())
-        .expect("small design");
+    let small_design =
+        Design::from_categories(small.view(), DesignOptions::default()).expect("small design");
     let result = Solver::new(small_design, prebuilt);
     let err = result.expect_err("expected PreconditionerDimensionMismatch, got Ok");
     match err {
@@ -104,10 +101,7 @@ fn test_non_finite_response_rejected() {
     let precond = PreconditionerConfig::default();
 
     let y = [1.0, f64::NAN, 3.0];
-    let design = cats
-        .view()
-        .into_design(DesignOptions::default())
-        .expect("design");
+    let design = Design::from_categories(cats.view(), DesignOptions::default()).expect("design");
     match solve(design, &y, &params, &precond).unwrap_err() {
         WithinError::Solve(SolveError::InvalidInput { message, .. }) => {
             assert!(
@@ -120,10 +114,7 @@ fn test_non_finite_response_rejected() {
 
     // The persistent Solver API funnels through the same Solver::solve guard, so
     // the check cannot be bypassed by constructing a Solver and solving in place.
-    let design = cats
-        .view()
-        .into_design(DesignOptions::default())
-        .expect("design");
+    let design = Design::from_categories(cats.view(), DesignOptions::default()).expect("design");
     let solver = Solver::new(design, &precond).expect("solver");
     match solver.solve(&y, &params).unwrap_err() {
         SolveError::InvalidInput { message, .. } => {
@@ -139,9 +130,7 @@ fn test_non_finite_response_rejected() {
     let good = [1.0, 2.0, 3.0];
     let bad = [1.0, 2.0, f64::INFINITY];
     match solve_batch(
-        cats.view()
-            .into_design(DesignOptions::default())
-            .expect("design"),
+        Design::from_categories(cats.view(), DesignOptions::default()).expect("design"),
         &[&good[..], &bad[..]],
         &params,
         &precond,
@@ -168,8 +157,13 @@ fn test_collinear_finite_slope_is_unidentified_not_rejected() {
     let params = LsmrOptions::default();
     let precond = PreconditionerConfig::default();
 
-    let r = solve(Design::new(effects).expect("design"), &y, &params, &precond)
-        .expect("collinear-but-finite must solve");
+    let r = solve(
+        Design::from_effects(effects, DesignOptions::default()).expect("design"),
+        &y,
+        &params,
+        &precond,
+    )
+    .expect("collinear-but-finite must solve");
     assert!(
         !r.unidentified.is_empty(),
         "a duplicated finite slope must report an unidentified direction"
@@ -185,7 +179,8 @@ fn test_solver_accepts_slope_bearing_design_alongside_other_terms() {
         within::Effect::new(&levels, true, [&slope[..]]).expect("slope effect"),
     ];
     // Cross-factor routing (#61): slope terms alongside other terms build.
-    let design = Design::new(effects).expect("slope design builds");
+    let design =
+        Design::from_effects(effects, DesignOptions::default()).expect("slope design builds");
     Solver::new(design, None).expect("signed routing builds");
 }
 

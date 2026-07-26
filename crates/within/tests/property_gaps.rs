@@ -1,6 +1,6 @@
 use ndarray::Array2;
 use proptest::prelude::*;
-use within::{solve, DesignOptions, IntoDesign, LsmrOptions, Solver};
+use within::{solve, Design, DesignOptions, LsmrOptions, Solver};
 
 #[path = "common/property_strategies.rs"]
 mod strategies;
@@ -66,7 +66,7 @@ proptest! {
         };
         let precond = additive_precond();
         // LSMR converges on the least-squares system min ||y - Dx||^2 for any y.
-        let design = cats.view().into_design(DesignOptions::default()).unwrap();
+        let design = Design::from_categories(cats.view(), DesignOptions::default()).unwrap();
         let result = solve(design, &y, &params, &precond)
         .unwrap();
         prop_assert!(
@@ -79,7 +79,7 @@ proptest! {
 
     /// `solve()` and `Solver::new().solve(, &params)` must produce bit-identical
     /// results given the same design and RHS: the wrappers differ only in
-    /// timing accounting. Both ingest the raw view into a frame design,
+    /// timing accounting. Both designs are constructed from the same raw view,
     /// so they share the same locality sort (or its absence) and run in
     /// identical internal row order on any input.
     #[test]
@@ -90,13 +90,13 @@ proptest! {
         };
         let precond = additive_precond();
 
-        // Path A: convenience `solve()` (ingests the view internally)
-        let design_a = cats.view().into_design(DesignOptions::default()).unwrap();
+        // Path A: convenience `solve()`.
+        let design_a = Design::from_categories(cats.view(), DesignOptions::default()).unwrap();
         let result_a = solve(design_a, &y, &params, &precond)
         .unwrap();
 
         // Path B: Solver::new() — identical to solve() but without timing wrapper
-        let design_b = cats.view().into_design(DesignOptions::default()).unwrap();
+        let design_b = Design::from_categories(cats.view(), DesignOptions::default()).unwrap();
         let solver_b = Solver::new(design_b, &precond).unwrap();
         let result_b = solver_b.solve(&y, &params).unwrap();
 
@@ -123,7 +123,7 @@ proptest! {
             ..LsmrOptions::default()
         };
         let precond = additive_precond();
-        let design = cats.view().into_design(DesignOptions::default()).unwrap();
+        let design = Design::from_categories(cats.view(), DesignOptions::default()).unwrap();
         let result = solve(design, &y, &params, &precond)
         .unwrap();
 
@@ -170,7 +170,7 @@ proptest! {
             maxiter: n_levels + 10,
             ..LsmrOptions::default()
         };
-        let design = cats.view().into_design(DesignOptions::default()).unwrap();
+        let design = Design::from_categories(cats.view(), DesignOptions::default()).unwrap();
         let result = solve(design, &y, &params, None)
         .unwrap();
 

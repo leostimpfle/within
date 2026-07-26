@@ -7,8 +7,8 @@ use numpy::{PyReadonlyArray1, PyReadonlyArray2, PyUntypedArray};
 use pyo3::prelude::*;
 
 use within::{
-    BatchSolveResult, BuildError, BuildWarning, DesignOptions, Effect, IntoDesign, LsmrOptions,
-    PreconditionerInput, SolveResult, Solver, WithinError,
+    BatchSolveResult, BuildError, BuildWarning, Design, Effect, LsmrOptions, PreconditionerInput,
+    SolveResult, Solver, WithinError,
 };
 
 use crate::config::{
@@ -25,14 +25,12 @@ use crate::results::{
 
 /// Build a one-shot solver and hand back build warnings for the caller to re-emit.
 fn build_and_solve<'a>(
-    design: impl IntoDesign<'a>,
-    options: DesignOptions<'a>,
+    design: Design<'a>,
     y: &[f64],
     lsmr: &LsmrOptions,
     precond: impl Into<PreconditionerInput>,
 ) -> Result<(SolveResult, Vec<BuildWarning>), WithinError> {
     let t_start = Instant::now();
-    let design = design.into_design(options)?;
     let solver = Solver::new(design, precond)?;
     let time_setup = t_start.elapsed().as_secs_f64();
     let mut result = solver.solve(y, lsmr)?;
@@ -43,14 +41,12 @@ fn build_and_solve<'a>(
 
 /// Batch counterpart to [`build_and_solve`], mirroring [`within::solve_batch`].
 fn build_and_solve_batch<'a>(
-    design: impl IntoDesign<'a>,
-    options: DesignOptions<'a>,
+    design: Design<'a>,
     ys: &[&[f64]],
     lsmr: &LsmrOptions,
     precond: impl Into<PreconditionerInput>,
 ) -> Result<(BatchSolveResult, Vec<BuildWarning>), WithinError> {
     let t_start = Instant::now();
-    let design = design.into_design(options)?;
     let solver = Solver::new(design, precond)?;
     let time_setup = t_start.elapsed().as_secs_f64();
     let mut result = solver.solve_batch(ys, lsmr)?;
@@ -92,19 +88,15 @@ pub fn solve<'py>(
             let cats = categories.as_array();
             run_solve_with_warnings(py, move || {
                 let y_cow = coerce_to_slice(&y_arr);
-                build_and_solve(cats, design_options.to_native(), &y_cow, &params, precond)
+                let design = Design::from_categories(cats, design_options.to_native())?;
+                build_and_solve(design, &y_cow, &params, precond)
             })
         }
         DesignSource::Effects(terms) => run_solve_with_warnings(py, move || {
             let effects: Vec<_> = terms.iter().map(PyEffect::as_effect).collect();
             let y_cow = coerce_to_slice(&y_arr);
-            build_and_solve(
-                effects,
-                design_options.to_native(),
-                &y_cow,
-                &params,
-                precond,
-            )
+            let design = Design::from_effects(effects, design_options.to_native())?;
+            build_and_solve(design, &y_cow, &params, precond)
         }),
     }
 }
@@ -143,13 +135,8 @@ pub fn solve_batch<'py>(
             run_batch_with_warnings(py, move || {
                 let columns = extract_columns(&y_arr);
                 let col_refs = column_refs(&columns);
-                build_and_solve_batch(
-                    cats,
-                    design_options.to_native(),
-                    &col_refs,
-                    &params,
-                    precond,
-                )
+                let design = Design::from_categories(cats, design_options.to_native())?;
+                build_and_solve_batch(design, &col_refs, &params, precond)
             })
         }
         DesignSource::Effects(terms) => {
@@ -160,13 +147,8 @@ pub fn solve_batch<'py>(
                 let effects: Vec<_> = terms.iter().map(PyEffect::as_effect).collect();
                 let columns = extract_columns(&y_arr);
                 let col_refs = column_refs(&columns);
-                build_and_solve_batch(
-                    effects,
-                    design_options.to_native(),
-                    &col_refs,
-                    &params,
-                    precond,
-                )
+                let design = Design::from_effects(effects, design_options.to_native())?;
+                build_and_solve_batch(design, &col_refs, &params, precond)
             })
         }
     }
@@ -288,7 +270,8 @@ impl PySolver {
             DesignSource::Categories(categories) => {
                 let cats = categories.as_array();
                 py.detach(move || -> Result<Solver<'static>, BuildError> {
-                    let design = cats.into_design(design_options.to_native())?.into_owned();
+                    let design =
+                        Design::from_categories(cats, design_options.to_native())?.into_owned();
                     Solver::new(design, precond)
                 })
             }
@@ -297,10 +280,8 @@ impl PySolver {
                     let effects: Vec<_> = terms.iter().map(PyEffect::as_effect).collect();
                     // The design borrows the terms' buffers; the solver outlives
                     // them, so lower to owned columns first.
-                    let design = design_options
-                        .to_native()
-                        .from_effects(effects)?
-                        .into_owned();
+                    let design =
+                        Design::from_effects(effects, design_options.to_native())?.into_owned();
                     Solver::new(design, precond)
                 })
             }

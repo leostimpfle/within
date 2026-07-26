@@ -1,7 +1,6 @@
 use ndarray::array;
 use within::{
-    solve, Design, DesignOptions, Effect, IntoDesign, LsmrOptions, Preconditioner,
-    PreconditionerConfig, Solver,
+    solve, Design, DesignOptions, Effect, LsmrOptions, Preconditioner, PreconditionerConfig, Solver,
 };
 
 #[path = "common/orchestrate_helpers.rs"]
@@ -22,10 +21,7 @@ fn categories_and_y() -> (ndarray::Array2<u32>, Vec<f64>) {
 }
 
 fn design(categories: &ndarray::Array2<u32>) -> Design<'_> {
-    categories
-        .view()
-        .into_design(DesignOptions::default())
-        .expect("design")
+    Design::from_categories(categories.view(), DesignOptions::default()).expect("design")
 }
 
 #[test]
@@ -164,8 +160,11 @@ fn test_solver_batch_term_design_shares_drop_report() {
     ];
     let params = default_params();
 
-    let solver = Solver::new(Design::new(effects).expect("design"), additive_precond())
-        .expect("solver build");
+    let solver = Solver::new(
+        Design::from_effects(effects, DesignOptions::default()).expect("design"),
+        additive_precond(),
+    )
+    .expect("solver build");
     let batch = solver
         .solve_batch(&[&ys[0], &ys[1]], &params)
         .expect("solve batch");
@@ -295,23 +294,16 @@ fn test_internal_locality_sort_is_transparent() {
         let frame =
             ObservationFrame::new(vec![col0.clone().into(), col1.clone().into()], Vec::new())
                 .expect("frame");
-        let options = match weights {
-            Some(weights) => DesignOptions::default().weights(weights),
-            None => DesignOptions::default(),
-        };
-        let design = options.from_frame(frame).expect("design");
+        let options = DesignOptions::new(false, weights.map(Into::into));
+        let design = Design::from_frame(frame, options).expect("design");
         Solver::new(design, &precond).expect("solver")
     };
     let make_oracle = |weights: Option<Vec<f64>>| {
         let frame =
             ObservationFrame::new(vec![col0.clone().into(), col1.clone().into()], Vec::new())
                 .expect("frame");
-        let options = match weights {
-            Some(weights) => DesignOptions::default().weights(weights),
-            None => DesignOptions::default(),
-        }
-        .with_locality_sort(false);
-        let design = options.from_frame(frame).expect("oracle design");
+        let options = DesignOptions::new(false, weights.map(Into::into));
+        let design = Design::from_frame_unsorted(frame, options).expect("oracle design");
         Solver::new(design, &precond).expect("oracle solver")
     };
 

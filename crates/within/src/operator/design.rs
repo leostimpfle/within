@@ -135,7 +135,7 @@ mod reentry_guard_tests {
     use schwarz_precond::Operator;
 
     use super::DesignOperator;
-    use crate::domain::Design;
+    use crate::domain::{Design, DesignOptions};
     use crate::observation::ObservationFrame;
 
     fn one_factor_design() -> Design<'static> {
@@ -144,7 +144,7 @@ mod reentry_guard_tests {
             Vec::new(),
         )
         .expect("valid frame");
-        Design::from_frame(frame).expect("valid design")
+        Design::from_frame(frame, DesignOptions::default()).expect("valid design")
     }
 
     #[test]

@@ -5,7 +5,7 @@
 use rand::rngs::SmallRng;
 use rand::{RngExt, SeedableRng};
 use within::observation::ObservationFrame;
-use within::Design;
+use within::{Design, DesignOptions};
 
 /// Build a panel with 10 observations per worker and ~23 workers per firm.
 /// `difficult` assigns firms round-robin (`i % n_firm`, high connectivity);
@@ -49,7 +49,7 @@ pub fn generate_fixest_like_case(
         Vec::new(),
     )
     .expect("valid frame");
-    let design = Design::from_frame(frame).expect("valid design");
+    let design = Design::from_frame(frame, DesignOptions::default()).expect("valid design");
 
     // Random y — callers measure iteration time on an arbitrary RHS, not
     // ground-truth recovery.

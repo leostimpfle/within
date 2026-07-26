@@ -161,14 +161,14 @@ Coefficients for unidentified directions are pinned to the **minimal-norm** valu
 
 ```rust
 use ndarray::Array2;
-use within::{solve, DesignOptions, IntoDesign, LsmrOptions, PreconditionerConfig};
+use within::{solve, Design, DesignOptions, LsmrOptions, PreconditionerConfig};
 use within::config::{LocalSolverConfig, ReductionStrategy};
 
 let categories = /* Array2<u32> of shape (n_obs, n_factors) */;
 let y: &[f64] = /* response vector */;
 
 // Default: LSMR + additive Schwarz (None → library default)
-let design = categories.view().into_design(DesignOptions::default())?;
+let design = Design::from_categories(categories.view(), DesignOptions::default())?;
 let r = solve(design, &y, &LsmrOptions::default(), None)?;
 assert!(r.converged);
 
@@ -178,21 +178,21 @@ let precond = PreconditionerConfig::Additive {
     local_solver: LocalSolverConfig::default(),
     reduction: ReductionStrategy::default(),
 };
-let design = categories.view().into_design(DesignOptions::default())?;
+let design = Design::from_categories(categories.view(), DesignOptions::default())?;
 let r = solve(design, &y, &lsmr, &precond)?;
 
 // Opt into diagonal/Jacobi preconditioning
 let diagonal = PreconditionerConfig::Diagonal;
-let design = categories.view().into_design(DesignOptions::default())?;
+let design = Design::from_categories(categories.view(), DesignOptions::default())?;
 let r = solve(design, &y, &lsmr, &diagonal)?;
 ```
 
 Persistent solver — build once, solve many:
 
 ```rust
-use within::{DesignOptions, IntoDesign, Solver};
+use within::{Design, DesignOptions, Solver};
 
-let design = categories.view().into_design(DesignOptions::default())?;
+let design = Design::from_categories(categories.view(), DesignOptions::default())?;
 let solver = Solver::new(design, None)?;
 let r1 = solver.solve(&y, &LsmrOptions::default())?;
 let r2 = solver.solve(&another_y, &LsmrOptions::default())?;  // reuses preconditioner

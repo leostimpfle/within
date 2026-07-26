@@ -6,7 +6,7 @@ use super::accumulate::{
 use super::{build_compact_mapping, CrossTab};
 use crate::channel::{Channel, ChannelPair};
 use crate::domain::find_all_active_levels;
-use crate::domain::{Design, Effect};
+use crate::domain::{Design, DesignOptions, Effect};
 use crate::observation::ObservationFrame;
 
 /// Terms 0 and 1 paired on their intercept channels (plain cross-tab).
@@ -18,7 +18,7 @@ const INTERCEPT_PAIR: ChannelPair = ChannelPair {
 fn design_of(columns: Vec<Vec<u32>>) -> Design<'static> {
     let frame = ObservationFrame::new(columns.into_iter().map(Into::into).collect(), Vec::new())
         .expect("valid frame");
-    Design::from_frame(frame).expect("valid design")
+    Design::from_frame(frame, DesignOptions::default()).expect("valid design")
 }
 
 #[test]
@@ -304,7 +304,7 @@ fn dense_and_sparse_paths_agree_on_signed_data() {
         Effect::new(&f, true, [&z[..]]).unwrap(),
         Effect::new(&g, true, []).unwrap(),
     ];
-    let design = Design::new(effects).unwrap();
+    let design = Design::from_effects(effects, DesignOptions::default()).unwrap();
     let pair = ChannelPair {
         rows: Channel { term: 0, column: 1 },
         cols: Channel { term: 1, column: 0 },

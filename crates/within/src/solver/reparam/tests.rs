@@ -3,7 +3,7 @@
 //! for the per-term independence of the multi-term whitening.
 
 use crate::channel::Channel;
-use crate::domain::Effect;
+use crate::domain::{DesignOptions, Effect};
 
 use super::*;
 
@@ -59,7 +59,7 @@ fn three_term_effects() -> Vec<Effect<'static>> {
 
 #[test]
 fn build_whitens_each_slope_bearing_term() {
-    let mut design = Design::new(three_term_effects()).unwrap();
+    let mut design = Design::from_effects(three_term_effects(), DesignOptions::default()).unwrap();
     let rp = SlopeReparam::build(&mut design.frame, &design.terms, None).unwrap();
     assert!(rp.unidentified.is_empty());
 
@@ -103,7 +103,7 @@ fn unidentified_directions_ascend_across_terms() {
         Effect::new(&f0, true, [&z0[..]]).unwrap(),
         Effect::new(&f1, true, [&z1[..]]).unwrap(),
     ];
-    let mut design = Design::new(effects).unwrap();
+    let mut design = Design::from_effects(effects, DesignOptions::default()).unwrap();
     let rp = SlopeReparam::build(&mut design.frame, &design.terms, None).unwrap();
     assert_eq!(
         rp.unidentified,
@@ -122,7 +122,7 @@ fn unidentified_directions_ascend_across_terms() {
 
 #[test]
 fn back_transform_leaves_other_terms_untouched() {
-    let mut design = Design::new(three_term_effects()).unwrap();
+    let mut design = Design::from_effects(three_term_effects(), DesignOptions::default()).unwrap();
     let rp = SlopeReparam::build(&mut design.frame, &design.terms, None).unwrap();
 
     let mut x: Vec<f64> = (0..design.n_dofs).map(|i| 1.0 + i as f64).collect();

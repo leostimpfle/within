@@ -3,7 +3,8 @@
 //! components solving through their Gremban double cover (#62).
 
 use within::{
-    Design, Effect, LsmrOptions, Preconditioner, PreconditionerConfig, SchurMode, Solver,
+    Design, DesignOptions, Effect, LsmrOptions, Preconditioner, PreconditionerConfig, SchurMode,
+    Solver,
 };
 
 fn lcg(seed: &mut u64) -> u64 {
@@ -39,7 +40,7 @@ fn two_factor_slope_solves_with_bounded_iterations() {
         Effect::new(&g, true, []).expect("plain effect"),
     ];
     let r = Solver::new(
-        Design::new(effects).expect("design"),
+        Design::from_effects(effects, DesignOptions::default()).expect("design"),
         PreconditionerConfig::default(),
     )
     .expect("signed routing builds")
@@ -75,7 +76,7 @@ fn unit_trends_plus_time_effects_boundary() {
         Effect::new(&time, true, []).expect("time effect"),
     ];
     let r = Solver::new(
-        Design::new(effects).expect("design"),
+        Design::from_effects(effects, DesignOptions::default()).expect("design"),
         PreconditionerConfig::default(),
     )
     .expect("PSD-boundary routing builds")
@@ -99,7 +100,7 @@ fn frustrated_component_solves_via_cover() {
     ];
 
     let r = Solver::new(
-        Design::new(effects).expect("design"),
+        Design::from_effects(effects, DesignOptions::default()).expect("design"),
         PreconditionerConfig::default(),
     )
     .expect("frustrated component builds via its Gremban cover")
@@ -159,7 +160,7 @@ fn frustrated_two_factor_slope_solves_with_bounded_iterations() {
         Effect::new(&g, true, []).expect("plain effect"),
     ];
     let r = Solver::new(
-        Design::new(effects).expect("design"),
+        Design::from_effects(effects, DesignOptions::default()).expect("design"),
         PreconditionerConfig::default(),
     )
     .expect("frustrated routing builds")
@@ -184,7 +185,7 @@ fn near_collinear_cross_term_direction_survives_routing() {
         Effect::new(&f, false, [&z2[..]]).unwrap(),
     ];
     let r = Solver::new(
-        Design::new(effects).expect("design"),
+        Design::from_effects(effects, DesignOptions::default()).expect("design"),
         PreconditionerConfig::default(),
     )
     .expect("near-collinear pair builds")
@@ -235,10 +236,13 @@ fn surplus_component_sampled_matches_exact_reduction() {
             },
             reduction: Default::default(),
         };
-        Solver::new(Design::new(effects).expect("design"), config)
-            .expect("build")
-            .solve(&y, &LsmrOptions::default())
-            .expect("solve")
+        Solver::new(
+            Design::from_effects(effects, DesignOptions::default()).expect("design"),
+            config,
+        )
+        .expect("build")
+        .solve(&y, &LsmrOptions::default())
+        .expect("solve")
     };
 
     let sampled = solve(SchurMode::Approximate(
@@ -291,7 +295,7 @@ fn singleton_level_in_non_first_slope_term_solves_under_default() {
     };
 
     let solver = Solver::new(
-        Design::new(effects()).expect("design"),
+        Design::from_effects(effects(), DesignOptions::default()).expect("design"),
         PreconditionerConfig::default(),
     )
     .expect("default preconditioner builds");
@@ -317,10 +321,13 @@ fn singleton_level_in_non_first_slope_term_solves_under_default() {
 
     // The demeaned residual is gauge-invariant, so it agrees though raw coefficients need not.
     for cfg in [PreconditionerConfig::Off, PreconditionerConfig::Diagonal] {
-        let alt = Solver::new(Design::new(effects()).expect("design"), cfg)
-            .expect("alt preconditioner builds")
-            .solve(&y, &LsmrOptions::default())
-            .expect("alt solve");
+        let alt = Solver::new(
+            Design::from_effects(effects(), DesignOptions::default()).expect("design"),
+            cfg,
+        )
+        .expect("alt preconditioner builds")
+        .solve(&y, &LsmrOptions::default())
+        .expect("alt solve");
         for (i, (&d, &a)) in r.demeaned.iter().zip(&alt.demeaned).enumerate() {
             assert!(
                 (d - a).abs() < 1e-8,
@@ -333,10 +340,13 @@ fn singleton_level_in_non_first_slope_term_solves_under_default() {
     let bytes = postcard::to_stdvec(precond).expect("serialize");
     let restored: Preconditioner = postcard::from_bytes(&bytes).expect("deserialize");
     assert_eq!(restored.ncols(), solver.n_dofs());
-    let reused = Solver::new(Design::new(effects()).expect("design"), restored)
-        .expect("reused preconditioner accepted")
-        .solve(&y, &LsmrOptions::default())
-        .expect("reused solve");
+    let reused = Solver::new(
+        Design::from_effects(effects(), DesignOptions::default()).expect("design"),
+        restored,
+    )
+    .expect("reused preconditioner accepted")
+    .solve(&y, &LsmrOptions::default())
+    .expect("reused solve");
     for (i, (&a, &b)) in r.x.iter().zip(&reused.x).enumerate() {
         assert!(
             (a - b).abs() < 1e-9,

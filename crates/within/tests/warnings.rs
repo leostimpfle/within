@@ -2,8 +2,8 @@
 //! [`BuildWarning`]s, not just [`Solver::warnings`] (#165).
 
 use within::{
-    solve, solve_batch, BuildWarning, Design, Effect, LocalSolverConfig, PreconditionerConfig,
-    ReductionStrategy, ScalingConfig, ScalingFailure, Solver,
+    solve, solve_batch, BuildWarning, Design, DesignOptions, Effect, LocalSolverConfig,
+    PreconditionerConfig, ReductionStrategy, ScalingConfig, ScalingFailure, Solver,
 };
 
 // Two crossed slope-only factors: their signed slope cross-block is not
@@ -48,7 +48,7 @@ fn free_solve_surfaces_build_warnings() {
     let cfg = strict_scaling();
 
     let result = solve(
-        Design::new(warning_effects()).expect("design"),
+        Design::from_effects(warning_effects(), DesignOptions::default()).expect("design"),
         &y,
         None,
         &cfg,
@@ -61,8 +61,11 @@ fn free_solve_surfaces_build_warnings() {
     );
 
     // The result field mirrors the solver accessor exactly.
-    let solver =
-        Solver::new(Design::new(warning_effects()).expect("design"), &cfg).expect("solver");
+    let solver = Solver::new(
+        Design::from_effects(warning_effects(), DesignOptions::default()).expect("design"),
+        &cfg,
+    )
+    .expect("solver");
     assert_eq!(result.warnings.as_slice(), solver.warnings());
 }
 
@@ -74,7 +77,7 @@ fn free_solve_batch_surfaces_build_warnings() {
     let cfg = strict_scaling();
 
     let result = solve_batch(
-        Design::new(warning_effects()).expect("design"),
+        Design::from_effects(warning_effects(), DesignOptions::default()).expect("design"),
         &ys,
         None,
         &cfg,
@@ -87,7 +90,10 @@ fn free_solve_batch_surfaces_build_warnings() {
     );
 
     // The result field mirrors the solver accessor exactly.
-    let solver =
-        Solver::new(Design::new(warning_effects()).expect("design"), &cfg).expect("solver");
+    let solver = Solver::new(
+        Design::from_effects(warning_effects(), DesignOptions::default()).expect("design"),
+        &cfg,
+    )
+    .expect("solver");
     assert_eq!(result.warnings.as_slice(), solver.warnings());
 }

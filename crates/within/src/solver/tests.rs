@@ -34,7 +34,7 @@ fn positive_slope_only_pair_grounds_beyond_dense_threshold() {
         Effect::new(&f, false, [&z[..]]).expect("slope effect"),
         Effect::new(&g, true, []).expect("plain effect"),
     ];
-    let mut design = Design::new(effects).expect("design");
+    let mut design = Design::from_effects(effects, DesignOptions::default()).expect("design");
     let _reparam = SlopeReparam::build(&mut design.frame, &design.terms, None);
     let (domains, warnings) =
         build_local_domains(&design, None, &ScalingConfig::default()).expect("domains");
@@ -55,10 +55,13 @@ fn coefficient_layout_translates_addresses_both_ways() {
     let f = [0u32, 1, 2, 0, 1, 2];
     let g = [0u32, 0, 1, 1, 0, 1];
     let z = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
-    let design = Design::new(vec![
-        Effect::new(&f, true, []).expect("plain effect"),
-        Effect::new(&g, true, [&z[..]]).expect("slope effect"),
-    ])
+    let design = Design::from_effects(
+        vec![
+            Effect::new(&f, true, []).expect("plain effect"),
+            Effect::new(&g, true, [&z[..]]).expect("slope effect"),
+        ],
+        DesignOptions::default(),
+    )
     .expect("design");
     let layout = CoefficientLayout::from_design(&design);
 
@@ -94,10 +97,7 @@ fn coefficient_layout_translates_addresses_both_ways() {
 #[test]
 fn solver_filters_caller_rhs_and_restores_removed_rows_as_nan() {
     let frame = ObservationFrame::new(vec![vec![0u32, 1, 0, 0, 2].into()], Vec::new()).unwrap();
-    let design = DesignOptions::default()
-        .drop_singletons(true)
-        .from_frame(frame)
-        .unwrap();
+    let design = Design::from_frame(frame, DesignOptions::new(true, None)).unwrap();
 
     let solver = Solver::new(design, PreconditionerConfig::default()).unwrap();
     let y = [1.0, f64::NAN, 3.0, 4.0, f64::NAN];

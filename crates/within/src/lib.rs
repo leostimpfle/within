@@ -5,14 +5,11 @@
 //!
 //! ```
 //! use ndarray::Array2;
-//! use within::{solve, DesignOptions, IntoDesign, LsmrOptions};
+//! use within::{solve, Design, DesignOptions, LsmrOptions};
 //!
 //! let categories = Array2::<u32>::zeros((10_000, 2));
 //! let y = vec![0.0; 10_000];
-//! let design = categories
-//!     .view()
-//!     .into_design(DesignOptions::default())
-//!     .unwrap();
+//! let design = Design::from_categories(categories.view(), DesignOptions::default()).unwrap();
 //! let r = solve(design, &y, &LsmrOptions::default(), None).unwrap();
 //! assert!(r.converged);
 //! ```
@@ -49,6 +46,6 @@ pub use domain::{Design, DesignOptions, Effect};
 pub use error::{BuildError, BuildWarning, SolveError, WithinError};
 pub use operator::schwarz::Preconditioner;
 pub use solver::{
-    solve, solve_batch, BatchSolveResult, CoefficientAddress, CoefficientLayout, IntoDesign,
+    solve, solve_batch, BatchSolveResult, CoefficientAddress, CoefficientLayout,
     PreconditionerInput, SolveResult, Solver,
 };

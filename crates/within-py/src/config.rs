@@ -4,7 +4,7 @@
 //! Python→native config conversions (`to_native`, `resolve_precond_input`,
 //! `resolve_lsmr_config`). The low-level classes are exposed for benchmark tuning.
 
-use std::sync::Arc;
+use std::{borrow::Cow, sync::Arc};
 
 use numpy::PyReadonlyArray1;
 use pyo3::prelude::*;
@@ -50,11 +50,10 @@ impl PyDesignOptions {
 
 impl PyDesignOptions {
     pub(crate) fn to_native(&self) -> DesignOptions<'_> {
-        let options = DesignOptions::default().drop_singletons(self.drop_singletons);
-        match &self.weights {
-            Some(weights) => options.weights(weights.as_ref()),
-            None => options,
-        }
+        DesignOptions::new(
+            self.drop_singletons,
+            self.weights.as_deref().map(Cow::Borrowed),
+        )
     }
 }
 

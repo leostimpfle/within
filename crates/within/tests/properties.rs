@@ -1,7 +1,7 @@
 use proptest::prelude::*;
 use within::{
-    solve, Channel, CoefficientAddress, DesignOptions, Effect, IntoDesign, LsmrOptions,
-    Preconditioner, PreconditionerConfig, Solver,
+    solve, Channel, CoefficientAddress, Design, DesignOptions, Effect, LsmrOptions, Preconditioner,
+    PreconditionerConfig, Solver,
 };
 
 #[path = "common/property_strategies.rs"]
@@ -26,7 +26,7 @@ proptest! {
     fn prop_preconditioner_serde_roundtrip((cats, _y) in random_fe_problem_strategy()) {
         let precond = additive_precond();
 
-        let design = cats.view().into_design(DesignOptions::default()).unwrap();
+        let design = Design::from_categories(cats.view(), DesignOptions::default()).unwrap();
         let solver = within::Solver::new(design, &precond).unwrap();
         let fe_precond = solver.preconditioner().unwrap();
 
@@ -54,7 +54,7 @@ proptest! {
             ..default_params()
         };
         let precond = additive_precond();
-        let design = cats.view().into_design(DesignOptions::default()).unwrap();
+        let design = Design::from_categories(cats.view(), DesignOptions::default()).unwrap();
         let result = solve(design, &y, &params, &precond)
         .unwrap();
 
@@ -69,7 +69,7 @@ proptest! {
     fn prop_demeaned_orthogonality((cats, y) in random_fe_problem_strategy()) {
         let params = default_params();
         let precond = additive_precond();
-        let design = cats.view().into_design(DesignOptions::default()).unwrap();
+        let design = Design::from_categories(cats.view(), DesignOptions::default()).unwrap();
         let result = solve(design, &y, &params, &precond)
         .unwrap();
 
@@ -126,10 +126,11 @@ proptest! {
             maxiter: 2000,
             local_size: Some(10),
         };
-        let design = DesignOptions::default()
-            .weights(weights.clone())
-            .from_effects(effects)
-            .expect("design");
+        let design = Design::from_effects(
+            effects,
+            DesignOptions::new(false, Some(weights.clone().into())),
+        )
+        .expect("design");
         let result = Solver::new(design, PreconditionerConfig::default())
             .expect("build solver")
             .solve(y.as_slice(), &params)

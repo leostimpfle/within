@@ -2,7 +2,7 @@
 
 use ndarray::Array2;
 use within::observation::ObservationFrame;
-use within::{Design, SolveResult};
+use within::{Design, DesignOptions, SolveResult};
 
 /// The canonical 2-factor, 5-observation categorical structure used across the
 /// orchestration tests. `categories[f][i]` is observation `i`'s level in factor `f`.
@@ -25,7 +25,7 @@ pub fn make_test_design() -> Design<'static> {
 pub fn make_design(categories: Vec<Vec<u32>>) -> Result<Design<'static>, within::BuildError> {
     let frame =
         ObservationFrame::new(categories.into_iter().map(Into::into).collect(), Vec::new())?;
-    Design::from_frame(frame)
+    Design::from_frame(frame, DesignOptions::default())
 }
 
 /// Deterministic, non-trivial RHS sized to the design's observation count.

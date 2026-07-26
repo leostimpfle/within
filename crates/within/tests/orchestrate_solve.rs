@@ -1,5 +1,5 @@
 use within::config::{LocalSolverConfig, ReductionStrategy};
-use within::{DesignOptions, LsmrOptions, PreconditionerConfig, Solver};
+use within::{Design, DesignOptions, LsmrOptions, PreconditionerConfig, Solver};
 
 #[path = "common/orchestrate_helpers.rs"]
 mod common;
@@ -83,10 +83,11 @@ fn test_lsmr_least_squares_weighted_preconditioned() {
         Vec::new(),
     )
     .expect("valid frame");
-    let design = DesignOptions::default()
-        .weights(weights.clone())
-        .from_frame(frame)
-        .expect("valid design");
+    let design = Design::from_frame(
+        frame,
+        DesignOptions::new(false, Some(weights.clone().into())),
+    )
+    .expect("valid design");
     let y = vec![1.0, 2.0, 3.0, 4.0, 5.0];
 
     let params = LsmrOptions {

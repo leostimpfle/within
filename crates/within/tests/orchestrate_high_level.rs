@@ -1,17 +1,12 @@
 use ndarray::ArrayView2;
-use within::{
-    solve, solve_batch, Design, DesignOptions, IntoDesign, LsmrOptions, PreconditionerConfig,
-};
+use within::{solve, solve_batch, Design, DesignOptions, LsmrOptions, PreconditionerConfig};
 
 #[path = "common/orchestrate_helpers.rs"]
 mod common;
 
 fn design<'a>(categories: ArrayView2<'a, u32>, weights: Option<&'a [f64]>) -> Design<'a> {
-    let options = match weights {
-        Some(weights) => DesignOptions::default().weights(weights),
-        None => DesignOptions::default(),
-    };
-    categories.into_design(options).expect("design")
+    let options = DesignOptions::new(false, weights.map(Into::into));
+    Design::from_categories(categories, options).expect("design")
 }
 
 #[test]

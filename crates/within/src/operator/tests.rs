@@ -1,10 +1,10 @@
-use crate::domain::Design;
+use crate::domain::{Design, DesignOptions};
 use crate::observation::ObservationFrame;
 
 fn design_of(columns: Vec<Vec<u32>>) -> Design<'static> {
     let frame = ObservationFrame::new(columns.into_iter().map(Into::into).collect(), Vec::new())
         .expect("valid frame");
-    Design::from_frame(frame).expect("valid design")
+    Design::from_frame(frame, DesignOptions::default()).expect("valid design")
 }
 
 mod design_tests {
@@ -77,10 +77,7 @@ mod design_tests {
         assert!(matches!(rhs, Cow::Borrowed(_)));
 
         let frame = ObservationFrame::new(vec![vec![0u32, 1, 0, 0, 2].into()], Vec::new()).unwrap();
-        let mapped = DesignOptions::default()
-            .drop_singletons(true)
-            .from_frame(frame)
-            .unwrap();
+        let mapped = Design::from_frame(frame, DesignOptions::new(true, None)).unwrap();
         let rhs = DesignOperator::new(&mapped, None).weighted_rhs(&caller);
         assert!(matches!(rhs, Cow::Owned(_)));
         assert_eq!(&*rhs, &[1.0, 3.0, 4.0]);
@@ -324,7 +321,7 @@ mod design_tests {
 }
 
 mod slope_design_tests {
-    use crate::domain::{Design, Effect, Loading};
+    use crate::domain::{Design, DesignOptions, Effect, Loading};
     use crate::operator::DesignOperator;
     use schwarz_precond::Operator;
 
@@ -385,7 +382,7 @@ mod slope_design_tests {
             Effect::new(&f3, true, []).unwrap(),
             Effect::new(&f4, true, [&zs[5][..], &zs[4][..]]).unwrap(),
         ];
-        let design = Design::new(effects).unwrap();
+        let design = Design::from_effects(effects, DesignOptions::default()).unwrap();
         let dense = dense_matrix(&design);
         let op = DesignOperator::new(&design, None);
 
@@ -430,7 +427,7 @@ mod slope_design_tests {
             Effect::new(&unsorted, true, [&z[1][..]]).unwrap(),
             Effect::new(&small, true, [&z[2][..], &z[3][..]]).unwrap(),
         ];
-        let design = Design::new(effects).unwrap();
+        let design = Design::from_effects(effects, DesignOptions::default()).unwrap();
         let sqrt_weights: Vec<f64> = (0..n).map(|i| (0.5 + noise(i).abs()).sqrt()).collect();
         let op = DesignOperator::new(&design, Some(&sqrt_weights));
 
@@ -506,7 +503,7 @@ mod weighted_adjoint_proptests {
                 .sum();
 
             let sqrt_weights: Vec<f64> = dm
-                .to_internal_order(&weights)
+                .to_internal_row_order(&weights)
                 .iter()
                 .map(|w| w.sqrt())
                 .collect();

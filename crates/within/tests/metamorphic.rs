@@ -1,8 +1,6 @@
 use ndarray::{Array2, ArrayView2};
 use proptest::prelude::*;
-use within::{
-    solve, solve_batch, Channel, CoefficientAddress, Design, DesignOptions, IntoDesign, LsmrOptions,
-};
+use within::{solve, solve_batch, Channel, CoefficientAddress, Design, DesignOptions, LsmrOptions};
 
 #[path = "common/property_strategies.rs"]
 mod strategies;
@@ -25,11 +23,8 @@ fn tight_params() -> LsmrOptions {
 }
 
 fn design<'a>(categories: ArrayView2<'a, u32>, weights: Option<&'a [f64]>) -> Design<'a> {
-    let options = match weights {
-        Some(weights) => DesignOptions::default().weights(weights),
-        None => DesignOptions::default(),
-    };
-    categories.into_design(options).expect("design")
+    let options = DesignOptions::new(false, weights.map(Into::into));
+    Design::from_categories(categories, options).expect("design")
 }
 
 /// L2 agreement with a mixed absolute+relative tolerance: returns the actual

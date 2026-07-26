@@ -3,8 +3,7 @@
 
 use ndarray::Array2;
 use within::{
-    solve, solve_batch, Design, DesignOptions, IntoDesign, LsmrOptions, PreconditionerConfig,
-    Solver,
+    solve, solve_batch, Design, DesignOptions, LsmrOptions, PreconditionerConfig, Solver,
 };
 
 fn cats() -> Array2<u32> {
@@ -12,10 +11,7 @@ fn cats() -> Array2<u32> {
 }
 
 fn design(categories: &Array2<u32>) -> Design<'_> {
-    categories
-        .view()
-        .into_design(DesignOptions::default())
-        .expect("design")
+    Design::from_categories(categories.view(), DesignOptions::default()).expect("design")
 }
 
 #[test]
@@ -101,10 +97,11 @@ fn solver_new_weights_call_shapes_compile() {
     let _ = Solver::new(design(&categories), None).expect("None weights");
 
     // Owned `Vec<f64>` weights — moved into the solver.
-    let weighted = categories
-        .view()
-        .into_design(DesignOptions::default().weights(w_vec))
-        .expect("weighted design");
+    let weighted = Design::from_categories(
+        categories.view(),
+        DesignOptions::new(false, Some(w_vec.into())),
+    )
+    .expect("weighted design");
     let _ = Solver::new(weighted, None).expect("Vec<f64> weights");
 }
 

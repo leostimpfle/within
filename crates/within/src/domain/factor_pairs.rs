@@ -196,7 +196,7 @@ fn compute_partition_weights(domain_pairs: &mut [LocalDomain], n_dofs: usize) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::Design;
+    use crate::domain::{Design, DesignOptions};
     use crate::observation::ObservationFrame;
     use crate::Effect;
 
@@ -210,7 +210,7 @@ mod tests {
             Vec::new(),
         )
         .expect("valid frame");
-        Design::from_frame(frame).expect("valid test design")
+        Design::from_frame(frame, DesignOptions::default()).expect("valid test design")
     }
 
     #[test]
@@ -250,11 +250,14 @@ mod tests {
         let levels_b = [0u32, 1, 0, 1, 0, 1];
         let levels_c = [0u32, 0, 1, 1, 0, 1];
         let z = [1.0, -2.0, 0.5, 3.0, -1.5, 2.5];
-        let design = Design::new(vec![
-            Effect::new(&levels_a, true, [&z[..]]).expect("slope effect"),
-            Effect::new(&levels_b, true, []).expect("effect b"),
-            Effect::new(&levels_c, true, []).expect("effect c"),
-        ])
+        let design = Design::from_effects(
+            vec![
+                Effect::new(&levels_a, true, [&z[..]]).expect("slope effect"),
+                Effect::new(&levels_b, true, []).expect("effect b"),
+                Effect::new(&levels_c, true, []).expect("effect c"),
+            ],
+            DesignOptions::default(),
+        )
         .expect("valid slope design");
 
         let (domain_pairs, _) = build_local_domains(&design, None, &ScalingConfig::default())

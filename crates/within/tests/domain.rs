@@ -3,7 +3,7 @@
 //! and disconnected bipartite structure.
 
 use within::observation::ObservationFrame;
-use within::{Design, DesignOptions, IntoDesign};
+use within::{Design, DesignOptions};
 
 // Three-factor design: shared DOFs across factor pairs force NonUniform
 // partition weights; verified via the public solve API.
@@ -20,7 +20,7 @@ fn test_three_factor_design_solve_converges() {
 
     let frame = ObservationFrame::new(vec![fa.into(), fb.into(), fc.into()], Vec::new())
         .expect("valid 3-factor frame");
-    let dm = Design::from_frame(frame).expect("valid 3-factor design");
+    let dm = Design::from_frame(frame, DesignOptions::default()).expect("valid 3-factor design");
 
     assert_eq!(dm.n_factors(), 3);
 
@@ -40,10 +40,7 @@ fn test_three_factor_design_solve_converges() {
         ..LsmrOptions::default()
     };
     let precond = PreconditionerConfig::default();
-    let design = cats
-        .view()
-        .into_design(DesignOptions::default())
-        .expect("design");
+    let design = Design::from_categories(cats.view(), DesignOptions::default()).expect("design");
     let result = solve(design, &y, &params, &precond).expect("solve should not error");
 
     assert!(
@@ -82,10 +79,7 @@ fn test_disconnected_design_larger_converges() {
         ..LsmrOptions::default()
     };
     let precond = PreconditionerConfig::default();
-    let design = cats
-        .view()
-        .into_design(DesignOptions::default())
-        .expect("design");
+    let design = Design::from_categories(cats.view(), DesignOptions::default()).expect("design");
     let result = solve(design, &y, &params, &precond).expect("solve should not error");
 
     assert!(
@@ -118,10 +112,7 @@ fn test_disconnected_design_solve_converges() {
         ..LsmrOptions::default()
     };
     let precond = PreconditionerConfig::default();
-    let design = cats
-        .view()
-        .into_design(DesignOptions::default())
-        .expect("design");
+    let design = Design::from_categories(cats.view(), DesignOptions::default()).expect("design");
     let result = solve(design, &y, &params, &precond).expect("solve should not error");
 
     assert!(
@@ -139,7 +130,8 @@ fn test_disconnected_design_solve_converges() {
 fn test_single_factor_design_construction() {
     let frame = ObservationFrame::new(vec![vec![0u32, 1, 2, 0, 1].into()], Vec::new())
         .expect("valid frame");
-    let dm = Design::from_frame(frame).expect("valid single-factor design");
+    let dm =
+        Design::from_frame(frame, DesignOptions::default()).expect("valid single-factor design");
 
     assert_eq!(dm.n_factors(), 1, "expected 1 factor");
     assert_eq!(dm.n_dofs(), 3, "expected 3 DOFs (levels 0,1,2)");
@@ -167,10 +159,7 @@ fn test_single_factor_design_solve_without_precond() {
         maxiter: 500,
         ..LsmrOptions::default()
     };
-    let design = cats
-        .view()
-        .into_design(DesignOptions::default())
-        .expect("design");
+    let design = Design::from_categories(cats.view(), DesignOptions::default()).expect("design");
     let result = solve(design, &y, &params, None).expect("solve should not error");
 
     assert!(
@@ -204,6 +193,7 @@ fn test_intercept_only_effects_match_categories_bitwise() {
     let categories = Design::from_frame(
         ObservationFrame::new(vec![col0.clone().into(), col1.clone().into()], Vec::new())
             .expect("frame"),
+        DesignOptions::default(),
     )
     .expect("categories design");
     let cat = Solver::new(categories, &precond)
@@ -215,10 +205,13 @@ fn test_intercept_only_effects_match_categories_bitwise() {
         Effect::new(&col0, true, []).expect("effect 0"),
         Effect::new(&col1, true, []).expect("effect 1"),
     ];
-    let eff = Solver::new(Design::new(effects).expect("effect design"), &precond)
-        .expect("effect solver")
-        .solve(&y, &params)
-        .expect("effect solve");
+    let eff = Solver::new(
+        Design::from_effects(effects, DesignOptions::default()).expect("effect design"),
+        &precond,
+    )
+    .expect("effect solver")
+    .solve(&y, &params)
+    .expect("effect solve");
 
     // Bit-identity is only meaningful if both solves actually converged:
     // `Solver::solve` returns `Ok` even at `maxiter`, so without this the
@@ -268,7 +261,7 @@ fn test_slope_chain_design_converges_fast() {
         Effect::new(&firm, true, []).expect("plain effect"),
     ];
     let solver = Solver::new(
-        Design::new(effects).expect("design"),
+        Design::from_effects(effects, DesignOptions::default()).expect("design"),
         PreconditionerConfig::default(),
     )
     .expect("solver build");

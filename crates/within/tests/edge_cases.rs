@@ -1,7 +1,7 @@
 use ndarray::{array, ArrayView2};
 use rand::rngs::SmallRng;
 use rand::{RngExt, SeedableRng};
-use within::{solve, Design, DesignOptions, IntoDesign, LsmrOptions, PreconditionerConfig, Solver};
+use within::{solve, Design, DesignOptions, LsmrOptions, PreconditionerConfig, Solver};
 
 #[path = "common/orchestrate_helpers.rs"]
 mod common;
@@ -11,11 +11,8 @@ fn additive_precond() -> PreconditionerConfig {
 }
 
 fn design<'a>(categories: ArrayView2<'a, u32>, weights: Option<&'a [f64]>) -> Design<'a> {
-    let options = match weights {
-        Some(weights) => DesignOptions::default().weights(weights),
-        None => DesignOptions::default(),
-    };
-    categories.into_design(options).expect("design")
+    let options = DesignOptions::new(false, weights.map(Into::into));
+    Design::from_categories(categories, options).expect("design")
 }
 
 // ---------------------------------------------------------------------------

@@ -16,7 +16,7 @@ cargo add within
 
 ```rust
 use ndarray::Array2;
-use within::{solve, DesignOptions, IntoDesign, LsmrOptions, PreconditionerConfig};
+use within::{solve, Design, DesignOptions, LsmrOptions, PreconditionerConfig};
 
 // Two factors: 100 levels each, 10 000 observations
 let n_obs = 10_000usize;
@@ -28,7 +28,8 @@ for i in 0..n_obs {
 let y: Vec<f64> = (0..n_obs).map(|i| i as f64 * 0.01).collect();
 
 // Solve with library defaults: LSMR + additive Schwarz
-let design = categories.view().into_design(DesignOptions::default()).unwrap();
+let design =
+    Design::from_categories(categories.view(), DesignOptions::default()).unwrap();
 let result = solve(design, &y, &LsmrOptions::default(), None)
     .expect("solve should succeed");
 assert!(result.converged);
@@ -37,14 +38,16 @@ println!("LSMR converged in {} iterations", result.iterations);
 // Tighter tolerance with an explicit preconditioner config
 let lsmr = LsmrOptions { tol: 1e-10, ..LsmrOptions::default() };
 let precond = PreconditionerConfig::default();
-let design = categories.view().into_design(DesignOptions::default()).unwrap();
+let design =
+    Design::from_categories(categories.view(), DesignOptions::default()).unwrap();
 let result = solve(design, &y, &lsmr, &precond)
     .expect("solve should succeed");
 assert!(result.converged);
 
 // Or opt into a diagonal/Jacobi preconditioner.
 let diagonal = PreconditionerConfig::Diagonal;
-let design = categories.view().into_design(DesignOptions::default()).unwrap();
+let design =
+    Design::from_categories(categories.view(), DesignOptions::default()).unwrap();
 let result = solve(design, &y, &lsmr, &diagonal)
     .expect("solve should succeed");
 assert!(result.converged);
