@@ -28,7 +28,7 @@ ruff = ">=0.9"
 samply = ">=0.13"
 cargo-mutants = ">=27.1,<28"
 cargo-audit = ">=0.22.1,<0.23"
-pixi-pycharm = ">=0.0.10,<0.0.11"
+pixi-pycharm = "*"
 
 [feature.dev.pypi-dependencies]
 within-py = { path = ".", editable = true }
