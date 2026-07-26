@@ -216,16 +216,22 @@ class DesignOptions:
     Attributes:
         drop_singletons: Iteratively remove observations belonging to a
             singleton level in any fixed-effect term.
+        weights: Observation weights in caller row order, or ``None``.
     """
 
     @property
     def drop_singletons(self) -> bool: ...
-    def __init__(self, drop_singletons: bool = False) -> None: ...
+    @property
+    def weights(self) -> list[float] | None: ...
+    def __init__(
+        self,
+        drop_singletons: bool = False,
+        weights: NDArray[np.float64] | None = None,
+    ) -> None: ...
 
 def solve(
     design: NDArray[np.uint32] | list[Effect],
     y: NDArray[np.float64],
-    weights: NDArray[np.float64] | None = None,
     options: LsmrOptions | None = None,
     preconditioner: (
         PreconditionerConfig | AdditiveSchwarz | Preconditioner | None
@@ -244,8 +250,6 @@ def solve(
             assignments (F-contiguous for best performance; a ``UserWarning``
             is emitted otherwise), or a list of :class:`Effect` terms.
         y: Response vector, shape ``(n_obs,)``, dtype ``float64``.
-        weights: Observation weights, shape ``(n_obs,)``, dtype ``float64``.
-            Default: unit weights (unweighted).
         options: LSMR solver tuning. Pass ``LsmrOptions(...)`` to override
             defaults. Default: ``LsmrOptions(tol=1e-8, maxiter=1000)``.
         preconditioner: Controls preconditioning. Five input forms are accepted:
@@ -256,8 +260,9 @@ def solve(
             settings. A previously-built ``Preconditioner`` instance reuses an
             existing factorisation.
         design_options: Processing applied while constructing the design.
-            Omitted by default; use ``DesignOptions(drop_singletons=True)`` to
-            iteratively remove singleton observations. Removed rows are
+            Omitted by default. Use ``DesignOptions(drop_singletons=True)`` to
+            iteratively remove singleton observations and
+            ``DesignOptions(weights=weights)`` for weighting. Removed rows are
             represented by ``NaN`` in ``demeaned``.
 
     Returns:
@@ -293,7 +298,6 @@ def solve(
 def solve_batch(
     design: NDArray[np.uint32] | list[Effect],
     Y: NDArray[np.float64],
-    weights: NDArray[np.float64] | None = None,
     options: LsmrOptions | None = None,
     preconditioner: (
         PreconditionerConfig | AdditiveSchwarz | Preconditioner | None
@@ -312,7 +316,6 @@ def solve_batch(
             is emitted otherwise), or a list of :class:`Effect` terms.
         Y: Response matrix, shape ``(n_obs, k)``, dtype ``float64``. Each column
             is a separate response vector.
-        weights: Observation weights. Default: unit weights.
         options: LSMR solver tuning. Default: ``LsmrOptions(tol=1e-8, maxiter=1000)``.
         preconditioner: Preconditioner configuration; see :func:`solve` for the
             accepted forms.
@@ -360,7 +363,6 @@ class Solver:
     def __init__(
         self,
         design: NDArray[np.uint32] | list[Effect],
-        weights: NDArray[np.float64] | None = None,
         preconditioner: (
             PreconditionerConfig | AdditiveSchwarz | Preconditioner | None
         ) = None,

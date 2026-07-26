@@ -2,7 +2,9 @@
 //! user's parametrization, fitted-value invariance under the internal
 //! reparametrization, and deterministic rank-drop reporting.
 
-use within::{Effect, LsmrOptions, PreconditionerConfig, SolveResult, Solver};
+use within::{
+    Design, DesignOptions, Effect, LsmrOptions, PreconditionerConfig, SolveResult, Solver,
+};
 
 const TOL: f64 = 1e-6;
 
@@ -58,14 +60,16 @@ fn solve_with(
     y: &[f64],
     config: &PreconditionerConfig,
 ) -> SolveResult {
-    Solver::new(
-        vec![Effect::new(levels, intercept, [z]).expect("effect")],
-        weights,
-        config,
-    )
-    .expect("solver")
-    .solve(y, &LsmrOptions::default())
-    .expect("solve")
+    let effects = vec![Effect::new(levels, intercept, [z]).expect("effect")];
+    let options = match weights {
+        Some(weights) => DesignOptions::default().weights(weights),
+        None => DesignOptions::default(),
+    };
+    let design = options.from_effects(effects).expect("design");
+    Solver::new(design, config)
+        .expect("solver")
+        .solve(y, &LsmrOptions::default())
+        .expect("solve")
 }
 
 fn solve_single(
@@ -246,12 +250,9 @@ fn batch_solve_shares_unidentified_and_back_transforms_each_rhs() {
     let y1 = synthetic_y(levels.len());
     let y2: Vec<f64> = y1.iter().map(|v| v * -1.5 + 0.3).collect();
 
-    let solver = Solver::new(
-        vec![Effect::new(&levels, true, [&z[..]]).expect("effect")],
-        None,
-        PreconditionerConfig::default(),
-    )
-    .expect("solver");
+    let design =
+        Design::new(vec![Effect::new(&levels, true, [&z[..]]).expect("effect")]).expect("design");
+    let solver = Solver::new(design, PreconditionerConfig::default()).expect("solver");
     let opts = LsmrOptions::default();
     let batch = solver.solve_batch(&[&y1, &y2], &opts).expect("batch");
 
@@ -289,14 +290,14 @@ fn three_slopes_solve_bounded_with_exact_rank_drops() {
         .collect();
     let y = synthetic_y(n);
 
-    let r = Solver::new(
-        vec![Effect::new(&levels, true, [&z1[..], &z2, &z3]).expect("effect")],
-        None,
-        PreconditionerConfig::default(),
-    )
-    .expect("solver")
-    .solve(&y, &LsmrOptions::default())
-    .expect("solve");
+    let design = Design::new(vec![
+        Effect::new(&levels, true, [&z1[..], &z2, &z3]).expect("effect")
+    ])
+    .expect("design");
+    let r = Solver::new(design, PreconditionerConfig::default())
+        .expect("solver")
+        .solve(&y, &LsmrOptions::default())
+        .expect("solve");
     assert!(r.converged);
     assert!(
         r.iterations <= 30,

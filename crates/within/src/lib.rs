@@ -5,19 +5,15 @@
 //!
 //! ```
 //! use ndarray::Array2;
-//! use within::{solve, DesignOptions, LsmrOptions};
+//! use within::{solve, DesignOptions, IntoDesign, LsmrOptions};
 //!
 //! let categories = Array2::<u32>::zeros((10_000, 2));
 //! let y = vec![0.0; 10_000];
-//! let r = solve(
-//!     categories.view(),
-//!     DesignOptions::default(),
-//!     &y,
-//!     None,
-//!     &LsmrOptions::default(),
-//!     None,
-//! )
-//! .unwrap();
+//! let design = categories
+//!     .view()
+//!     .into_design(DesignOptions::default())
+//!     .unwrap();
+//! let r = solve(design, &y, &LsmrOptions::default(), None).unwrap();
 //! assert!(r.converged);
 //! ```
 //!

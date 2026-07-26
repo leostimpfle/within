@@ -1,6 +1,9 @@
 //! Within-level reparametrization of a design's varying-slope terms.
 
-use crate::domain::Design;
+use crate::domain::TermMeta;
+use crate::observation::ObservationFrame;
+#[cfg(test)]
+use crate::Design;
 
 use super::CoefficientAddress;
 use crate::channel::Channel;
@@ -45,18 +48,24 @@ impl SlopeReparam {
     /// `None` for slope-free designs. Unidentified directions become
     /// exact-zero columns, so the minimal-norm solve leaves exact-`0`
     /// coefficients.
-    pub(crate) fn build(design: &mut Design<'_>, weights: Option<&[f64]>) -> Option<Self> {
+    pub(crate) fn build(
+        frame: &mut ObservationFrame<'_>,
+        term_meta: &[TermMeta],
+        weights: Option<&[f64]>,
+    ) -> Option<Self> {
         let mut terms = Vec::new();
         let mut unidentified = Vec::new();
-        for term in 0..design.terms.len() {
-            if !design.terms[term]
-                .columns
-                .iter()
-                .any(|c| c.covariate().is_some())
-            {
+        for (term, meta) in term_meta.iter().enumerate() {
+            if !meta.columns.iter().any(|c| c.covariate().is_some()) {
                 continue;
             }
-            terms.push(TermReparam::build(design, term, weights, &mut unidentified));
+            terms.push(TermReparam::build(
+                frame,
+                meta,
+                term,
+                weights,
+                &mut unidentified,
+            ));
         }
         (!terms.is_empty()).then_some(Self {
             terms,
@@ -76,12 +85,12 @@ impl TermReparam {
     /// Whiten one term's loading columns in place, appending its unidentified
     /// directions ascending in `(level, column)`.
     fn build(
-        design: &mut Design<'_>,
+        frame: &mut ObservationFrame<'_>,
+        meta: &TermMeta,
         term: usize,
         weights: Option<&[f64]>,
         unidentified: &mut Vec<CoefficientAddress>,
     ) -> Self {
-        let meta = &design.terms[term];
         let (offset, n_levels) = (meta.offset, meta.n_levels);
         let mut intercept_column = None;
         let mut slope_columns = Vec::new();
@@ -97,11 +106,8 @@ impl TermReparam {
         }
         let intercept = intercept_column.is_some();
         let v = z_cols.len();
-        let levels = design.frame.level_column(term);
-        let zs: Vec<&[f64]> = z_cols
-            .iter()
-            .map(|&c| design.frame.loading_column(c))
-            .collect();
+        let levels = frame.level_column(term);
+        let zs: Vec<&[f64]> = z_cols.iter().map(|&c| frame.loading_column(c)).collect();
 
         let mut moments = LevelMoments::new(n_levels, v);
         let mut z_row = vec![0.0; v];
@@ -156,7 +162,7 @@ impl TermReparam {
             }
         }
         for (out, &c) in u_cols.into_iter().zip(&z_cols) {
-            design.frame.set_loading_column(c, out);
+            frame.set_loading_column(c, out);
         }
 
         Self {

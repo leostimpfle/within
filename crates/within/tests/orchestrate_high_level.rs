@@ -1,7 +1,18 @@
-use within::{solve, solve_batch, LsmrOptions, PreconditionerConfig};
+use ndarray::ArrayView2;
+use within::{
+    solve, solve_batch, Design, DesignOptions, IntoDesign, LsmrOptions, PreconditionerConfig,
+};
 
 #[path = "common/orchestrate_helpers.rs"]
 mod common;
+
+fn design<'a>(categories: ArrayView2<'a, u32>, weights: Option<&'a [f64]>) -> Design<'a> {
+    let options = match weights {
+        Some(weights) => DesignOptions::default().weights(weights),
+        None => DesignOptions::default(),
+    };
+    categories.into_design(options).expect("design")
+}
 
 #[test]
 fn test_high_level_solve() {
@@ -10,15 +21,7 @@ fn test_high_level_solve() {
 
     let params = LsmrOptions::default();
     let precond = PreconditionerConfig::default();
-    let result = solve(
-        categories.view(),
-        Default::default(),
-        &y,
-        None,
-        &params,
-        &precond,
-    )
-    .expect("solve");
+    let result = solve(design(categories.view(), None), &y, &params, &precond).expect("solve");
     common::assert_converged_with_small_residual(&result, 1e-6);
     common::assert_solution_finite(&result);
     common::assert_normal_equations_satisfied(&common::test_categories(), None, &y, &result, 1e-6);
@@ -33,10 +36,8 @@ fn test_high_level_solve_weighted() {
     let params = LsmrOptions::default();
     let precond = PreconditionerConfig::default();
     let result = solve(
-        categories.view(),
-        Default::default(),
+        design(categories.view(), Some(&weights)),
         &y,
-        Some(&weights),
         &params,
         &precond,
     )
@@ -61,30 +62,12 @@ fn test_solve_batch_matches_individual() {
     let params = LsmrOptions::default();
     let precond = PreconditionerConfig::default();
 
-    let r1 = solve(
-        categories.view(),
-        Default::default(),
-        &y1,
-        None,
-        &params,
-        &precond,
-    )
-    .expect("solve y1");
-    let r2 = solve(
-        categories.view(),
-        Default::default(),
-        &y2,
-        None,
-        &params,
-        &precond,
-    )
-    .expect("solve y2");
+    let r1 = solve(design(categories.view(), None), &y1, &params, &precond).expect("solve y1");
+    let r2 = solve(design(categories.view(), None), &y2, &params, &precond).expect("solve y2");
 
     let batch = solve_batch(
-        categories.view(),
-        Default::default(),
+        design(categories.view(), None),
         &[&y1, &y2],
-        None,
         &params,
         &precond,
     )
@@ -108,10 +91,8 @@ fn test_solve_batch_single_rhs() {
     let precond = PreconditionerConfig::default();
 
     let batch = solve_batch(
-        categories.view(),
-        Default::default(),
+        design(categories.view(), None),
         &[&y[..]],
-        None,
         &params,
         &precond,
     )
@@ -133,10 +114,8 @@ fn test_solve_batch_weighted() {
     let precond = PreconditionerConfig::default();
 
     let batch = solve_batch(
-        categories.view(),
-        Default::default(),
+        design(categories.view(), Some(&weights)),
         &[&y1, &y2],
-        Some(&weights),
         &params,
         &precond,
     )
@@ -156,10 +135,8 @@ fn test_batch_result_accessors() {
     let precond = PreconditionerConfig::default();
 
     let batch = solve_batch(
-        categories.view(),
-        Default::default(),
+        design(categories.view(), None),
         &[&y1, &y2],
-        None,
         &params,
         &precond,
     )

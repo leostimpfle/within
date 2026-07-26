@@ -26,15 +26,14 @@ use crate::results::{
 /// Build a one-shot solver and hand back build warnings for the caller to re-emit.
 fn build_and_solve<'a>(
     design: impl IntoDesign<'a>,
-    options: DesignOptions,
+    options: DesignOptions<'a>,
     y: &[f64],
-    weights: Option<&[f64]>,
     lsmr: &LsmrOptions,
     precond: impl Into<PreconditionerInput>,
 ) -> Result<(SolveResult, Vec<BuildWarning>), WithinError> {
     let t_start = Instant::now();
     let design = design.into_design(options)?;
-    let solver = Solver::new(design, weights.map(|w| w.to_vec()), precond)?;
+    let solver = Solver::new(design, precond)?;
     let time_setup = t_start.elapsed().as_secs_f64();
     let mut result = solver.solve(y, lsmr)?;
     result.time_setup += time_setup;
@@ -45,15 +44,14 @@ fn build_and_solve<'a>(
 /// Batch counterpart to [`build_and_solve`], mirroring [`within::solve_batch`].
 fn build_and_solve_batch<'a>(
     design: impl IntoDesign<'a>,
-    options: DesignOptions,
+    options: DesignOptions<'a>,
     ys: &[&[f64]],
-    weights: Option<&[f64]>,
     lsmr: &LsmrOptions,
     precond: impl Into<PreconditionerInput>,
 ) -> Result<(BatchSolveResult, Vec<BuildWarning>), WithinError> {
     let t_start = Instant::now();
     let design = design.into_design(options)?;
-    let solver = Solver::new(design, weights.map(|w| w.to_vec()), precond)?;
+    let solver = Solver::new(design, precond)?;
     let time_setup = t_start.elapsed().as_secs_f64();
     let mut result = solver.solve_batch(ys, lsmr)?;
     result.time_setup += time_setup;
@@ -65,7 +63,6 @@ fn build_and_solve_batch<'a>(
 #[pyo3(signature = (
     design,
     y,
-    weights=None,
     options=None,
     preconditioner=None,
     *,
@@ -75,7 +72,6 @@ pub fn solve<'py>(
     py: Python<'py>,
     design: &Bound<'py, PyAny>,
     y: &Bound<'py, PyAny>,
-    weights: Option<&Bound<'py, PyAny>>,
     options: Option<&Bound<'py, PyAny>>,
     preconditioner: Option<&Bound<'py, PyAny>>,
     design_options: Option<Py<PyDesignOptions>>,
@@ -84,40 +80,28 @@ pub fn solve<'py>(
     let precond = resolve_precond_input(py, preconditioner)?;
     let design_options = design_options
         .as_ref()
-        .map(|options| options.bind(py).get().to_native())
+        .map(|options| options.bind(py).get().clone())
         .unwrap_or_default();
     let y = readonly_f64_1d("y", y)?;
-    let weights = weights.map(|w| readonly_f64_1d("weights", w)).transpose()?;
 
     // Defer slice coercion into the released closures, so the F-contiguous path copies nothing.
     let y_arr = y.as_array();
-    let w_view = weights.as_ref().map(|w| w.as_array());
 
     match extract_design(py, design)? {
         DesignSource::Categories(categories) => {
             let cats = categories.as_array();
             run_solve_with_warnings(py, move || {
                 let y_cow = coerce_to_slice(&y_arr);
-                let w_cow = w_view.as_ref().map(coerce_to_slice);
-                build_and_solve(
-                    cats,
-                    design_options,
-                    &y_cow,
-                    w_cow.as_deref(),
-                    &params,
-                    precond,
-                )
+                build_and_solve(cats, design_options.to_native(), &y_cow, &params, precond)
             })
         }
         DesignSource::Effects(terms) => run_solve_with_warnings(py, move || {
             let effects: Vec<_> = terms.iter().map(PyEffect::as_effect).collect();
             let y_cow = coerce_to_slice(&y_arr);
-            let w_cow = w_view.as_ref().map(coerce_to_slice);
             build_and_solve(
                 effects,
-                design_options,
+                design_options.to_native(),
                 &y_cow,
-                w_cow.as_deref(),
                 &params,
                 precond,
             )
@@ -129,7 +113,6 @@ pub fn solve<'py>(
 #[pyo3(signature = (
     design,
     Y,
-    weights=None,
     options=None,
     preconditioner=None,
     *,
@@ -139,7 +122,6 @@ pub fn solve_batch<'py>(
     py: Python<'py>,
     design: &Bound<'py, PyAny>,
     #[allow(non_snake_case)] Y: &Bound<'py, PyAny>,
-    weights: Option<&Bound<'py, PyAny>>,
     options: Option<&Bound<'py, PyAny>>,
     preconditioner: Option<&Bound<'py, PyAny>>,
     design_options: Option<Py<PyDesignOptions>>,
@@ -148,13 +130,11 @@ pub fn solve_batch<'py>(
     let precond = resolve_precond_input(py, preconditioner)?;
     let design_options = design_options
         .as_ref()
-        .map(|options| options.bind(py).get().to_native())
+        .map(|options| options.bind(py).get().clone())
         .unwrap_or_default();
     let y = readonly_f64_2d("Y", Y)?;
-    let weights = weights.map(|w| readonly_f64_1d("weights", w)).transpose()?;
 
     let y_arr = y.as_array();
-    let w_view = weights.as_ref().map(|w| w.as_array());
 
     match extract_design(py, design)? {
         DesignSource::Categories(categories) => {
@@ -163,12 +143,10 @@ pub fn solve_batch<'py>(
             run_batch_with_warnings(py, move || {
                 let columns = extract_columns(&y_arr);
                 let col_refs = column_refs(&columns);
-                let w_cow = w_view.as_ref().map(coerce_to_slice);
                 build_and_solve_batch(
                     cats,
-                    design_options,
+                    design_options.to_native(),
                     &col_refs,
-                    w_cow.as_deref(),
                     &params,
                     precond,
                 )
@@ -182,12 +160,10 @@ pub fn solve_batch<'py>(
                 let effects: Vec<_> = terms.iter().map(PyEffect::as_effect).collect();
                 let columns = extract_columns(&y_arr);
                 let col_refs = column_refs(&columns);
-                let w_cow = w_view.as_ref().map(coerce_to_slice);
                 build_and_solve_batch(
                     effects,
-                    design_options,
+                    design_options.to_native(),
                     &col_refs,
-                    w_cow.as_deref(),
                     &params,
                     precond,
                 )
@@ -291,7 +267,6 @@ impl PySolver {
     #[new]
     #[pyo3(signature = (
         design,
-        weights=None,
         preconditioner=None,
         *,
         design_options=None
@@ -299,16 +274,13 @@ impl PySolver {
     fn new<'py>(
         py: Python<'py>,
         design: &Bound<'py, PyAny>,
-        weights: Option<&Bound<'py, PyAny>>,
         preconditioner: Option<&Bound<'py, PyAny>>,
         design_options: Option<Py<PyDesignOptions>>,
     ) -> PyResult<Self> {
-        let weights = weights.map(|w| readonly_f64_1d("weights", w)).transpose()?;
-        let weights_vec: Option<Vec<f64>> = weights.as_ref().map(|w| w.as_array().to_vec());
         let precond = resolve_precond_input(py, preconditioner)?;
         let design_options = design_options
             .as_ref()
-            .map(|options| options.bind(py).get().to_native())
+            .map(|options| options.bind(py).get().clone())
             .unwrap_or_default();
 
         // `BuildError` carries no Python types, so it maps to an exception once the GIL is back.
@@ -316,8 +288,8 @@ impl PySolver {
             DesignSource::Categories(categories) => {
                 let cats = categories.as_array();
                 py.detach(move || -> Result<Solver<'static>, BuildError> {
-                    let design = cats.into_design(design_options)?.into_owned();
-                    Solver::new(design, weights_vec, precond)
+                    let design = cats.into_design(design_options.to_native())?.into_owned();
+                    Solver::new(design, precond)
                 })
             }
             DesignSource::Effects(terms) => {
@@ -325,8 +297,11 @@ impl PySolver {
                     let effects: Vec<_> = terms.iter().map(PyEffect::as_effect).collect();
                     // The design borrows the terms' buffers; the solver outlives
                     // them, so lower to owned columns first.
-                    let design = design_options.from_effects(effects)?.into_owned();
-                    Solver::new(design, weights_vec, precond)
+                    let design = design_options
+                        .to_native()
+                        .from_effects(effects)?
+                        .into_owned();
+                    Solver::new(design, precond)
                 })
             }
         }

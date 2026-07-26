@@ -1,6 +1,8 @@
-use ndarray::Array2;
+use ndarray::{Array2, ArrayView2};
 use proptest::prelude::*;
-use within::{solve, solve_batch, Channel, CoefficientAddress, LsmrOptions};
+use within::{
+    solve, solve_batch, Channel, CoefficientAddress, Design, DesignOptions, IntoDesign, LsmrOptions,
+};
 
 #[path = "common/property_strategies.rs"]
 mod strategies;
@@ -20,6 +22,14 @@ fn tight_params() -> LsmrOptions {
         maxiter: 3000,
         local_size: Some(10),
     }
+}
+
+fn design<'a>(categories: ArrayView2<'a, u32>, weights: Option<&'a [f64]>) -> Design<'a> {
+    let options = match weights {
+        Some(weights) => DesignOptions::default().weights(weights),
+        None => DesignOptions::default(),
+    };
+    categories.into_design(options).expect("design")
 }
 
 /// L2 agreement with a mixed absolute+relative tolerance: returns the actual
@@ -53,15 +63,13 @@ proptest! {
         let params = tight_params();
         let precond = additive_precond();
 
-        let base = solve(cats.view(), Default::default(), &y, None, &params, &precond).unwrap();
+        let base = solve(design(cats.view(), None), &y, &params, &precond).unwrap();
         prop_assert!(base.converged);
 
         let y_scaled: Vec<f64> = y.iter().map(|v| c * v).collect();
         let scaled = solve(
-            cats.view(),
-            Default::default(),
+            design(cats.view(), None),
             &y_scaled,
-            None,
             &params,
             &precond,
         )
@@ -91,10 +99,8 @@ proptest! {
         let precond = additive_precond();
 
         let base = solve(
-            cats.view(),
-            Default::default(),
+            design(cats.view(), Some(w.as_slice())),
             &y,
-            Some(w.as_slice()),
             &params,
             &precond,
         )
@@ -103,10 +109,8 @@ proptest! {
 
         let w_scaled: Vec<f64> = w.iter().map(|v| k * v).collect();
         let scaled = solve(
-            cats.view(),
-            Default::default(),
+            design(cats.view(), Some(w_scaled.as_slice())),
             &y,
-            Some(w_scaled.as_slice()),
             &params,
             &precond,
         )
@@ -138,10 +142,8 @@ proptest! {
 
         let refs: Vec<&[f64]> = ys.iter().map(Vec::as_slice).collect();
         let batch = solve_batch(
-            cats.view(),
-            Default::default(),
+            design(cats.view(), None),
             &refs,
-            None,
             &params,
             &precond,
         )
@@ -149,8 +151,7 @@ proptest! {
         prop_assert!(batch.converged.iter().all(|&c| c));
 
         for (j, y) in ys.iter().enumerate() {
-            let single =
-                solve(cats.view(), Default::default(), y, None, &params, &precond).unwrap();
+            let single = solve(design(cats.view(), None), y, &params, &precond).unwrap();
             prop_assert!(single.converged);
             let (num, tol) = l2_close(batch.demeaned(j), &single.demeaned);
             prop_assert!(
@@ -169,8 +170,7 @@ proptest! {
     fn prop_unidentified_slots_are_zero((cats, y) in random_fe_problem_strategy()) {
         let params = tight_params();
         let precond = additive_precond();
-        let result =
-            solve(cats.view(), Default::default(), &y, None, &params, &precond).unwrap();
+        let result = solve(design(cats.view(), None), &y, &params, &precond).unwrap();
         prop_assert!(result.converged);
 
         for u in &result.unidentified {
@@ -201,7 +201,7 @@ fn saturated_single_factor_recovers_level_means() {
     let y = vec![1.0, 3.0, 2.0, 4.0, 6.0, 5.0];
     let params = tight_params();
     let precond = additive_precond();
-    let result = solve(cats.view(), Default::default(), &y, None, &params, &precond).unwrap();
+    let result = solve(design(cats.view(), None), &y, &params, &precond).unwrap();
     assert!(result.converged);
 
     for (level, &mean) in [2.0, 4.0, 5.0].iter().enumerate() {

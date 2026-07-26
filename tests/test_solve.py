@@ -89,17 +89,15 @@ def test_coefficient_layout_locates_unidentified_and_round_trips():
         layout.address(layout.n_dofs())
 
 
-def test_free_solve_positional_order_is_weights_then_options():
-    # Pins (design, y, weights, options, ...): a weights array 3rd and
-    # LsmrOptions 4th must be accepted. A re-swap would parse the array as
-    # options (and LsmrOptions as weights) and raise.
+def test_free_solve_positional_order_uses_options_third():
+    # Pins (design, y, options, ...): LsmrOptions is the third positional
+    # argument now that weights belong to DesignOptions.
     rng = np.random.default_rng(0)
     cats = as_solver_categories(
         [rng.integers(0, 8, size=300), rng.integers(0, 6, size=300)]
     )
     y = rng.standard_normal(300)
-    w = rng.uniform(0.5, 2.0, size=300)
-    result = solve(cats, y, w, LsmrOptions(maxiter=2000))
+    result = solve(cats, y, LsmrOptions(maxiter=2000))
     assert result.converged
 
 
@@ -199,7 +197,11 @@ class TestSolveWeighted:
     def test_weighted(self, problem):
         cats, y = problem
         weights = np.random.exponential(1.0, size=len(y))
-        result = solve(as_solver_categories(cats), y, weights=weights)
+        result = solve(
+            as_solver_categories(cats),
+            y,
+            design_options=DesignOptions(weights=weights),
+        )
         assert result.converged
 
 
@@ -567,7 +569,9 @@ class TestSolveBatchFreeFunction:
         Y = np.column_stack([y, np.random.randn(len(y))])
         from within import solve_batch
 
-        result = solve_batch(categories, Y, weights=weights)
+        result = solve_batch(
+            categories, Y, design_options=DesignOptions(weights=weights)
+        )
         assert all(result.converged)
 
     def test_solve_batch_single_column(self, problem):

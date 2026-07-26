@@ -4,6 +4,8 @@
 //! Python→native config conversions (`to_native`, `resolve_precond_input`,
 //! `resolve_lsmr_config`). The low-level classes are exposed for benchmark tuning.
 
+use std::sync::Arc;
+
 use numpy::PyReadonlyArray1;
 use pyo3::prelude::*;
 
@@ -13,28 +15,46 @@ use within::config::{
 };
 use within::{DesignOptions, Preconditioner, PreconditionerInput};
 
-use crate::convert::IntoPyErr;
+use crate::convert::{readonly_f64_1d, IntoPyErr};
 
 /// Processing applied while constructing a fixed-effects design.
-#[pyclass(frozen, module = "within._within")]
+#[pyclass(frozen, module = "within._within", skip_from_py_object)]
 #[pyo3(name = "DesignOptions")]
+#[derive(Clone, Default)]
 pub struct PyDesignOptions {
     #[pyo3(get)]
     pub drop_singletons: bool,
+    weights: Option<Arc<[f64]>>,
 }
 
 #[pymethods]
 impl PyDesignOptions {
     #[new]
-    #[pyo3(signature = (drop_singletons=false))]
-    fn new(drop_singletons: bool) -> Self {
-        Self { drop_singletons }
+    #[pyo3(signature = (drop_singletons=false, weights=None))]
+    fn new(drop_singletons: bool, weights: Option<&Bound<'_, PyAny>>) -> PyResult<Self> {
+        let weights = weights
+            .map(|weights| readonly_f64_1d("weights", weights))
+            .transpose()?;
+        Ok(Self {
+            drop_singletons,
+            weights: weights.map(|weights| Arc::from(weights.as_array().to_vec())),
+        })
+    }
+
+    /// Caller-order weights as an immutable configuration snapshot.
+    #[getter]
+    fn weights(&self) -> Option<Vec<f64>> {
+        self.weights.as_deref().map(<[f64]>::to_vec)
     }
 }
 
 impl PyDesignOptions {
-    pub(crate) fn to_native(&self) -> DesignOptions {
-        DesignOptions::default().drop_singletons(self.drop_singletons)
+    pub(crate) fn to_native(&self) -> DesignOptions<'_> {
+        let options = DesignOptions::default().drop_singletons(self.drop_singletons);
+        match &self.weights {
+            Some(weights) => options.weights(weights.as_ref()),
+            None => options,
+        }
     }
 }
 

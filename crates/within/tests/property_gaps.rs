@@ -1,6 +1,6 @@
 use ndarray::Array2;
 use proptest::prelude::*;
-use within::{solve, LsmrOptions, Solver};
+use within::{solve, DesignOptions, IntoDesign, LsmrOptions, Solver};
 
 #[path = "common/property_strategies.rs"]
 mod strategies;
@@ -66,14 +66,8 @@ proptest! {
         };
         let precond = additive_precond();
         // LSMR converges on the least-squares system min ||y - Dx||^2 for any y.
-        let result = solve(
-            cats.view(),
-            Default::default(),
-            &y,
-            None,
-            &params,
-            &precond,
-        )
+        let design = cats.view().into_design(DesignOptions::default()).unwrap();
+        let result = solve(design, &y, &params, &precond)
         .unwrap();
         prop_assert!(
             result.converged,
@@ -97,18 +91,13 @@ proptest! {
         let precond = additive_precond();
 
         // Path A: convenience `solve()` (ingests the view internally)
-        let result_a = solve(
-            cats.view(),
-            Default::default(),
-            &y,
-            None,
-            &params,
-            &precond,
-        )
+        let design_a = cats.view().into_design(DesignOptions::default()).unwrap();
+        let result_a = solve(design_a, &y, &params, &precond)
         .unwrap();
 
         // Path B: Solver::new() — identical to solve() but without timing wrapper
-        let solver_b = Solver::new(cats.view(), None, &precond).unwrap();
+        let design_b = cats.view().into_design(DesignOptions::default()).unwrap();
+        let solver_b = Solver::new(design_b, &precond).unwrap();
         let result_b = solver_b.solve(&y, &params).unwrap();
 
         prop_assert_eq!(
@@ -134,14 +123,8 @@ proptest! {
             ..LsmrOptions::default()
         };
         let precond = additive_precond();
-        let result = solve(
-            cats.view(),
-            Default::default(),
-            &y,
-            None,
-            &params,
-            &precond,
-        )
+        let design = cats.view().into_design(DesignOptions::default()).unwrap();
+        let result = solve(design, &y, &params, &precond)
         .unwrap();
 
         if !result.converged {
@@ -187,14 +170,8 @@ proptest! {
             maxiter: n_levels + 10,
             ..LsmrOptions::default()
         };
-        let result = solve(
-            cats.view(),
-            Default::default(),
-            &y,
-            None,
-            &params,
-            None,
-        )
+        let design = cats.view().into_design(DesignOptions::default()).unwrap();
+        let result = solve(design, &y, &params, None)
         .unwrap();
 
         prop_assert!(

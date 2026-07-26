@@ -41,7 +41,7 @@ result = solve(fe, y)
 result = solve(fe, y, options=LsmrOptions(tol=1e-10, maxiter=2000))
 
 # Weighted solve
-result = solve(fe, y, weights=np.ones(n))
+result = solve(fe, y, design_options=DesignOptions(weights=np.ones(n)))
 
 # Opt into diagonal/Jacobi preconditioning
 result = solve(fe, y, preconditioner=PreconditionerConfig.Diagonal)
@@ -92,8 +92,8 @@ print(result.x[i])
 
 | Function | Description |
 |---|---|
-| `solve(design, y, weights?, options?, preconditioner?)` | Solve a single right-hand side. Returns `SolveResult`. |
-| `solve_batch(design, Y, weights?, options?, preconditioner?)` | Solve multiple RHS vectors in parallel. `Y` has shape `(n_obs, k)`. Returns `BatchSolveResult`. |
+| `solve(design, y, options?, preconditioner?, *, design_options?)` | Solve a single right-hand side. Returns `SolveResult`. |
+| `solve_batch(design, Y, options?, preconditioner?, *, design_options?)` | Solve multiple RHS vectors in parallel. `Y` has shape `(n_obs, k)`. Returns `BatchSolveResult`. |
 
 `design` is either a 2-D `uint32` array of shape `(n_obs, n_factors)` or a list of `Effect` terms (see [Varying slopes](#varying-slopes)). A `UserWarning` is emitted when a C-contiguous categories array is passed — use `np.asfortranarray(design)` for best performance.
 
@@ -114,7 +114,7 @@ solver2 = Solver(fe, preconditioner=precond)   # skip re-factorization
 
 | Property / Method | Description |
 |---|---|
-| `Solver(design, weights?, preconditioner?)` | Build solver. Factorizes the preconditioner at construction. |
+| `Solver(design, preconditioner?, *, design_options?)` | Build solver. Factorizes the preconditioner at construction. |
 | `.solve(y, options?)` | Solve a single RHS with the given LSMR tuning. Returns `SolveResult`. |
 | `.solve_batch(Y, options?)` | Solve multiple RHS columns in parallel. Returns `BatchSolveResult`. |
 | `.preconditioner` | Return the built `Preconditioner` (picklable), or `None`. Reuse via `Solver(fe, preconditioner=p)`. |
@@ -161,14 +161,15 @@ Coefficients for unidentified directions are pinned to the **minimal-norm** valu
 
 ```rust
 use ndarray::Array2;
-use within::{solve, LsmrOptions, PreconditionerConfig};
+use within::{solve, DesignOptions, IntoDesign, LsmrOptions, PreconditionerConfig};
 use within::config::{LocalSolverConfig, ReductionStrategy};
 
 let categories = /* Array2<u32> of shape (n_obs, n_factors) */;
 let y: &[f64] = /* response vector */;
 
 // Default: LSMR + additive Schwarz (None → library default)
-let r = solve(categories.view(), &y, None, &LsmrOptions::default(), None)?;
+let design = categories.view().into_design(DesignOptions::default())?;
+let r = solve(design, &y, &LsmrOptions::default(), None)?;
 assert!(r.converged);
 
 // Tighter tolerance with an explicit additive preconditioner
@@ -177,19 +178,22 @@ let precond = PreconditionerConfig::Additive {
     local_solver: LocalSolverConfig::default(),
     reduction: ReductionStrategy::default(),
 };
-let r = solve(categories.view(), &y, None, &lsmr, &precond)?;
+let design = categories.view().into_design(DesignOptions::default())?;
+let r = solve(design, &y, &lsmr, &precond)?;
 
 // Opt into diagonal/Jacobi preconditioning
 let diagonal = PreconditionerConfig::Diagonal;
-let r = solve(categories.view(), &y, None, &lsmr, &diagonal)?;
+let design = categories.view().into_design(DesignOptions::default())?;
+let r = solve(design, &y, &lsmr, &diagonal)?;
 ```
 
 Persistent solver — build once, solve many:
 
 ```rust
-use within::Solver;
+use within::{DesignOptions, IntoDesign, Solver};
 
-let solver = Solver::new(categories.view(), None, None)?;
+let design = categories.view().into_design(DesignOptions::default())?;
+let solver = Solver::new(design, None)?;
 let r1 = solver.solve(&y, &LsmrOptions::default())?;
 let r2 = solver.solve(&another_y, &LsmrOptions::default())?;  // reuses preconditioner
 ```

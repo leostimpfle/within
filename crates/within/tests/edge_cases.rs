@@ -1,13 +1,21 @@
-use ndarray::array;
+use ndarray::{array, ArrayView2};
 use rand::rngs::SmallRng;
 use rand::{RngExt, SeedableRng};
-use within::{solve, LsmrOptions, PreconditionerConfig, Solver};
+use within::{solve, Design, DesignOptions, IntoDesign, LsmrOptions, PreconditionerConfig, Solver};
 
 #[path = "common/orchestrate_helpers.rs"]
 mod common;
 
 fn additive_precond() -> PreconditionerConfig {
     PreconditionerConfig::default()
+}
+
+fn design<'a>(categories: ArrayView2<'a, u32>, weights: Option<&'a [f64]>) -> Design<'a> {
+    let options = match weights {
+        Some(weights) => DesignOptions::default().weights(weights),
+        None => DesignOptions::default(),
+    };
+    categories.into_design(options).expect("design")
 }
 
 // ---------------------------------------------------------------------------
@@ -23,8 +31,7 @@ fn test_single_observation() {
     let y = vec![5.0f64];
     let params = LsmrOptions::default();
 
-    let result =
-        solve(cats.view(), Default::default(), &y, None, &params, None).expect("single-obs solve");
+    let result = solve(design(cats.view(), None), &y, &params, None).expect("single-obs solve");
     assert!(
         result.x.iter().all(|v| v.is_finite()),
         "non-finite x for single observation"
@@ -50,8 +57,8 @@ fn test_trivial_factor_all_same_level() {
     let params = LsmrOptions::default();
     let precond = additive_precond();
 
-    let result = solve(cats.view(), Default::default(), &y, None, &params, &precond)
-        .expect("trivial-factor solve");
+    let result =
+        solve(design(cats.view(), None), &y, &params, &precond).expect("trivial-factor solve");
     assert!(
         result.converged,
         "solver did not converge with constant factor"
@@ -80,10 +87,8 @@ fn test_zero_weight_additive_preconditioner_returns_zero() {
     let precond = additive_precond();
 
     let result = solve(
-        cats.view(),
-        Default::default(),
+        design(cats.view(), Some(&weights)),
         &y,
-        Some(&weights),
         &LsmrOptions::default(),
         &precond,
     )
@@ -109,10 +114,8 @@ fn test_zero_weight_diagonal_preconditioner_returns_zero() {
     let weights = vec![0.0f64; 5];
 
     let result = solve(
-        cats.view(),
-        Default::default(),
+        design(cats.view(), Some(&weights)),
         &y,
-        Some(&weights),
         &LsmrOptions::default(),
         &PreconditionerConfig::Diagonal,
     )
@@ -137,10 +140,8 @@ fn test_zero_weight_no_preconditioner_returns_zero() {
     let weights = vec![0.0f64; 5];
 
     let result = solve(
-        cats.view(),
-        Default::default(),
+        design(cats.view(), Some(&weights)),
         &y,
-        Some(&weights),
         &LsmrOptions::default(),
         &PreconditionerConfig::Off,
     )
@@ -170,19 +171,15 @@ fn test_diagonal_matches_unpreconditioned_solution() {
     let params = LsmrOptions::default();
 
     let diagonal = solve(
-        cats.view(),
-        Default::default(),
+        design(cats.view(), None),
         &y,
-        None,
         &params,
         &PreconditionerConfig::Diagonal,
     )
     .expect("diagonal solve");
     let unpreconditioned = solve(
-        cats.view(),
-        Default::default(),
+        design(cats.view(), None),
         &y,
-        None,
         &params,
         &PreconditionerConfig::Off,
     )
@@ -206,19 +203,15 @@ fn test_diagonal_matches_unpreconditioned_on_gap_design() {
     let params = LsmrOptions::default();
 
     let diagonal = solve(
-        cats.view(),
-        Default::default(),
+        design(cats.view(), None),
         &y,
-        None,
         &params,
         &PreconditionerConfig::Diagonal,
     )
     .expect("diagonal solve must succeed on a gap design (pseudo-inverse of zero diagonal)");
     let unpreconditioned = solve(
-        cats.view(),
-        Default::default(),
+        design(cats.view(), None),
         &y,
-        None,
         &params,
         &PreconditionerConfig::Off,
     )
@@ -255,7 +248,7 @@ fn test_maxiter_1_partial_result() {
         maxiter: 1,
         ..LsmrOptions::default()
     };
-    let solver = Solver::new(design, None, None).expect("solver build");
+    let solver = Solver::new(design, None).expect("solver build");
     let result = solver.solve(&y, &params).expect("solve with maxiter=1");
 
     // Convergence is not expected (tolerance is unreachable in 1 iteration),
@@ -300,7 +293,7 @@ fn test_large_design_convergence() {
         ..LsmrOptions::default()
     };
     let precond = additive_precond();
-    let solver = Solver::new(design, None, &precond).expect("solver build");
+    let solver = Solver::new(design, &precond).expect("solver build");
     let result = solver.solve(&y, &params).expect("large design solve");
 
     assert!(
@@ -323,7 +316,7 @@ fn test_zero_rhs_zero_solution() {
     let y = vec![0.0f64; design.n_obs()];
 
     let params = LsmrOptions::default();
-    let solver = Solver::new(design, None, None).expect("solver build");
+    let solver = Solver::new(design, None).expect("solver build");
     let result = solver.solve(&y, &params).expect("zero RHS solve");
 
     assert!(result.converged, "zero RHS should trivially converge");
@@ -349,13 +342,10 @@ fn test_uniform_weights_matches_unweighted() {
     let params = LsmrOptions::default();
     let precond = additive_precond();
 
-    let r_unit = solve(cats.view(), Default::default(), &y, None, &params, &precond)
-        .expect("unweighted solve");
+    let r_unit = solve(design(cats.view(), None), &y, &params, &precond).expect("unweighted solve");
     let r_uniform = solve(
-        cats.view(),
-        Default::default(),
+        design(cats.view(), Some(&uniform_weights)),
         &y,
-        Some(&uniform_weights),
         &params,
         &precond,
     )
@@ -386,7 +376,7 @@ fn test_repeated_solve_is_deterministic() {
 
     let params = LsmrOptions::default();
     let precond = additive_precond();
-    let solver = Solver::new(design, None, &precond).expect("solver build");
+    let solver = Solver::new(design, &precond).expect("solver build");
 
     let r1 = solver.solve(&y, &params).expect("first solve");
     let r2 = solver.solve(&y, &params).expect("second solve");

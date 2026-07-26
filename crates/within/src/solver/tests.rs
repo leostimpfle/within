@@ -35,7 +35,7 @@ fn positive_slope_only_pair_grounds_beyond_dense_threshold() {
         Effect::new(&g, true, []).expect("plain effect"),
     ];
     let mut design = Design::new(effects).expect("design");
-    let _reparam = SlopeReparam::build(&mut design, None);
+    let _reparam = SlopeReparam::build(&mut design.frame, &design.terms, None);
     let (domains, warnings) =
         build_local_domains(&design, None, &ScalingConfig::default()).expect("domains");
     assert!(
@@ -99,7 +99,7 @@ fn solver_filters_caller_rhs_and_restores_removed_rows_as_nan() {
         .from_frame(frame)
         .unwrap();
 
-    let solver = Solver::new(design, None, PreconditionerConfig::default()).unwrap();
+    let solver = Solver::new(design, PreconditionerConfig::default()).unwrap();
     let y = [1.0, f64::NAN, 3.0, 4.0, f64::NAN];
     let result = solver.solve(&y, None).unwrap();
 

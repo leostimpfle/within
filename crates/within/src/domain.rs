@@ -76,19 +76,40 @@ impl<T> Loading<T> {
     }
 }
 
+pub(crate) fn map_to_internal_order<'v, T: Clone>(
+    rows: Option<&[u32]>,
+    n_obs_input: usize,
+    values: &'v [T],
+) -> Cow<'v, [T]> {
+    assert_eq!(
+        values.len(),
+        n_obs_input,
+        "observation vector length must match the design input"
+    );
+    match rows {
+        None => Cow::Borrowed(values),
+        Some(rows) => Cow::Owned(
+            rows.iter()
+                .map(|&caller| values[caller as usize].clone())
+                .collect(),
+        ),
+    }
+}
+
 /// Configuration applied while constructing a [`Design`].
 ///
 /// Options operate on the observation data before the design's internal row
 /// order is finalized. Use [`DesignOptions::from_effects`] or
 /// [`DesignOptions::from_frame`] to construct a configured design; the
 /// convenience constructors on [`Design`] use [`DesignOptions::default`].
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct DesignOptions {
+#[derive(Clone, Debug, PartialEq)]
+pub struct DesignOptions<'a> {
     drop_singletons: bool,
     locality_sort: bool,
+    weights: Option<Cow<'a, [f64]>>,
 }
 
-impl DesignOptions {
+impl<'a> DesignOptions<'a> {
     /// Remove observations belonging to a singleton level in any fixed-effect
     /// term.
     ///
@@ -101,8 +122,18 @@ impl DesignOptions {
         self
     }
 
+    /// Record observation weights in caller row order.
+    ///
+    /// Borrowed slices remain borrowed by the resulting [`Design`]; owned
+    /// vectors are retained without another copy.
+    #[must_use]
+    pub fn weights(mut self, weights: impl Into<Cow<'a, [f64]>>) -> Self {
+        self.weights = Some(weights.into());
+        self
+    }
+
     /// Lower effect terms into a configured design.
-    pub fn from_effects<'a>(
+    pub fn from_effects(
         self,
         effects: impl IntoIterator<Item = Effect<'a>>,
     ) -> Result<Design<'a>, BuildError> {
@@ -123,22 +154,28 @@ impl DesignOptions {
     }
 
     /// Construct a configured design from a frame of plain factors.
-    pub fn from_frame<'a>(self, frame: ObservationFrame<'a>) -> Result<Design<'a>, BuildError> {
+    pub fn from_frame(self, frame: ObservationFrame<'a>) -> Result<Design<'a>, BuildError> {
         let structure = vec![NonEmpty::of(Loading::Constant); frame.n_factors()];
         Design::build(frame, structure, self)
     }
 
-    fn with_locality_sort(mut self, enabled: bool) -> Self {
+    #[doc(hidden)]
+    pub fn with_locality_sort(mut self, enabled: bool) -> Self {
         self.locality_sort = enabled;
         self
     }
+
+    pub(crate) fn weight_values(&self) -> Option<&[f64]> {
+        self.weights.as_deref()
+    }
 }
 
-impl Default for DesignOptions {
+impl Default for DesignOptions<'_> {
     fn default() -> Self {
         Self {
             drop_singletons: false,
             locality_sort: true,
+            weights: None,
         }
     }
 }
@@ -288,6 +325,8 @@ pub struct Design<'a> {
     /// This single map composes semantic row selection with locality sorting.
     /// `None` is the identity map and preserves zero-copy observation input.
     pub(crate) rows: Option<Vec<u32>>,
+    /// Construction configuration in caller order.
+    pub(crate) options: DesignOptions<'a>,
 }
 
 impl<'a> Design<'a> {
@@ -313,7 +352,7 @@ impl<'a> Design<'a> {
     fn build(
         frame: ObservationFrame<'a>,
         column_structure: Vec<NonEmpty<Loading<u32>>>,
-        options: DesignOptions,
+        options: DesignOptions<'a>,
     ) -> Result<Self, BuildError> {
         if frame.n_obs() == 0 {
             return Err(BuildError::EmptyObservations);
@@ -389,14 +428,17 @@ impl<'a> Design<'a> {
             meta.sorted = frame.level_column(term).is_sorted();
         }
 
-        Ok(Design {
+        let design = Design {
             frame,
             terms,
             n_obs_input,
             n_obs: n_obs_retained,
             n_dofs: offset,
             rows,
-        })
+            options,
+        };
+        design.validate_weights(design.weights())?;
+        Ok(design)
     }
 
     /// Convert the frame's columns to owned, dropping ties to caller buffers.
@@ -408,6 +450,14 @@ impl<'a> Design<'a> {
             n_obs: self.n_obs,
             n_dofs: self.n_dofs,
             rows: self.rows,
+            options: DesignOptions {
+                drop_singletons: self.options.drop_singletons,
+                locality_sort: self.options.locality_sort,
+                weights: self
+                    .options
+                    .weights
+                    .map(|weights| Cow::Owned(weights.into_owned())),
+            },
         }
     }
 
@@ -448,19 +498,19 @@ impl<'a> Design<'a> {
     /// Caller order → retained internal order: `out[k] = v[rows[k]]`.
     ///
     /// Borrows when every caller row is retained in its original order.
-    pub(crate) fn permute_obs_in<'v>(&self, v: &'v [f64]) -> Cow<'v, [f64]> {
-        debug_assert_eq!(v.len(), self.n_obs_input);
-        match &self.rows {
-            None => Cow::Borrowed(v),
-            Some(rows) => Cow::Owned(rows.iter().map(|&i| v[i as usize]).collect()),
-        }
+    pub fn to_internal_order<'v, T: Clone>(&self, v: &'v [T]) -> Cow<'v, [T]> {
+        map_to_internal_order(self.rows.as_deref(), self.n_obs_input, v)
     }
 
     /// Retained internal order → original caller shape.
     ///
     /// Dropped caller rows are represented by `NaN`.
-    pub(crate) fn permute_obs_out(&self, v: Vec<f64>) -> Vec<f64> {
-        debug_assert_eq!(v.len(), self.n_obs);
+    pub fn from_internal_order(&self, v: Vec<f64>) -> Vec<f64> {
+        assert_eq!(
+            v.len(),
+            self.n_obs,
+            "internal vector length must match retained observations"
+        );
         match &self.rows {
             None => v,
             Some(rows) => {
@@ -499,6 +549,18 @@ impl<'a> Design<'a> {
     #[inline]
     pub fn input_n_obs(&self) -> usize {
         self.n_obs_input
+    }
+
+    /// Construction options retained by this design.
+    #[inline]
+    pub fn options(&self) -> &DesignOptions<'a> {
+        &self.options
+    }
+
+    /// Observation weights in caller row order.
+    #[inline]
+    pub fn weights(&self) -> Option<&[f64]> {
+        self.options.weights.as_deref()
     }
 
     /// Original caller row represented by an internal observation position.
@@ -714,7 +776,7 @@ mod tests {
         assert_eq!(design.frame.level_column(1), &[0, 0, 1, 1]);
         assert_eq!(design.frame.loading_column(0), &[11.0, 12.0, 10.0, 13.0]);
 
-        let restored = design.permute_obs_out(vec![1.0, 2.0, 3.0, 4.0]);
+        let restored = design.from_internal_order(vec![1.0, 2.0, 3.0, 4.0]);
         assert_eq!(&restored[..4], &[3.0, 1.0, 2.0, 4.0]);
         assert!(restored[4..].iter().all(|value| value.is_nan()));
     }
@@ -744,20 +806,62 @@ mod tests {
 
     #[test]
     fn validation_ignores_weights_on_removed_rows() {
+        let weights = [1.0, f64::NAN, 1.0, 1.0, f64::NAN];
         let design = DesignOptions::default()
             .drop_singletons(true)
+            .weights(&weights[..])
             .from_frame(frame(vec![vec![0, 1, 0, 0, 2]], vec![]))
             .unwrap();
 
-        assert!(design
-            .validate_weights(Some(&[1.0, f64::NAN, 1.0, 1.0, f64::NAN]))
-            .is_ok());
+        let stored = design.weights().expect("weights retained");
+        assert_eq!(stored.len(), weights.len());
+        assert_eq!(stored[0], 1.0);
+        assert!(stored[1].is_nan());
+        assert_eq!(&stored[2..4], &[1.0, 1.0]);
+        assert!(stored[4].is_nan());
         assert!(matches!(
-            design.validate_weights(Some(&[1.0, f64::NAN, -1.0, 1.0, f64::NAN])),
+            DesignOptions::default()
+                .drop_singletons(true)
+                .weights(&[1.0, f64::NAN, -1.0, 1.0, f64::NAN][..])
+                .from_frame(frame(vec![vec![0, 1, 0, 0, 2]], vec![])),
             Err(BuildError::InvalidWeight {
                 index: 2,
                 value: -1.0
             })
+        ));
+    }
+
+    #[test]
+    fn ordering_is_generic_and_borrows_only_for_identity() {
+        let identity = Design::from_frame(frame(vec![vec![0, 0, 1]], vec![])).unwrap();
+        let values = ["a", "b", "c"];
+        assert!(matches!(
+            identity.to_internal_order(&values),
+            Cow::Borrowed(_)
+        ));
+
+        let sorted = Design::from_frame(frame(vec![vec![2, 0, 1, 0]], vec![])).unwrap();
+        let values = ["a", "b", "c", "d"];
+        assert_eq!(
+            sorted.to_internal_order(&values).as_ref(),
+            &["b", "d", "c", "a"]
+        );
+    }
+
+    #[test]
+    fn into_owned_detaches_option_weights() {
+        let weights = vec![1.0, 2.0, 3.0];
+        let design = DesignOptions::default()
+            .weights(weights.as_slice())
+            .from_frame(frame(vec![vec![0, 0, 1]], vec![]))
+            .unwrap()
+            .into_owned();
+        drop(weights);
+
+        assert_eq!(design.weights(), Some(&[1.0, 2.0, 3.0][..]));
+        assert!(matches!(
+            design.options().weights.as_ref(),
+            Some(Cow::Owned(_))
         ));
     }
 

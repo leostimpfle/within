@@ -31,7 +31,7 @@ fe = np.asfortranarray(np.column_stack([
 y = np.random.randn(n)
 
 result = solve(fe, y)                          # Schwarz-preconditioned LSMR
-result = solve(fe, y, weights=np.ones(n))      # weighted solve
+result = solve(fe, y, design_options=DesignOptions(weights=np.ones(n)))
 result = solve(fe, y, preconditioner=PreconditionerConfig.Diagonal)
 result = solve(
     fe,
@@ -59,8 +59,8 @@ print(np.round(beta_hat, 4))  # [ 0.9982 -2.006   0.5005]
 
 | Function | Description |
 |---|---|
-| `solve(design, y, weights?, options?, preconditioner?, *, design_options?)` | Solve a single right-hand side. Returns `SolveResult`. |
-| `solve_batch(design, Y, weights?, options?, preconditioner?, *, design_options?)` | Solve multiple RHS vectors in parallel. `Y` has shape `(n_obs, k)`. Returns `BatchSolveResult`. |
+| `solve(design, y, options?, preconditioner?, *, design_options?)` | Solve a single right-hand side. Returns `SolveResult`. |
+| `solve_batch(design, Y, options?, preconditioner?, *, design_options?)` | Solve multiple RHS vectors in parallel. `Y` has shape `(n_obs, k)`. Returns `BatchSolveResult`. |
 
 `design` is a 2-D `uint32` array of category codes with shape `(n_obs, n_factors)`, or a list of `Effect` terms for varying slopes. A `UserWarning` is emitted when a C-contiguous array is passed — if the data is already sorted by the largest factor, `np.asfortranarray(design)` gives faster solves; unsorted input is copied internally either way.
 
@@ -81,7 +81,7 @@ solver2 = Solver(fe, preconditioner=precond)   # skip re-factorization
 
 | Property / Method | Description |
 |---|---|
-| `Solver(design, weights?, preconditioner?, *, design_options?)` | Build solver. Factorizes the preconditioner at construction. |
+| `Solver(design, preconditioner?, *, design_options?)` | Build solver. Factorizes the preconditioner at construction. |
 | `.solve(y, options?)` | Solve a single RHS with the given LSMR tuning. Returns `SolveResult`. |
 | `.solve_batch(Y, options?)` | Solve multiple RHS columns in parallel. Returns `BatchSolveResult`. |
 | `.preconditioner` | Return the built `Preconditioner` (picklable), or `None`. Reuse via `Solver(..., preconditioner=p)`. |

@@ -1,8 +1,8 @@
 //! Ingest boundary: `ArrayView2<u32>` categories arrays of any layout
 //! normalize to the same contiguous-column frame.
 
-use ndarray::{array, Array2, Axis, ShapeBuilder, Slice};
-use within::{solve, LsmrOptions, PreconditionerConfig};
+use ndarray::{array, Array2, ArrayView2, Axis, ShapeBuilder, Slice};
+use within::{solve, Design, DesignOptions, IntoDesign, LsmrOptions, PreconditionerConfig};
 
 #[path = "common/orchestrate_helpers.rs"]
 mod common;
@@ -13,6 +13,14 @@ fn default_params() -> LsmrOptions {
 
 fn additive_precond() -> PreconditionerConfig {
     PreconditionerConfig::default()
+}
+
+fn design<'a>(categories: ArrayView2<'a, u32>, weights: Option<&'a [f64]>) -> Design<'a> {
+    let options = match weights {
+        Some(weights) => DesignOptions::default().weights(weights),
+        None => DesignOptions::default(),
+    };
+    categories.into_design(options).expect("design")
 }
 
 /// Build a larger problem for more meaningful convergence tests.
@@ -42,10 +50,8 @@ fn f_order_view_matches_owned_columns() {
     };
 
     let result_view = solve(
-        cats_f.view(),
-        Default::default(),
+        design(cats_f.view(), None),
         &y,
-        None,
         &default_params(),
         additive_precond(),
     )
@@ -55,7 +61,7 @@ fn f_order_view_matches_owned_columns() {
         .map(|f| cats.column(f).iter().copied().collect())
         .collect();
     let design = common::make_design(factor_cols).expect("valid design");
-    let solver = within::Solver::new(design, None, additive_precond()).expect("solver");
+    let solver = within::Solver::new(design, additive_precond()).expect("solver");
     let result_owned = solver.solve(&y, &default_params()).expect("owned solve");
 
     assert!(result_view.converged);
@@ -76,19 +82,15 @@ fn c_order_view_matches_f_order_bitwise() {
     };
 
     let result_c = solve(
-        cats.view(),
-        Default::default(),
+        design(cats.view(), None),
         &y,
-        None,
         &default_params(),
         additive_precond(),
     )
     .expect("C-order solve");
     let result_f = solve(
-        cats_f.view(),
-        Default::default(),
+        design(cats_f.view(), None),
         &y,
-        None,
         &default_params(),
         additive_precond(),
     )
@@ -115,10 +117,8 @@ fn column_reversed_view_ingests_in_logical_order() {
 
     let y = vec![1.0, 2.0, 3.0, 4.0, 5.0];
     let result_rev = solve(
-        reversed,
-        Default::default(),
+        design(reversed, None),
         &y,
-        None,
         &default_params(),
         additive_precond(),
     )
@@ -127,7 +127,7 @@ fn column_reversed_view_ingests_in_logical_order() {
     // Oracle: the same columns handed over owned, in swapped order.
     let design =
         common::make_design(vec![vec![1, 0, 1, 0, 2], vec![0, 1, 0, 1, 2]]).expect("valid design");
-    let solver = within::Solver::new(design, None, additive_precond()).expect("solver");
+    let solver = within::Solver::new(design, additive_precond()).expect("solver");
     let result_owned = solver.solve(&y, &default_params()).expect("owned solve");
 
     assert_eq!(result_rev.x, result_owned.x, "must be bit-identical");
@@ -139,10 +139,8 @@ fn weighted_view_solve_converges() {
     let weights: Vec<f64> = (0..cats.nrows()).map(|i| 1.0 + (i as f64) * 0.01).collect();
 
     let result = solve(
-        cats.view(),
-        Default::default(),
+        design(cats.view(), Some(&weights)),
         &y,
-        Some(&weights),
         &default_params(),
         additive_precond(),
     )

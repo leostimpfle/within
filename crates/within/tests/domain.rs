@@ -3,7 +3,7 @@
 //! and disconnected bipartite structure.
 
 use within::observation::ObservationFrame;
-use within::Design;
+use within::{Design, DesignOptions, IntoDesign};
 
 // Three-factor design: shared DOFs across factor pairs force NonUniform
 // partition weights; verified via the public solve API.
@@ -40,8 +40,11 @@ fn test_three_factor_design_solve_converges() {
         ..LsmrOptions::default()
     };
     let precond = PreconditionerConfig::default();
-    let result = solve(cats.view(), Default::default(), &y, None, &params, &precond)
-        .expect("solve should not error");
+    let design = cats
+        .view()
+        .into_design(DesignOptions::default())
+        .expect("design");
+    let result = solve(design, &y, &params, &precond).expect("solve should not error");
 
     assert!(
         result.converged,
@@ -79,8 +82,11 @@ fn test_disconnected_design_larger_converges() {
         ..LsmrOptions::default()
     };
     let precond = PreconditionerConfig::default();
-    let result = solve(cats.view(), Default::default(), &y, None, &params, &precond)
-        .expect("solve should not error");
+    let design = cats
+        .view()
+        .into_design(DesignOptions::default())
+        .expect("design");
+    let result = solve(design, &y, &params, &precond).expect("solve should not error");
 
     assert!(
         result.converged,
@@ -112,8 +118,11 @@ fn test_disconnected_design_solve_converges() {
         ..LsmrOptions::default()
     };
     let precond = PreconditionerConfig::default();
-    let result = solve(cats.view(), Default::default(), &y, None, &params, &precond)
-        .expect("solve should not error");
+    let design = cats
+        .view()
+        .into_design(DesignOptions::default())
+        .expect("design");
+    let result = solve(design, &y, &params, &precond).expect("solve should not error");
 
     assert!(
         result.converged,
@@ -158,8 +167,11 @@ fn test_single_factor_design_solve_without_precond() {
         maxiter: 500,
         ..LsmrOptions::default()
     };
-    let result = solve(cats.view(), Default::default(), &y, None, &params, None)
-        .expect("solve should not error");
+    let design = cats
+        .view()
+        .into_design(DesignOptions::default())
+        .expect("design");
+    let result = solve(design, &y, &params, None).expect("solve should not error");
 
     assert!(
         result.converged,
@@ -194,22 +206,19 @@ fn test_intercept_only_effects_match_categories_bitwise() {
             .expect("frame"),
     )
     .expect("categories design");
-    let cat = Solver::new(categories, None, &precond)
+    let cat = Solver::new(categories, &precond)
         .expect("categories solver")
         .solve(&y, &params)
         .expect("categories solve");
 
-    let eff = Solver::new(
-        vec![
-            Effect::new(&col0, true, []).expect("effect 0"),
-            Effect::new(&col1, true, []).expect("effect 1"),
-        ],
-        None,
-        &precond,
-    )
-    .expect("effect solver")
-    .solve(&y, &params)
-    .expect("effect solve");
+    let effects = vec![
+        Effect::new(&col0, true, []).expect("effect 0"),
+        Effect::new(&col1, true, []).expect("effect 1"),
+    ];
+    let eff = Solver::new(Design::new(effects).expect("effect design"), &precond)
+        .expect("effect solver")
+        .solve(&y, &params)
+        .expect("effect solve");
 
     // Bit-identity is only meaningful if both solves actually converged:
     // `Solver::solve` returns `Ok` even at `maxiter`, so without this the
@@ -258,7 +267,11 @@ fn test_slope_chain_design_converges_fast() {
         Effect::new(&worker, true, [&z[..]]).expect("slope effect"),
         Effect::new(&firm, true, []).expect("plain effect"),
     ];
-    let solver = Solver::new(effects, None, PreconditionerConfig::default()).expect("solver build");
+    let solver = Solver::new(
+        Design::new(effects).expect("design"),
+        PreconditionerConfig::default(),
+    )
+    .expect("solver build");
     let params = LsmrOptions {
         tol: 1e-8,
         maxiter: 500,

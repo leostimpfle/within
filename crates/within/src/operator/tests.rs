@@ -506,7 +506,7 @@ mod weighted_adjoint_proptests {
                 .sum();
 
             let sqrt_weights: Vec<f64> = dm
-                .permute_obs_in(&weights)
+                .to_internal_order(&weights)
                 .iter()
                 .map(|w| w.sqrt())
                 .collect();

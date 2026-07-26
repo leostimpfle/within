@@ -13,7 +13,14 @@ import warnings
 import numpy as np
 import pytest
 
-from within import LsmrOptions, PreconditionerConfig, Solver, solve, solve_batch
+from within import (
+    DesignOptions,
+    LsmrOptions,
+    PreconditionerConfig,
+    Solver,
+    solve,
+    solve_batch,
+)
 
 from conftest import as_solver_categories
 
@@ -44,7 +51,7 @@ class TestNanInfPropagation:
         y = np.array([1.0, 2.0, 3.0])
         w = np.array([1.0, np.nan, 1.0])
         with pytest.raises(ValueError, match="finite"):
-            solve(cats, y, weights=w)
+            solve(cats, y, design_options=DesignOptions(weights=w))
 
     def test_inf_in_weights_rejected(self):
         """Inf in weights should be rejected at build validation."""
@@ -52,7 +59,7 @@ class TestNanInfPropagation:
         y = np.array([1.0, 2.0, 3.0])
         w = np.array([1.0, np.inf, 1.0])
         with pytest.raises(ValueError, match="finite"):
-            solve(cats, y, weights=w)
+            solve(cats, y, design_options=DesignOptions(weights=w))
 
 
 # ---------------------------------------------------------------------------
@@ -201,8 +208,12 @@ class TestNonContiguousInputs:
         w_strided = w_full[::2]
         assert not w_strided.flags["C_CONTIGUOUS"]
 
-        result_contiguous = solve(cats, y, weights=w_direct)
-        result_strided = solve(cats, y, weights=w_strided)
+        result_contiguous = solve(
+            cats, y, design_options=DesignOptions(weights=w_direct)
+        )
+        result_strided = solve(
+            cats, y, design_options=DesignOptions(weights=w_strided)
+        )
 
         assert result_contiguous.converged and result_strided.converged
         np.testing.assert_allclose(result_contiguous.x, result_strided.x, atol=1e-12)

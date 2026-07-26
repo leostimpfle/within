@@ -2,7 +2,9 @@
 //! factors through balanced/scaled signed subdomains, with frustrated
 //! components solving through their Gremban double cover (#62).
 
-use within::{Effect, LsmrOptions, Preconditioner, PreconditionerConfig, SchurMode, Solver};
+use within::{
+    Design, Effect, LsmrOptions, Preconditioner, PreconditionerConfig, SchurMode, Solver,
+};
 
 fn lcg(seed: &mut u64) -> u64 {
     *seed = seed
@@ -36,10 +38,13 @@ fn two_factor_slope_solves_with_bounded_iterations() {
         Effect::new(&f, true, [&z[..]]).expect("slope effect"),
         Effect::new(&g, true, []).expect("plain effect"),
     ];
-    let r = Solver::new(effects, None, PreconditionerConfig::default())
-        .expect("signed routing builds")
-        .solve(&y, &LsmrOptions::default())
-        .expect("solve");
+    let r = Solver::new(
+        Design::new(effects).expect("design"),
+        PreconditionerConfig::default(),
+    )
+    .expect("signed routing builds")
+    .solve(&y, &LsmrOptions::default())
+    .expect("solve");
 
     assert!(r.converged);
     assert!(r.iterations <= 50, "iterations = {}", r.iterations);
@@ -69,10 +74,13 @@ fn unit_trends_plus_time_effects_boundary() {
         Effect::new(&unit, true, [&t[..]]).expect("trend effect"),
         Effect::new(&time, true, []).expect("time effect"),
     ];
-    let r = Solver::new(effects, None, PreconditionerConfig::default())
-        .expect("PSD-boundary routing builds")
-        .solve(&y, &LsmrOptions::default())
-        .expect("solve");
+    let r = Solver::new(
+        Design::new(effects).expect("design"),
+        PreconditionerConfig::default(),
+    )
+    .expect("PSD-boundary routing builds")
+    .solve(&y, &LsmrOptions::default())
+    .expect("solve");
 
     assert!(r.converged);
     assert!(r.iterations <= 60, "iterations = {}", r.iterations);
@@ -90,10 +98,13 @@ fn frustrated_component_solves_via_cover() {
         Effect::new(&g, true, []).expect("plain effect"),
     ];
 
-    let r = Solver::new(effects, None, PreconditionerConfig::default())
-        .expect("frustrated component builds via its Gremban cover")
-        .solve(&y, &LsmrOptions::default())
-        .expect("solve");
+    let r = Solver::new(
+        Design::new(effects).expect("design"),
+        PreconditionerConfig::default(),
+    )
+    .expect("frustrated component builds via its Gremban cover")
+    .solve(&y, &LsmrOptions::default())
+    .expect("solve");
     assert!(r.converged);
     assert!(r.unidentified.is_empty());
 
@@ -147,10 +158,13 @@ fn frustrated_two_factor_slope_solves_with_bounded_iterations() {
         Effect::new(&f, true, [&z[..]]).expect("slope effect"),
         Effect::new(&g, true, []).expect("plain effect"),
     ];
-    let r = Solver::new(effects, None, PreconditionerConfig::default())
-        .expect("frustrated routing builds")
-        .solve(&y, &LsmrOptions::default())
-        .expect("solve");
+    let r = Solver::new(
+        Design::new(effects).expect("design"),
+        PreconditionerConfig::default(),
+    )
+    .expect("frustrated routing builds")
+    .solve(&y, &LsmrOptions::default())
+    .expect("solve");
 
     assert!(r.converged);
     assert!(r.iterations <= 80, "iterations = {}", r.iterations);
@@ -169,10 +183,13 @@ fn near_collinear_cross_term_direction_survives_routing() {
         Effect::new(&f, false, [&z1[..]]).unwrap(),
         Effect::new(&f, false, [&z2[..]]).unwrap(),
     ];
-    let r = Solver::new(effects, None, PreconditionerConfig::default())
-        .expect("near-collinear pair builds")
-        .solve(&y, &LsmrOptions::default())
-        .expect("solve");
+    let r = Solver::new(
+        Design::new(effects).expect("design"),
+        PreconditionerConfig::default(),
+    )
+    .expect("near-collinear pair builds")
+    .solve(&y, &LsmrOptions::default())
+    .expect("solve");
     assert!(r.converged);
     assert!(
         (r.x[0] - 1.0).abs() < 1e-6 && (r.x[1] + 1.0).abs() < 1e-6,
@@ -218,7 +235,7 @@ fn surplus_component_sampled_matches_exact_reduction() {
             },
             reduction: Default::default(),
         };
-        Solver::new(effects, None, config)
+        Solver::new(Design::new(effects).expect("design"), config)
             .expect("build")
             .solve(&y, &LsmrOptions::default())
             .expect("solve")
@@ -273,8 +290,11 @@ fn singleton_level_in_non_first_slope_term_solves_under_default() {
         ]
     };
 
-    let solver = Solver::new(effects(), None, PreconditionerConfig::default())
-        .expect("default preconditioner builds");
+    let solver = Solver::new(
+        Design::new(effects()).expect("design"),
+        PreconditionerConfig::default(),
+    )
+    .expect("default preconditioner builds");
 
     // The preconditioner must match the operator's column count, uncovered ones included.
     let precond = solver
@@ -297,7 +317,7 @@ fn singleton_level_in_non_first_slope_term_solves_under_default() {
 
     // The demeaned residual is gauge-invariant, so it agrees though raw coefficients need not.
     for cfg in [PreconditionerConfig::Off, PreconditionerConfig::Diagonal] {
-        let alt = Solver::new(effects(), None, cfg)
+        let alt = Solver::new(Design::new(effects()).expect("design"), cfg)
             .expect("alt preconditioner builds")
             .solve(&y, &LsmrOptions::default())
             .expect("alt solve");
@@ -313,7 +333,7 @@ fn singleton_level_in_non_first_slope_term_solves_under_default() {
     let bytes = postcard::to_stdvec(precond).expect("serialize");
     let restored: Preconditioner = postcard::from_bytes(&bytes).expect("deserialize");
     assert_eq!(restored.ncols(), solver.n_dofs());
-    let reused = Solver::new(effects(), None, restored)
+    let reused = Solver::new(Design::new(effects()).expect("design"), restored)
         .expect("reused preconditioner accepted")
         .solve(&y, &LsmrOptions::default())
         .expect("reused solve");

@@ -11,7 +11,7 @@ use schwarz_precond::{lsmr as lsmr_solve, mlsmr};
 
 use crate::channel::Channel;
 use crate::config::{LsmrOptions, PreconditionerConfig};
-use crate::domain::{Design, Effect};
+use crate::domain::{map_to_internal_order, Design, Effect};
 use crate::observation::ObservationFrame;
 use crate::operator::design::gather_apply;
 use crate::operator::schwarz::{build_preconditioner, Preconditioner};
@@ -23,16 +23,16 @@ mod reparam;
 mod tests;
 use reparam::SlopeReparam;
 
-/// Fallible conversion into a [`Design`] for [`Solver::new`]: a categories
-/// matrix (`ArrayView2<u32>`), a list of [`Effect`] terms, or a pass-through
+/// Fallible construction of a [`Design`] from a categories matrix
+/// (`ArrayView2<u32>`), a list of [`Effect`] terms, or a pass-through
 /// [`Design`].
 pub trait IntoDesign<'a> {
     /// Build the [`Design`], validating inputs along the way.
-    fn into_design(self, options: DesignOptions) -> Result<Design<'a>, BuildError>;
+    fn into_design(self, options: DesignOptions<'a>) -> Result<Design<'a>, BuildError>;
 }
 
 impl<'a> IntoDesign<'a> for ArrayView2<'a, u32> {
-    fn into_design(self, options: DesignOptions) -> Result<Design<'a>, BuildError> {
+    fn into_design(self, options: DesignOptions<'a>) -> Result<Design<'a>, BuildError> {
         // Borrow F-contiguous columns zero-copy; gather strided (C-order)
         // columns once here so every downstream read is a contiguous slice.
         let categorical = (0..self.ncols())
@@ -50,7 +50,7 @@ impl<'a> IntoDesign<'a> for ArrayView2<'a, u32> {
 }
 
 impl<'a> IntoDesign<'a> for Design<'a> {
-    fn into_design(self, options: DesignOptions) -> Result<Design<'a>, BuildError> {
+    fn into_design(self, options: DesignOptions<'a>) -> Result<Design<'a>, BuildError> {
         if options != DesignOptions::default() {
             return Err(BuildError::OptionsForPrebuiltDesign);
         }
@@ -59,7 +59,7 @@ impl<'a> IntoDesign<'a> for Design<'a> {
 }
 
 impl<'a> IntoDesign<'a> for Vec<Effect<'a>> {
-    fn into_design(self, options: DesignOptions) -> Result<Design<'a>, BuildError> {
+    fn into_design(self, options: DesignOptions<'a>) -> Result<Design<'a>, BuildError> {
         options.from_effects(self)
     }
 }
@@ -227,7 +227,7 @@ pub struct SolveResult {
     /// Rows removed during design processing are `NaN`.
     ///
     /// Invariant: any per-observation field added here must be translated
-    /// back from internal order via `Design::permute_obs_out` before being
+    /// back from internal order via `Design::from_internal_order` before being
     /// stored, or it leaks the locality-sorted row order to the caller.
     pub demeaned: Vec<f64>,
     /// Whether the iterative solver converged within `maxiter` iterations.
@@ -352,39 +352,28 @@ struct RhsSolution {
 impl<'a> Solver<'a> {
     /// Construct a solver.
     ///
-    /// `design` accepts raw categories (`ArrayView2<u32>`) or a pre-built
-    /// [`Design`]. `preconditioner` accepts:
+    /// `design` is a fully configured [`Design`]. `preconditioner` accepts:
     /// - `None` — build the library default Schwarz preconditioner
     /// - `&PreconditionerConfig` / `Some(&PreconditionerConfig)` — build from a tuned config
     /// - `PreconditionerConfig::Off` — solve unpreconditioned
     /// - `PreconditionerConfig::Diagonal` — use diagonal/Jacobi preconditioning
     /// - [`Preconditioner`] or `&Preconditioner` — reuse a previously built one
     ///
-    /// `weights` is `None` for unweighted, or an owned `Vec<f64>` that the
-    /// solver takes ownership of (it re-reads the weights on every solve). To
-    /// solve once from a borrowed slice, use the free [`solve`] function.
-    ///
     /// LSMR tuning ([`LsmrOptions`]) is supplied per call to [`Solver::solve`] /
     /// [`Solver::solve_batch`], not at construction; preconditioner factorization
     /// state is the only expensive thing built here.
     pub fn new(
-        design: impl IntoDesign<'a>,
-        weights: Option<Vec<f64>>,
+        mut design: Design<'a>,
         preconditioner: impl Into<PreconditionerInput>,
     ) -> Result<Self, BuildError> {
-        let mut design = design.into_design(DesignOptions::default())?;
-        design.validate_weights(weights.as_deref())?;
-
-        // Align weights with the design's internal (possibly locality-sorted)
-        // observation order. The match keeps the unpermuted arm a plain move
-        // (`permute_obs_in` would borrow and `into_owned` would copy).
-        let weights = match &design.rows {
-            Some(_) => weights.map(|w| design.permute_obs_in(&w).into_owned()),
-            None => weights,
-        };
+        // Align caller-order weights with the design's retained internal rows.
+        // Identity mappings stay borrowed through setup.
+        let weights = design.options.weight_values().map(|weights| {
+            map_to_internal_order(design.rows.as_deref(), design.n_obs_input, weights)
+        });
 
         // Reparametrize the slope columns (if any) before the preconditioner reads the frame.
-        let reparam = SlopeReparam::build(&mut design, weights.as_deref());
+        let reparam = SlopeReparam::build(&mut design.frame, &design.terms, weights.as_deref());
 
         let (preconditioner, warnings) = match preconditioner.into() {
             PreconditionerInput::Default => {
@@ -405,11 +394,12 @@ impl<'a> Solver<'a> {
             }
         };
 
-        let sqrt_weights = weights.map(|mut w| {
-            for wi in &mut w {
+        let sqrt_weights = weights.map(|weights| {
+            let mut weights = weights.into_owned();
+            for wi in &mut weights {
                 *wi = wi.sqrt();
             }
-            w
+            weights
         });
 
         Ok(Self {
@@ -496,7 +486,7 @@ impl<'a> Solver<'a> {
         Ok(RhsSolution {
             x,
             // Back to the caller's observation order (no-op if not reordered).
-            demeaned: self.design.permute_obs_out(demeaned),
+            demeaned: self.design.from_internal_order(demeaned),
             converged: r.converged,
             iterations: r.iterations,
             // Read from the LSMR recurrence at no extra cost; see `SolveResult::residual`.
@@ -613,16 +603,10 @@ impl<'a> Solver<'a> {
     }
 }
 
-/// Solve fixed-effects least squares for a design input.
+/// Solve fixed-effects least squares for a configured design.
 ///
-/// `design` is anything implementing [`IntoDesign`]: an observation-major
-/// `(n_obs, n_factors)` categories array (levels `0..max_level` per factor,
-/// count inferred) or a list of [`Effect`] terms.
-/// `y` is the response vector (length = n_obs).
-///
-/// Zero-copy for F-order category arrays whose dominant factor is already
-/// sorted; otherwise columns are copied once (per column at ingest, or
-/// whole-frame by the locality sort).
+/// Construct `design` first through [`IntoDesign`] or [`DesignOptions`].
+/// `y` is in caller row order and has the design's input observation count.
 ///
 /// `preconditioner` accepts the same input shapes as [`Solver::new`]:
 /// `None`, a [`crate::PreconditionerConfig`] by reference or value, an owned
@@ -630,16 +614,13 @@ impl<'a> Solver<'a> {
 ///
 /// This is a convenience wrapper around [`Solver::new`] + [`Solver::solve`].
 pub fn solve<'a, 'o>(
-    design: impl IntoDesign<'a>,
-    options: DesignOptions,
+    design: Design<'a>,
     y: &[f64],
-    weights: Option<&[f64]>,
     lsmr: impl Into<Option<&'o LsmrOptions>>,
     preconditioner: impl Into<PreconditionerInput>,
 ) -> Result<SolveResult, WithinError> {
     let t_start = Instant::now();
-    let design = design.into_design(options)?;
-    let solver = Solver::new(design, weights.map(|w| w.to_vec()), preconditioner)?;
+    let solver = Solver::new(design, preconditioner)?;
     let time_setup = t_start.elapsed().as_secs_f64();
     let mut result = solver.solve(y, lsmr)?;
     // Include solver construction (preconditioner build) in setup time
@@ -653,16 +634,13 @@ pub fn solve<'a, 'o>(
 /// Same as [`solve`] but solves all RHS vectors in parallel (via rayon),
 /// reusing the preconditioner across all solves.
 pub fn solve_batch<'a, 'o>(
-    design: impl IntoDesign<'a>,
-    options: DesignOptions,
+    design: Design<'a>,
     ys: &[&[f64]],
-    weights: Option<&[f64]>,
     lsmr: impl Into<Option<&'o LsmrOptions>>,
     preconditioner: impl Into<PreconditionerInput>,
 ) -> Result<BatchSolveResult, WithinError> {
     let t_start = Instant::now();
-    let design = design.into_design(options)?;
-    let solver = Solver::new(design, weights.map(|w| w.to_vec()), preconditioner)?;
+    let solver = Solver::new(design, preconditioner)?;
     let time_setup = t_start.elapsed().as_secs_f64();
     let mut result = solver.solve_batch(ys, lsmr)?;
     result.time_setup += time_setup;

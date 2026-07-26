@@ -2,7 +2,7 @@
 //! [`BuildWarning`]s, not just [`Solver::warnings`] (#165).
 
 use within::{
-    solve, solve_batch, BuildWarning, Effect, LocalSolverConfig, PreconditionerConfig,
+    solve, solve_batch, BuildWarning, Design, Effect, LocalSolverConfig, PreconditionerConfig,
     ReductionStrategy, ScalingConfig, ScalingFailure, Solver,
 };
 
@@ -47,7 +47,13 @@ fn free_solve_surfaces_build_warnings() {
     let y = [1.0, 2.0, 0.5, -1.0];
     let cfg = strict_scaling();
 
-    let result = solve(warning_effects(), Default::default(), &y, None, None, &cfg).expect("solve");
+    let result = solve(
+        Design::new(warning_effects()).expect("design"),
+        &y,
+        None,
+        &cfg,
+    )
+    .expect("solve");
     assert!(
         has_scaling_warning(&result.warnings),
         "free solve dropped the preconditioner build warning: {:?}",
@@ -55,7 +61,8 @@ fn free_solve_surfaces_build_warnings() {
     );
 
     // The result field mirrors the solver accessor exactly.
-    let solver = Solver::new(warning_effects(), None, &cfg).expect("solver");
+    let solver =
+        Solver::new(Design::new(warning_effects()).expect("design"), &cfg).expect("solver");
     assert_eq!(result.warnings.as_slice(), solver.warnings());
 }
 
@@ -66,8 +73,13 @@ fn free_solve_batch_surfaces_build_warnings() {
     let ys: [&[f64]; 2] = [&y0, &y1];
     let cfg = strict_scaling();
 
-    let result = solve_batch(warning_effects(), Default::default(), &ys, None, None, &cfg)
-        .expect("solve_batch");
+    let result = solve_batch(
+        Design::new(warning_effects()).expect("design"),
+        &ys,
+        None,
+        &cfg,
+    )
+    .expect("solve_batch");
     assert!(
         has_scaling_warning(&result.warnings),
         "free solve_batch dropped the preconditioner build warning: {:?}",
@@ -75,6 +87,7 @@ fn free_solve_batch_surfaces_build_warnings() {
     );
 
     // The result field mirrors the solver accessor exactly.
-    let solver = Solver::new(warning_effects(), None, &cfg).expect("solver");
+    let solver =
+        Solver::new(Design::new(warning_effects()).expect("design"), &cfg).expect("solver");
     assert_eq!(result.warnings.as_slice(), solver.warnings());
 }

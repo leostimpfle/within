@@ -9,7 +9,7 @@ use rand::rngs::SmallRng;
 use rand::{RngExt, SeedableRng};
 
 use within::config::{LsmrOptions, PreconditionerConfig};
-use within::Solver;
+use within::{DesignOptions, IntoDesign, Solver};
 
 const TOL: f64 = 1e-6;
 const MAXITER: usize = 20;
@@ -96,7 +96,12 @@ fn bench_store_backends(c: &mut Criterion) {
         // C-order view: ingest copies each strided column once.
         group.bench_function(BenchmarkId::new("Array(C)", &p.label), |b| {
             b.iter(|| {
-                let solver = Solver::new(p.categories_c.view(), None, precond_ref).unwrap();
+                let design = p
+                    .categories_c
+                    .view()
+                    .into_design(DesignOptions::default())
+                    .unwrap();
+                let solver = Solver::new(design, precond_ref).unwrap();
                 let r = solver.solve(&p.y, &p.params).unwrap();
                 assert!(r.converged);
             });
@@ -105,7 +110,12 @@ fn bench_store_backends(c: &mut Criterion) {
         // F-order view: contiguous columns borrowed zero-copy.
         group.bench_function(BenchmarkId::new("Array(F)", &p.label), |b| {
             b.iter(|| {
-                let solver = Solver::new(p.categories_f.view(), None, precond_ref).unwrap();
+                let design = p
+                    .categories_f
+                    .view()
+                    .into_design(DesignOptions::default())
+                    .unwrap();
+                let solver = Solver::new(design, precond_ref).unwrap();
                 let r = solver.solve(&p.y, &p.params).unwrap();
                 assert!(r.converged);
             });

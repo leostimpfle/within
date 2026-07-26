@@ -3,7 +3,7 @@
 //! cross-version encoding shifts the same-build round-trip test cannot.
 //! Regenerate via the `#[ignore]`d `regenerate_wire_format_fixture` test.
 
-use within::{Effect, LsmrOptions, Preconditioner, PreconditionerConfig, Solver};
+use within::{Design, Effect, LsmrOptions, Preconditioner, PreconditionerConfig, Solver};
 
 const WIRE_FORMAT_VERSION: u32 = 12;
 const PRECOND_BYTES: &[u8] = include_bytes!("fixtures/preconditioner_v12.postcard");
@@ -33,8 +33,11 @@ fn wire_format_fixture_deserializes_and_solves() {
     let prebuilt: Preconditioner =
         postcard::from_bytes(PRECOND_BYTES).expect("deserialize fixture preconditioner");
 
-    let solver = Solver::new(fixture_effects(&f, &g, &z), None, prebuilt)
-        .expect("build solver from fixture");
+    let solver = Solver::new(
+        Design::new(fixture_effects(&f, &g, &z)).expect("design"),
+        prebuilt,
+    )
+    .expect("build solver from fixture");
     let result = solver
         .solve(&y, &LsmrOptions::default())
         .expect("solve with fixture preconditioner");
@@ -43,8 +46,7 @@ fn wire_format_fixture_deserializes_and_solves() {
 
     // Compare against a fresh build to detect any semantic regression.
     let fresh = Solver::new(
-        fixture_effects(&f, &g, &z),
-        None,
+        Design::new(fixture_effects(&f, &g, &z)).expect("design"),
         PreconditionerConfig::default(),
     )
     .expect("fresh solver");
@@ -65,8 +67,7 @@ fn wire_format_fixture_deserializes_and_solves() {
 fn signed_route_preconditioner_round_trips() {
     let (f, g, z, y) = fixture_problem();
     let solver1 = Solver::new(
-        fixture_effects(&f, &g, &z),
-        None,
+        Design::new(fixture_effects(&f, &g, &z)).expect("design"),
         PreconditionerConfig::default(),
     )
     .expect("build solver");
@@ -76,8 +77,11 @@ fn signed_route_preconditioner_round_trips() {
         .expect("serialize");
     let restored: Preconditioner = postcard::from_bytes(&bytes).expect("deserialize");
 
-    let solver2 =
-        Solver::new(fixture_effects(&f, &g, &z), None, restored).expect("solver from round-trip");
+    let solver2 = Solver::new(
+        Design::new(fixture_effects(&f, &g, &z)).expect("design"),
+        restored,
+    )
+    .expect("solver from round-trip");
     let r2 = solver2.solve(&y, &LsmrOptions::default()).expect("solve 2");
 
     for (a, b) in r1.x.iter().zip(r2.x.iter()) {
@@ -106,8 +110,7 @@ fn regenerate_wire_format_fixture() {
 
     let (f, g, z, _) = fixture_problem();
     let solver = Solver::new(
-        fixture_effects(&f, &g, &z),
-        None,
+        Design::new(fixture_effects(&f, &g, &z)).expect("design"),
         PreconditionerConfig::default(),
     )
     .expect("build solver");
