@@ -245,7 +245,7 @@ across solves like any other.
 | `within::config` | public | `LsmrOptions`, `PreconditionerConfig`, `LocalSolverConfig`, `SchurMode`, `ApproxCholConfig`, `ApproxSchurConfig`, `ScalingConfig`, `ReductionStrategy` |
 | `within::observation` | public | `ObservationFrame` (columnar level-code + loading columns) |
 | `within::error` | public | `WithinError`, `BuildError`, `SolveError` |
-| `domain` / `operator` / `solver` / `orchestrate` | `pub(crate)` | implementation layers — public items are re-exported at the crate root |
+| `block_elim` / `channel` / `csr_block` / `domain` / `operator` / `solver` | `pub(crate)` | implementation layers — public items are re-exported at the crate root |
 
 ### Feature flags
 
@@ -269,11 +269,11 @@ benchmarks/          Python benchmark framework
 Uses [pixi](https://pixi.sh) as the task runner.
 
 ```bash
-pixi run develop          # Build Rust extension (release mode)
-pixi run test             # Rebuild + pytest
-cargo test --workspace    # Rust tests only
-cargo bench -p within     # Criterion benchmarks
-pixi run bench run all    # Python benchmarks
+pixi run develop                         # Build Rust extension (release mode)
+pixi run test                            # Rebuild + pytest
+cargo test --workspace                   # Rust tests only
+cargo bench -p within                    # Criterion benchmarks
+pixi run python -m benchmarks run all    # Python benchmarks
 ```
 
 Rust changes require rebuilding before running Python code (`pixi run develop`).
