@@ -50,10 +50,10 @@ impl PyDesignOptions {
 
 impl PyDesignOptions {
     pub(crate) fn to_native(&self) -> DesignOptions<'_> {
-        DesignOptions::new(
-            self.drop_singletons,
-            self.weights.as_deref().map(Cow::Borrowed),
-        )
+        DesignOptions {
+            drop_singletons: self.drop_singletons,
+            weights: self.weights.as_deref().map(Cow::Borrowed),
+        }
     }
 }
 

@@ -5,7 +5,10 @@ use within::{solve, solve_batch, Design, DesignOptions, LsmrOptions, Preconditio
 mod common;
 
 fn design<'a>(categories: ArrayView2<'a, u32>, weights: Option<&'a [f64]>) -> Design<'a> {
-    let options = DesignOptions::new(false, weights.map(Into::into));
+    let options = DesignOptions {
+        weights: weights.map(Into::into),
+        ..Default::default()
+    };
     Design::from_categories(categories, options).expect("design")
 }
 

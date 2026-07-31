@@ -77,7 +77,14 @@ mod design_tests {
         assert!(matches!(rhs, Cow::Borrowed(_)));
 
         let frame = ObservationFrame::new(vec![vec![0u32, 1, 0, 0, 2].into()], Vec::new()).unwrap();
-        let mapped = Design::from_frame(frame, DesignOptions::new(true, None)).unwrap();
+        let mapped = Design::from_frame(
+            frame,
+            DesignOptions {
+                drop_singletons: true,
+                ..Default::default()
+            },
+        )
+        .unwrap();
         let rhs = DesignOperator::new(&mapped, None).weighted_rhs(&caller);
         assert!(matches!(rhs, Cow::Owned(_)));
         assert_eq!(&*rhs, &[1.0, 3.0, 4.0]);

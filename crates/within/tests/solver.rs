@@ -294,7 +294,10 @@ fn test_internal_locality_sort_is_transparent() {
         let frame =
             ObservationFrame::new(vec![col0.clone().into(), col1.clone().into()], Vec::new())
                 .expect("frame");
-        let options = DesignOptions::new(false, weights.map(Into::into));
+        let options = DesignOptions {
+            weights: weights.map(Into::into),
+            ..Default::default()
+        };
         let design = Design::from_frame(frame, options).expect("design");
         Solver::new(design, &precond).expect("solver")
     };
@@ -302,7 +305,10 @@ fn test_internal_locality_sort_is_transparent() {
         let frame =
             ObservationFrame::new(vec![col0.clone().into(), col1.clone().into()], Vec::new())
                 .expect("frame");
-        let options = DesignOptions::new(false, weights.map(Into::into));
+        let options = DesignOptions {
+            weights: weights.map(Into::into),
+            ..Default::default()
+        };
         let design = Design::from_frame_unsorted(frame, options).expect("oracle design");
         Solver::new(design, &precond).expect("oracle solver")
     };

@@ -85,7 +85,10 @@ fn test_lsmr_least_squares_weighted_preconditioned() {
     .expect("valid frame");
     let design = Design::from_frame(
         frame,
-        DesignOptions::new(false, Some(weights.clone().into())),
+        DesignOptions {
+            weights: Some(weights.clone().into()),
+            ..Default::default()
+        },
     )
     .expect("valid design");
     let y = vec![1.0, 2.0, 3.0, 4.0, 5.0];

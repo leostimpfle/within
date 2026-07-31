@@ -47,7 +47,10 @@ fn test_weight_count_mismatch_error() {
     .expect("frame ok");
     let result = Design::from_frame(
         frame,
-        DesignOptions::new(false, Some(vec![1.0, 2.0].into())),
+        DesignOptions {
+            weights: Some(vec![1.0, 2.0].into()),
+            ..Default::default()
+        },
     );
     let err = result.expect_err("expected WeightCountMismatch error, got Ok");
     match err {

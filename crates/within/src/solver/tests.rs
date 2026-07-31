@@ -97,7 +97,14 @@ fn coefficient_layout_translates_addresses_both_ways() {
 #[test]
 fn solver_filters_caller_rhs_and_restores_removed_rows_as_nan() {
     let frame = ObservationFrame::new(vec![vec![0u32, 1, 0, 0, 2].into()], Vec::new()).unwrap();
-    let design = Design::from_frame(frame, DesignOptions::new(true, None)).unwrap();
+    let design = Design::from_frame(
+        frame,
+        DesignOptions {
+            drop_singletons: true,
+            ..Default::default()
+        },
+    )
+    .unwrap();
 
     let solver = Solver::new(design, PreconditionerConfig::default()).unwrap();
     let y = [1.0, f64::NAN, 3.0, 4.0, f64::NAN];

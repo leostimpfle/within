@@ -15,6 +15,19 @@ fn design(categories: &Array2<u32>) -> Design<'_> {
 }
 
 #[test]
+fn design_options_fields_are_public() {
+    let options = DesignOptions {
+        drop_singletons: true,
+        weights: Some(vec![1.0, 2.0, 3.0].into()),
+    };
+
+    assert!(options.drop_singletons);
+    assert_eq!(options.weights.as_deref(), Some(&[1.0, 2.0, 3.0][..]));
+    assert!(options.drop_singletons());
+    assert_eq!(options.weights(), Some(&[1.0, 2.0, 3.0][..]));
+}
+
+#[test]
 fn precond_input_call_shapes_compile() {
     let categories = cats();
     let cfg = PreconditionerConfig::default();
@@ -99,7 +112,10 @@ fn solver_new_weights_call_shapes_compile() {
     // Owned `Vec<f64>` weights — moved into the solver.
     let weighted = Design::from_categories(
         categories.view(),
-        DesignOptions::new(false, Some(w_vec.into())),
+        DesignOptions {
+            weights: Some(w_vec.into()),
+            ..Default::default()
+        },
     )
     .expect("weighted design");
     let _ = Solver::new(weighted, None).expect("Vec<f64> weights");

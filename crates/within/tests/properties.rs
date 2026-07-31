@@ -128,7 +128,10 @@ proptest! {
         };
         let design = Design::from_effects(
             effects,
-            DesignOptions::new(false, Some(weights.clone().into())),
+            DesignOptions {
+                weights: Some(weights.clone().into()),
+                ..Default::default()
+            },
         )
         .expect("design");
         let result = Solver::new(design, PreconditionerConfig::default())

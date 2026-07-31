@@ -84,23 +84,13 @@ impl<T> Loading<T> {
 /// order is finalized.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct DesignOptions<'a> {
-    drop_singletons: bool,
-    weights: Option<Cow<'a, [f64]>>,
+    /// Whether iterative singleton removal is enabled.
+    pub drop_singletons: bool,
+    /// Observation weights in caller row order.
+    pub weights: Option<Cow<'a, [f64]>>,
 }
 
 impl<'a> DesignOptions<'a> {
-    /// Create design-construction options.
-    ///
-    /// `weights` are recorded in caller row order. Borrowed slices remain
-    /// borrowed by the resulting [`Design`]; owned vectors are retained
-    /// without another copy.
-    pub fn new(drop_singletons: bool, weights: Option<Cow<'a, [f64]>>) -> Self {
-        Self {
-            drop_singletons,
-            weights,
-        }
-    }
-
     /// Whether iterative singleton removal is enabled.
     pub fn drop_singletons(&self) -> bool {
         self.drop_singletons
@@ -758,7 +748,10 @@ mod tests {
                 vec![vec![1, 0, 1, 0, 2, 2, 3], vec![1, 0, 0, 1, 2, 3, 3]],
                 vec![vec![10.0, 11.0, 12.0, 13.0, 14.0, 15.0, 16.0]],
             ),
-            DesignOptions::new(true, None),
+            DesignOptions {
+                drop_singletons: true,
+                ..Default::default()
+            },
         )
         .unwrap();
 
@@ -780,7 +773,10 @@ mod tests {
     fn design_options_reject_when_singletons_remove_every_observation() {
         let result = Design::from_frame(
             frame(vec![vec![0, 1], vec![0, 1]], vec![]),
-            DesignOptions::new(true, None),
+            DesignOptions {
+                drop_singletons: true,
+                ..Default::default()
+            },
         );
 
         assert!(matches!(result, Err(BuildError::EmptyObservations)));
@@ -805,7 +801,10 @@ mod tests {
         let weights = [1.0, f64::NAN, 1.0, 1.0, f64::NAN];
         let design = Design::from_frame(
             frame(vec![vec![0, 1, 0, 0, 2]], vec![]),
-            DesignOptions::new(true, Some(Cow::Borrowed(&weights))),
+            DesignOptions {
+                drop_singletons: true,
+                weights: Some(Cow::Borrowed(&weights)),
+            },
         )
         .unwrap();
 
@@ -818,10 +817,10 @@ mod tests {
         assert!(matches!(
             Design::from_frame(
                 frame(vec![vec![0, 1, 0, 0, 2]], vec![]),
-                DesignOptions::new(
-                    true,
-                    Some(Cow::Borrowed(&[1.0, f64::NAN, -1.0, 1.0, f64::NAN])),
-                ),
+                DesignOptions {
+                    drop_singletons: true,
+                    weights: Some(Cow::Borrowed(&[1.0, f64::NAN, -1.0, 1.0, f64::NAN])),
+                },
             ),
             Err(BuildError::InvalidWeight {
                 index: 2,
@@ -858,7 +857,10 @@ mod tests {
         let weights = vec![1.0, 2.0, 3.0];
         let design = Design::from_frame(
             frame(vec![vec![0, 0, 1]], vec![]),
-            DesignOptions::new(false, Some(Cow::Borrowed(weights.as_slice()))),
+            DesignOptions {
+                weights: Some(Cow::Borrowed(weights.as_slice())),
+                ..Default::default()
+            },
         )
         .unwrap()
         .into_owned();

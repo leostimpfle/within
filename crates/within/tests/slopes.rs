@@ -61,7 +61,10 @@ fn solve_with(
     config: &PreconditionerConfig,
 ) -> SolveResult {
     let effects = vec![Effect::new(levels, intercept, [z]).expect("effect")];
-    let options = DesignOptions::new(false, weights.map(Into::into));
+    let options = DesignOptions {
+        weights: weights.map(Into::into),
+        ..Default::default()
+    };
     let design = Design::from_effects(effects, options).expect("design");
     Solver::new(design, config)
         .expect("solver")
