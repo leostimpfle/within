@@ -207,6 +207,36 @@ let r2 = solver.solve(&another_y, &LsmrOptions::default())?;  // reuses precondi
 | `LocalSolverConfig` | `{ approx_chol, schur: SchurMode, dense_threshold, scaling }` |
 | `SchurMode` | `Approximate(ApproxSchurConfig)` \| `Exact` |
 | `Preconditioner` | Opaque built handle — reuse via `Solver::new(.., precond)` (owned or `&`) |
+| `Effect` | `Effect::new(levels: &[u32], intercept: bool, slopes: impl IntoIterator<Item = &[f64]>) -> Result<Self, BuildError>` |
+| `CoefficientAddress` | `{ channel: Channel { term, column }, level: usize }` |
+| `CoefficientLayout` | `index(CoefficientAddress) -> Option<usize>`, `address(usize) -> Option<CoefficientAddress>`, `n_dofs()`, `n_terms()`, `n_levels(term)`, `n_columns(term)` |
+
+### Varying slopes
+
+Pass a `Vec<Effect>` instead of a categories array. Each term is a factor's
+level codes plus an optional intercept and zero or more slope covariates
+(per-level slopes, as in fixest's `f[z]` notation).
+
+```rust
+use within::{solve, Channel, CoefficientAddress, Effect};
+
+let firm: &[u32] = /* level codes */;
+let year: &[u32] = /* level codes */;
+let x: &[f64] = /* covariate whose slope varies by firm */;
+
+let terms = vec![
+    Effect::new(firm, true, [x])?,  // firm intercept + firm-specific x slope
+    Effect::new(year, true, [])?,   // year intercept
+];
+let r = solve(terms, &y, None, None, None)?;
+
+// Read firm level 3's x-slope via the layout map (column 0 = intercept, 1 = first slope):
+let at = CoefficientAddress { channel: Channel { term: 0, column: 1 }, level: 3 };
+println!("{}", r.x[r.layout.index(at).unwrap()]);
+```
+
+`Solver::new` takes the same `Vec<Effect>`, so a slope design can be reused
+across solves like any other.
 
 ### Lower-level access
 
@@ -215,7 +245,7 @@ let r2 = solver.solve(&another_y, &LsmrOptions::default())?;  // reuses precondi
 | `within::config` | public | `LsmrOptions`, `PreconditionerConfig`, `LocalSolverConfig`, `SchurMode`, `ApproxCholConfig`, `ApproxSchurConfig`, `ScalingConfig`, `ReductionStrategy` |
 | `within::observation` | public | `ObservationFrame` (columnar level-code + loading columns) |
 | `within::error` | public | `WithinError`, `BuildError`, `SolveError` |
-| `domain` / `operator` / `solver` / `orchestrate` | `pub(crate)` | implementation layers — public items are re-exported at the crate root |
+| `block_elim` / `channel` / `csr_block` / `domain` / `operator` / `solver` | `pub(crate)` | implementation layers — public items are re-exported at the crate root |
 
 ### Feature flags
 
@@ -239,11 +269,11 @@ benchmarks/          Python benchmark framework
 Uses [pixi](https://pixi.sh) as the task runner.
 
 ```bash
-pixi run develop          # Build Rust extension (release mode)
-pixi run test             # Rebuild + pytest
-cargo test --workspace    # Rust tests only
-cargo bench -p within     # Criterion benchmarks
-pixi run bench run all    # Python benchmarks
+pixi run develop                         # Build Rust extension (release mode)
+pixi run test                            # Rebuild + pytest
+cargo test --workspace                   # Rust tests only
+cargo bench -p within                    # Criterion benchmarks
+pixi run python -m benchmarks run all    # Python benchmarks
 ```
 
 Rust changes require rebuilding before running Python code (`pixi run develop`).
