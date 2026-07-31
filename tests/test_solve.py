@@ -5,6 +5,7 @@ import warnings
 import numpy as np
 import pytest
 
+from conftest import as_solver_categories, generate_synthetic_data
 from within import (
     BatchSolveResult,
     CoefficientLayout,
@@ -18,8 +19,6 @@ from within import (
     solve_batch,
 )
 from within.config import AdditiveSchwarz, LocalSolverConfig, ScalingConfig
-
-from conftest import as_solver_categories, generate_synthetic_data
 
 
 def assert_normal_equations_satisfied(cats, y, result, tol, weights=None):
@@ -39,7 +38,7 @@ def assert_normal_equations_satisfied(cats, y, result, tol, weights=None):
         c = np.asarray(c)
         num_sq += np.square(np.bincount(c, weights=w * demeaned)).sum()
         den_sq += np.square(np.bincount(c, weights=w * y)).sum()
-    relative = num_sq**0.5 / max(den_sq**0.5, 1e-15)
+    relative = num_sq ** 0.5 / max(den_sq ** 0.5, 1e-15)
     assert relative < tol, (
         f"independent normal-equation residual {relative} exceeds {tol}"
     )
@@ -58,11 +57,11 @@ def test_coefficient_layout_locates_unidentified_and_round_trips():
     assert isinstance(layout, CoefficientLayout)
     assert layout.n_dofs() == len(res.x)
     assert [
-        (layout.n_levels(t), layout.n_columns(t)) for t in range(layout.n_terms())
-    ] == [
-        (3, 1),
-        (3, 2),
-    ]
+               (layout.n_levels(t), layout.n_columns(t)) for t in range(layout.n_terms())
+           ] == [
+               (3, 1),
+               (3, 2),
+           ]
 
     # The reported unidentified direction resolves to a zero coefficient slot.
     (u,) = res.unidentified
@@ -116,9 +115,13 @@ def test_design_options_drop_singletons_across_python_apis():
 
     assert design_options.drop_singletons
 
-    single = solve(categories, y, design_options=design_options)
-    batch = solve_batch(categories, Y, design_options=design_options)
-    solver = Solver(categories, design_options=design_options)
+    warning = r"3 singleton observation\(s\) removed"
+    with pytest.warns(UserWarning, match=warning):
+        single = solve(categories, y, design_options=design_options)
+    with pytest.warns(UserWarning, match=warning):
+        batch = solve_batch(categories, Y, design_options=design_options)
+    with pytest.warns(UserWarning, match=warning):
+        solver = Solver(categories, design_options=design_options)
     persistent = solver.solve(y)
 
     assert solver.n_obs == len(y)
@@ -154,10 +157,11 @@ def test_one_shot_solve_surfaces_build_warnings():
     assert persistent, "fixture should emit a build warning"
     assert user_warnings(lambda: solve(design, y, preconditioner=precond)) == persistent
     assert (
-        user_warnings(
-            lambda: solve_batch(design, np.column_stack([y, y]), preconditioner=precond)
-        )
-        == persistent
+            user_warnings(
+                lambda: solve_batch(design, np.column_stack([y, y]),
+                                    preconditioner=precond)
+            )
+            == persistent
     )
 
 
@@ -254,8 +258,8 @@ class TestDemean:
         x_hat = result.x
         offset = 0
         for n in n_levels:
-            block_hat = x_hat[offset : offset + n]
-            block_true = x_true[offset : offset + n]
+            block_hat = x_hat[offset: offset + n]
+            block_true = x_true[offset: offset + n]
             np.testing.assert_allclose(
                 block_hat - block_hat.mean(),
                 block_true - block_true.mean(),

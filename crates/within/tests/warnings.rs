@@ -1,5 +1,5 @@
-//! One-shot `solve`/`solve_batch` entry points surface preconditioner
-//! [`BuildWarning`]s, not just [`Solver::warnings`] (#165).
+//! One-shot `solve`/`solve_batch` entry points surface [`BuildWarning`]s, not
+//! just [`Solver::warnings`] (#165).
 
 use within::{
     solve, solve_batch, BuildWarning, Design, DesignOptions, Effect, LocalSolverConfig,
@@ -40,6 +40,33 @@ fn has_scaling_warning(warnings: &[BuildWarning]) -> bool {
     warnings
         .iter()
         .any(|w| matches!(w, BuildWarning::UnscalableComponent { .. }))
+}
+
+#[test]
+fn singleton_removal_surfaces_as_build_warning() {
+    let levels = [0, 0, 1];
+    let y = [1.0, 2.0, 3.0];
+    let design = Design::from_effects(
+        [Effect::new(&levels, true, []).unwrap()],
+        DesignOptions {
+            drop_singletons: true,
+            ..DesignOptions::default()
+        },
+    )
+    .expect("design");
+
+    let solver = Solver::new(design, PreconditionerConfig::Off).expect("solver");
+    assert_eq!(
+        solver.warnings(),
+        &[BuildWarning::SingletonObservationsRemoved { count: 1 }]
+    );
+    assert_eq!(
+        solver.warnings()[0].to_string(),
+        "1 singleton observation(s) removed"
+    );
+
+    let result = solver.solve(&y, None).expect("solve");
+    assert_eq!(result.warnings.as_slice(), solver.warnings());
 }
 
 #[test]

@@ -110,10 +110,15 @@ pub enum BuildError {
     },
 }
 
-/// A non-fatal preconditioner-build event.
+/// A non-fatal event encountered while constructing a [`crate::Solver`].
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
 pub enum BuildWarning {
+    /// Singleton removal changed the estimation sample.
+    SingletonObservationsRemoved {
+        /// Number of caller observations removed from the numerical design.
+        count: usize,
+    },
     /// Residual deficits were clamped, degrading only preconditioner quality.
     UnscalableComponent {
         /// The offending channel pair.
@@ -128,6 +133,9 @@ pub enum BuildWarning {
 impl std::fmt::Display for BuildWarning {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::SingletonObservationsRemoved { count } => {
+                write!(f, "{count} singleton observation(s) removed")
+            }
             Self::UnscalableComponent {
                 pair,
                 sweeps,

@@ -173,8 +173,7 @@ pub struct SolveResult {
     pub x: Vec<f64>,
     /// Per-level directions the data cannot identify.
     pub unidentified: Vec<CoefficientAddress>,
-    /// Non-fatal preconditioner-build warnings (see [`Solver::warnings`]);
-    /// empty when a pre-built preconditioner was reused.
+    /// Non-fatal solver-build warnings (see [`Solver::warnings`]).
     pub warnings: Vec<BuildWarning>,
     /// Address ↔ flat-`x`-index translation for this design's coefficients.
     pub layout: CoefficientLayout,
@@ -216,7 +215,7 @@ pub struct BatchSolveResult {
     /// Per-level directions the data cannot identify, shared across all RHS:
     /// identification depends only on the design and weights, never on `y`.
     pub unidentified: Vec<CoefficientAddress>,
-    /// Non-fatal preconditioner-build warnings, shared across all RHS; see
+    /// Non-fatal solver-build warnings, shared across all RHS; see
     /// [`SolveResult::warnings`].
     pub warnings: Vec<BuildWarning>,
     /// Address ↔ flat-`x`-index translation for this design's coefficients.
@@ -322,6 +321,8 @@ impl<'a> Solver<'a> {
         mut design: Design<'a>,
         preconditioner: impl Into<PreconditionerInput>,
     ) -> Result<Self, BuildError> {
+        let n_removed = design.n_obs_input - design.n_obs;
+
         // Align caller-order weights with the design's retained internal rows.
         // Identity mappings stay borrowed through setup.
         let weights = design
@@ -332,7 +333,7 @@ impl<'a> Solver<'a> {
         // Reparametrize the slope columns (if any) before the preconditioner reads the frame.
         let reparam = SlopeReparam::build(&mut design.frame, &design.terms, weights.as_deref());
 
-        let (preconditioner, warnings) = match preconditioner.into() {
+        let (preconditioner, mut warnings) = match preconditioner.into() {
             PreconditionerInput::Default => {
                 build_preconditioner(&design, weights.as_deref(), None)?
             }
@@ -351,6 +352,13 @@ impl<'a> Solver<'a> {
             }
         };
 
+        if n_removed != 0 {
+            warnings.insert(
+                0,
+                BuildWarning::SingletonObservationsRemoved { count: n_removed },
+            );
+        }
+
         let sqrt_weights = weights.map(|weights| {
             let mut weights = weights.into_owned();
             for wi in &mut weights {
@@ -368,8 +376,10 @@ impl<'a> Solver<'a> {
         })
     }
 
-    /// Non-fatal events from the preconditioner build; empty when reusing a
-    /// pre-built preconditioner (its warnings were reported when it was built).
+    /// Non-fatal events from design and preconditioner construction.
+    ///
+    /// Reusing a pre-built preconditioner suppresses only its original build
+    /// warnings; warnings arising from this design are still reported.
     pub fn warnings(&self) -> &[BuildWarning] {
         &self.warnings
     }
