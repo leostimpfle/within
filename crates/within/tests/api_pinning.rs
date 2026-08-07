@@ -2,7 +2,9 @@
 //! argument shapes: if any call form below stops compiling, the public surface shifted.
 
 use ndarray::Array2;
-use within::{solve, solve_batch, LsmrOptions, PreconditionerConfig, Solver};
+use within::{
+    solve, solve_batch, LsmrOptions, PreconditionerConfig, PreconditionerVariant, Solver,
+};
 
 fn cats() -> Array2<u32> {
     Array2::from_shape_vec((4, 2), vec![0u32, 0, 1, 1, 2, 0, 3, 1]).expect("cats")
@@ -129,4 +131,28 @@ fn options_are_optional_and_tuned_additive_builds_from_crate_root() {
     let _ = solve(categories.view(), &y, None, None, None).expect("free solve, None options");
     let _ = solve_batch(categories.view(), &ys, None, None, None)
         .expect("free solve_batch, None options");
+}
+
+#[test]
+fn preconditioner_variant_reports_built_algorithm() {
+    let categories = cats();
+
+    let additive = Solver::new(categories.view(), None, None).expect("additive solver");
+    assert_eq!(
+        additive
+            .preconditioner()
+            .expect("additive preconditioner")
+            .variant(),
+        PreconditionerVariant::Additive,
+    );
+
+    let diagonal = Solver::new(categories.view(), None, PreconditionerConfig::Diagonal)
+        .expect("diagonal solver");
+    assert_eq!(
+        diagonal
+            .preconditioner()
+            .expect("diagonal preconditioner")
+            .variant(),
+        PreconditionerVariant::Diagonal,
+    );
 }

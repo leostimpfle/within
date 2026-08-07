@@ -7,6 +7,14 @@ and this project follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- `Preconditioner::variant()` in Rust and `Preconditioner.variant` in Python expose the built preconditioner algorithm as a typed value (#236).
+
+### Deprecated
+
+- `Preconditioner::variant_name()`; use the typed `Preconditioner::variant()` accessor instead (#236).
+
 ### Fixed
 
 - A design carrying varying slopes on two distinct factors could fail preconditioner construction with `matrix is not symmetric`, when rounding left the two triangles of the exact Schur complement unequal (#229).

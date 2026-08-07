@@ -4,7 +4,7 @@ import warnings
 
 import numpy as np
 import pytest
-
+from conftest import as_solver_categories, generate_synthetic_data
 from within import (
     BatchSolveResult,
     CoefficientLayout,
@@ -16,8 +16,6 @@ from within import (
     solve,
 )
 from within.config import AdditiveSchwarz, LocalSolverConfig, ScalingConfig
-
-from conftest import as_solver_categories, generate_synthetic_data
 
 
 def assert_normal_equations_satisfied(cats, y, result, tol, weights=None):
@@ -444,7 +442,7 @@ class TestSolverSerde:
         precond = solver1.preconditioner
 
         assert precond is not None
-        assert "Diagonal" in repr(precond)
+        assert precond.variant is PreconditionerConfig.Diagonal
 
         x = np.arange(precond.ncols, dtype=np.float64) + 0.25
         np.testing.assert_array_equal(precond.apply(x), precond.apply(x))

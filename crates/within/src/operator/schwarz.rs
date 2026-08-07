@@ -109,6 +109,18 @@ pub(crate) fn build_entry(
     SubdomainEntry::try_new(core, solver).map_err(BuildError::Preconditioner)
 }
 
+/// Algorithm variant stored by a built [`Preconditioner`].
+///
+/// This enum is intentionally exhaustive: adding a realized algorithm is
+/// a breaking API change so downstream handling must be reviewed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PreconditionerVariant {
+    /// Additive Schwarz preconditioner
+    Additive,
+    /// Diagonal preconditioner
+    Diagonal,
+}
+
 /// Opaque handle to a pre-built preconditioner; cloning is O(1) via `Arc`.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(transparent)]
@@ -124,11 +136,20 @@ enum Variant {
 }
 
 impl Preconditioner {
-    /// Stable display name for the concrete preconditioner variant.
-    pub fn variant_name(&self) -> &'static str {
+    /// Concrete preconditioner variant.
+    pub fn variant(&self) -> PreconditionerVariant {
         match &self.inner {
-            Variant::Additive(_) => "Additive",
-            Variant::Diagonal(_) => "Diagonal",
+            Variant::Additive(_) => PreconditionerVariant::Additive,
+            Variant::Diagonal(_) => PreconditionerVariant::Diagonal,
+        }
+    }
+
+    /// Stable display name for the concrete preconditioner variant.
+    #[deprecated(note = "use Preconditioner::variant() instead")]
+    pub fn variant_name(&self) -> &'static str {
+        match self.variant() {
+            PreconditionerVariant::Additive => "Additive",
+            PreconditionerVariant::Diagonal => "Diagonal",
         }
     }
 

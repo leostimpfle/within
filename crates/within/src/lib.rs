@@ -43,7 +43,7 @@ pub use config::{
 };
 pub use domain::{Design, Effect};
 pub use error::{BuildError, BuildWarning, SolveError, WithinError};
-pub use operator::schwarz::Preconditioner;
+pub use operator::schwarz::{Preconditioner, PreconditionerVariant};
 pub use solver::{
     solve, solve_batch, BatchSolveResult, CoefficientAddress, CoefficientLayout, IntoDesign,
     PreconditionerInput, SolveResult, Solver,

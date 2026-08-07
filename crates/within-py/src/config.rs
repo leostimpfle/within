@@ -11,7 +11,7 @@ use within::config::{
     ApproxCholConfig, ApproxSchurConfig, LocalSolverConfig, LsmrOptions, PreconditionerConfig,
     ReductionStrategy, ScalingConfig, ScalingFailure, SchurMode,
 };
-use within::{Preconditioner, PreconditionerInput};
+use within::{Preconditioner, PreconditionerInput, PreconditionerVariant};
 
 use crate::convert::IntoPyErr;
 
@@ -187,6 +187,15 @@ pub enum PyPreconditionerConfig {
     Diagonal = 2,
 }
 
+impl From<PreconditionerVariant> for PyPreconditionerConfig {
+    fn from(variant: PreconditionerVariant) -> Self {
+        match variant {
+            PreconditionerVariant::Additive => Self::Additive,
+            PreconditionerVariant::Diagonal => Self::Diagonal,
+        }
+    }
+}
+
 #[pyclass(frozen, eq, eq_int, from_py_object, module = "within._within")]
 #[pyo3(name = "ReductionStrategy")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -355,10 +364,16 @@ impl PyPreconditioner {
         self.inner.ncols()
     }
 
+    /// Algorithm variant used by this preconditioner.
+    #[getter]
+    fn variant(&self) -> PyPreconditionerConfig {
+        self.inner.variant().into()
+    }
+
     fn __repr__(&self) -> String {
         format!(
-            "Preconditioner({}, n={})",
-            self.inner.variant_name(),
+            "Preconditioner({:?}, n={})",
+            self.inner.variant(),
             self.inner.nrows()
         )
     }

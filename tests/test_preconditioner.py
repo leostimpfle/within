@@ -4,7 +4,7 @@ import pickle
 
 import numpy as np
 import pytest
-
+from conftest import as_solver_categories
 from within import LsmrOptions, Preconditioner, PreconditionerConfig, Solver, solve
 from within._within import (
     AdditiveSchwarz,
@@ -13,8 +13,6 @@ from within._within import (
     LocalSolverConfig,
     Schur,
 )
-
-from conftest import as_solver_categories
 
 
 @pytest.fixture()
@@ -105,10 +103,6 @@ class TestFePreconditioner:
         with pytest.raises(ValueError):
             precond.apply(x)
 
-    def test_preconditioner_repr_additive(self, solver_and_precond):
-        solver, precond, categories, y = solver_and_precond
-        assert "Additive" in repr(precond)
-
     def test_preconditioner_nrows_ncols_match_solver(self, solver_and_precond):
         solver, precond, categories, y = solver_and_precond
         assert precond.nrows == precond.ncols == solver.n_dofs
@@ -119,6 +113,7 @@ class TestFePreconditioner:
         precond2 = pickle.loads(data)
         x = np.random.randn(precond.nrows)
         np.testing.assert_array_equal(precond.apply(x), precond2.apply(x))
+        assert precond2.variant is precond.variant
 
     def test_preconditioner_corrupt_bytes_raises(self):
         with pytest.raises(ValueError):
@@ -131,7 +126,7 @@ class TestFePreconditioner:
         r2 = precond.apply(x)
         np.testing.assert_array_equal(r1, r2)
 
-    def test_preconditioner_repr_diagonal(self):
+    def test_preconditioner_variant_diagonal(self):
         categories = as_solver_categories(
             [np.array([0, 1, 0, 1, 2, 2]), np.array([0, 0, 1, 1, 0, 1])]
         )
@@ -139,7 +134,7 @@ class TestFePreconditioner:
         precond = solver.preconditioner
 
         assert precond is not None
-        assert "Diagonal" in repr(precond)
+        assert precond.variant is PreconditionerConfig.Diagonal
 
     def test_single_factor_diagonal_preconditioner_is_cached(self):
         categories = np.asfortranarray(
@@ -150,3 +145,23 @@ class TestFePreconditioner:
 
         assert precond is not None
         assert precond.nrows == precond.ncols == 3
+
+    def test_preconditioner_variant_additive(self, solver_and_precond):
+        _, precond, _, _ = solver_and_precond
+
+        assert precond is not None
+        assert precond.variant is PreconditionerConfig.Additive
+
+    def test_preconditioner_variant_tuned_additive(self, problem):
+        cats, _ = problem
+        categories = as_solver_categories(cats)
+        solver = Solver(
+            categories,
+            preconditioner=AdditiveSchwarz(
+                local_solver=LocalSolverConfig(dense_threshold=8)
+            ),
+        )
+        precond = solver.preconditioner
+
+        assert precond is not None
+        assert precond.variant is PreconditionerConfig.Additive
