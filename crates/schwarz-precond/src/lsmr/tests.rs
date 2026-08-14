@@ -44,15 +44,9 @@ fn test_lsmr_large_magnitude_rhs_not_silently_zero() {
 #[test]
 fn test_mlsmr_large_magnitude_rhs_not_silently_zero() {
     let b = vec![1e155, 2e155, 3e155];
-    let result = mlsmr(
-        &IdentityOp { n: 3 },
-        &b,
-        &IdentityOp { n: 3 },
-        1e-10,
-        100,
-        None,
-    )
-    .expect("preconditioned mlsmr solve");
+    let op = IdentityOp { n: 3 };
+    let result = mlsmr(&op, &b, &op, 1e-10, 100, MlsmrOptions::default())
+        .expect("preconditioned mlsmr solve");
 
     let all_zero = result.x.iter().all(|&xi| xi == 0.0);
     assert!(
@@ -113,28 +107,6 @@ impl Operator for OverdeterminedOp {
     }
 }
 
-/// Diagonal preconditioner: M⁻¹ = diag(1/2, 1/2, 1)
-/// Approximates (Aᵀ A)⁻¹ = diag(2, 2, 1)⁻¹
-struct DiagPrecond;
-
-impl Operator for DiagPrecond {
-    fn nrows(&self) -> usize {
-        3
-    }
-    fn ncols(&self) -> usize {
-        3
-    }
-    fn apply(&self, x: &[f64], y: &mut [f64]) -> Result<(), SolveError> {
-        y[0] = x[0] / 2.0;
-        y[1] = x[1] / 2.0;
-        y[2] = x[2];
-        Ok(())
-    }
-    fn apply_adjoint(&self, x: &[f64], y: &mut [f64]) -> Result<(), SolveError> {
-        self.apply(x, y)
-    }
-}
-
 /// Degenerate 2×2 operator `A = [[1, 0], [0, 0]]` — zero second row and zero
 /// second column. Shared by the zero-row/column and mid-stream `beta == 0`
 /// breakdown tests.
@@ -171,6 +143,40 @@ fn normal_equation_residual<O: Operator + ?Sized>(op: &O, x: &[f64], b: &[f64]) 
     vec_norm(&atr)
 }
 
+/// Diagonal operator, used as a stand-in preconditioner `M⁻¹`.
+struct DiagOp(Vec<f64>);
+impl Operator for DiagOp {
+    fn nrows(&self) -> usize {
+        self.0.len()
+    }
+    fn ncols(&self) -> usize {
+        self.0.len()
+    }
+    fn apply(&self, x: &[f64], y: &mut [f64]) -> Result<(), SolveError> {
+        for ((yi, &xi), &di) in y.iter_mut().zip(x).zip(self.0.iter()) {
+            *yi = di * xi;
+        }
+        Ok(())
+    }
+    fn apply_adjoint(&self, x: &[f64], y: &mut [f64]) -> Result<(), SolveError> {
+        self.apply(x, y)
+    }
+}
+
+/// `M⁻¹ ≈ diag(AᵀA)⁻¹`.
+fn jacobi(op: &DenseOp) -> DiagOp {
+    let mut diag_inv = vec![0.0; op.cols];
+    for (j, di) in diag_inv.iter_mut().enumerate() {
+        let s: f64 = op
+            .data
+            .chunks_exact(op.cols)
+            .map(|row| row[j] * row[j])
+            .sum();
+        *di = if s > 0.0 { 1.0 / s } else { 1.0 };
+    }
+    DiagOp(diag_inv)
+}
+
 #[test]
 fn test_mlsmr_unpreconditioned() {
     let b = vec![1.0, 2.0, 3.0, 3.0];
@@ -189,8 +195,16 @@ fn test_mlsmr_unpreconditioned() {
 #[test]
 fn test_mlsmr_preconditioned() {
     let b = vec![1.0, 2.0, 3.0, 3.0];
-    let result = mlsmr(&OverdeterminedOp, &b, &DiagPrecond, 1e-10, 100, None)
-        .expect("preconditioned mlsmr solve");
+    let preconditioner = DiagOp(vec![0.5, 0.5, 1.0]);
+    let result = mlsmr(
+        &OverdeterminedOp,
+        &b,
+        &preconditioner,
+        1e-10,
+        100,
+        MlsmrOptions::default(),
+    )
+    .expect("preconditioned mlsmr solve");
     assert!(result.converged, "Preconditioned MLSMR did not converge");
     let err: f64 = result
         .x
@@ -297,10 +311,18 @@ fn test_mlsmr_mid_stream_beta_zero_breakdown() {
     // The residual estimate is then exactly zero — reported as a converged
     // ResidualTolerance solve, not a distinct breakdown reason.
     let b = vec![5.0, 0.0];
+    let identity = IdentityOp { n: 2 };
     for result in [
         lsmr(&ZeroSecondRow, &b, 1e-12, 100, None).expect("Golub-Kahan beta=0"),
-        mlsmr(&ZeroSecondRow, &b, &IdentityOp { n: 2 }, 1e-12, 100, None)
-            .expect("modified Golub-Kahan beta=0"),
+        mlsmr(
+            &ZeroSecondRow,
+            &b,
+            &identity,
+            1e-12,
+            100,
+            MlsmrOptions::default(),
+        )
+        .expect("modified Golub-Kahan beta=0"),
     ] {
         assert!(result.converged);
         assert_eq!(result.iterations, 1);
@@ -334,8 +356,15 @@ fn test_mlsmr_none_matches_identity_precond() {
     let id = IdentityOp { n: 3 };
 
     let none_result = lsmr(&OverdeterminedOp, &b, 1e-12, 100, None).expect("lsmr solve");
-    let id_result =
-        mlsmr(&OverdeterminedOp, &b, &id, 1e-12, 100, None).expect("preconditioned Identity solve");
+    let id_result = mlsmr(
+        &OverdeterminedOp,
+        &b,
+        &id,
+        1e-12,
+        100,
+        MlsmrOptions::default(),
+    )
+    .expect("preconditioned Identity solve");
 
     assert!(none_result.converged && id_result.converged);
     assert!(
@@ -387,8 +416,12 @@ fn test_mlsmr_none_matches_identity_precond_windowed() {
     // same minimum so the comparison isn't governed by rounding noise in
     // the convergence test.
     let none_result = lsmr(&op, &b, 1e-12, 50, local).expect("lsmr windowed solve");
+    let opts = MlsmrOptions {
+        local_size: local,
+        ..Default::default()
+    };
     let id_result =
-        mlsmr(&op, &b, &id, 1e-12, 50, local).expect("preconditioned Identity windowed solve");
+        mlsmr(&op, &b, &id, 1e-12, 50, opts).expect("preconditioned Identity windowed solve");
 
     assert!(none_result.converged && id_result.converged);
     // The two paths do the same algebra differently (par_dot on `v` vs on
@@ -540,40 +573,10 @@ fn test_mlsmr_local_reorth_unpreconditioned() {
 
 /// Same shape but preconditioned: the M-weighted MGS path needs to stay
 /// numerically consistent and not lose convergence vs the no-reorth case.
-/// Diagonal preconditioner approximating diag(AᵀA)⁻¹.
 #[test]
 fn test_mlsmr_local_reorth_preconditioned() {
     let op = DenseOp::vandermonde(30, 12);
-
-    // Build M⁻¹ ≈ diag(AᵀA)⁻¹.
-    let mut diag_inv = vec![0.0; op.cols];
-    for (j, di) in diag_inv.iter_mut().enumerate() {
-        let s: f64 = op
-            .data
-            .chunks_exact(op.cols)
-            .map(|row| row[j] * row[j])
-            .sum();
-        *di = if s > 0.0 { 1.0 / s } else { 1.0 };
-    }
-    struct DiagOp(Vec<f64>);
-    impl Operator for DiagOp {
-        fn nrows(&self) -> usize {
-            self.0.len()
-        }
-        fn ncols(&self) -> usize {
-            self.0.len()
-        }
-        fn apply(&self, x: &[f64], y: &mut [f64]) -> Result<(), SolveError> {
-            for ((yi, &xi), &di) in y.iter_mut().zip(x).zip(self.0.iter()) {
-                *yi = di * xi;
-            }
-            Ok(())
-        }
-        fn apply_adjoint(&self, x: &[f64], y: &mut [f64]) -> Result<(), SolveError> {
-            self.apply(x, y)
-        }
-    }
-    let m = DiagOp(diag_inv);
+    let m = jacobi(&op);
 
     let b: Vec<f64> = (0..op.rows)
         .map(|i| {
@@ -584,7 +587,11 @@ fn test_mlsmr_local_reorth_preconditioned() {
     let tol = 1e-9;
     let maxiter = 30;
 
-    let r10 = mlsmr(&op, &b, &m, tol, maxiter, Some(10)).expect("windowed preconditioned solve");
+    let opts = MlsmrOptions {
+        local_size: Some(10),
+        ..Default::default()
+    };
+    let r10 = mlsmr(&op, &b, &m, tol, maxiter, opts).expect("windowed preconditioned solve");
     assert!(
         r10.converged,
         "windowed preconditioned LSMR failed to converge (iters = {})",
@@ -705,10 +712,18 @@ fn test_mlsmr_step1_alpha_zero_early_exit() {
 #[test]
 fn test_mid_stream_breakdown_reports_convergence() {
     let b = vec![5.0, 3.0];
+    let identity = IdentityOp { n: 2 };
     for result in [
         lsmr(&ZeroSecondRow, &b, 1e-12, 100, None).expect("Golub-Kahan breakdown"),
-        mlsmr(&ZeroSecondRow, &b, &IdentityOp { n: 2 }, 1e-12, 100, None)
-            .expect("modified Golub-Kahan breakdown"),
+        mlsmr(
+            &ZeroSecondRow,
+            &b,
+            &identity,
+            1e-12,
+            100,
+            MlsmrOptions::default(),
+        )
+        .expect("modified Golub-Kahan breakdown"),
     ] {
         assert!(result.converged);
         assert_eq!(result.stop_reason, LsmrStopReason::NormalEquationTolerance);
@@ -801,7 +816,14 @@ fn test_mlsmr_rejects_bad_preconditioner_shape() {
     }
 
     let b = vec![1.0, 2.0, 3.0, 3.0];
-    let result = mlsmr(&OverdeterminedOp, &b, &BadPrecond, 1e-10, 100, None);
+    let result = mlsmr(
+        &OverdeterminedOp,
+        &b,
+        &BadPrecond,
+        1e-10,
+        100,
+        MlsmrOptions::default(),
+    );
     assert!(matches!(result, Err(SolveError::InvalidInput { .. })));
 }
 
@@ -833,13 +855,14 @@ fn test_mlsmr_near_breakdown_vp_clamps_to_zero() {
     }
 
     let b = vec![3.0, 4.0];
+    let op = IdentityOp { n: 2 };
     let result = mlsmr(
-        &IdentityOp { n: 2 },
+        &op,
         &b,
         &NearBreakdownPrecond,
         1e-10,
         100,
-        None,
+        MlsmrOptions::default(),
     );
     assert!(
         result.is_ok(),
@@ -873,6 +896,245 @@ fn test_mlsmr_rejects_indefinite_preconditioner() {
     }
 
     let b = vec![3.0, 4.0];
-    let result = mlsmr(&IdentityOp { n: 2 }, &b, &NegIdentity, 1e-10, 100, None);
+    let op = IdentityOp { n: 2 };
+    let result = mlsmr(&op, &b, &NegIdentity, 1e-10, 100, MlsmrOptions::default());
     assert!(matches!(result, Err(SolveError::InvalidInput { .. })));
+}
+
+#[test]
+fn test_mlsmr_warm_tolerance_is_relative_to_original_rhs() {
+    let op = DenseOp::vandermonde(30, 12);
+    let x_true: Vec<f64> = (0..op.cols).map(|j| 1.0 / (1.0 + j as f64)).collect();
+    let mut b = vec![0.0; op.rows];
+    op.apply(&x_true, &mut b).expect("apply");
+    let x0: Vec<f64> = x_true.iter().map(|v| v * 0.9999).collect();
+    let tol = 1e-6;
+    let window = Some(12);
+    let m = jacobi(&op);
+    let base = MlsmrOptions {
+        local_size: window,
+        ..Default::default()
+    };
+    let warm = mlsmr(
+        &op,
+        &b,
+        &m,
+        tol,
+        200,
+        MlsmrOptions {
+            warm_start: Some(&x0),
+            ..base
+        },
+    )
+    .expect("warm solve");
+    assert_eq!(warm.stop_reason, LsmrStopReason::ResidualTolerance);
+
+    let mut r = vec![0.0; op.rows];
+    op.apply(&x0, &mut r).expect("apply");
+    for (ri, bi) in r.iter_mut().zip(&b) {
+        *ri = bi - *ri;
+    }
+    let naive = mlsmr(&op, &r, &m, tol, 200, base).expect("naive restart");
+    assert!(
+        warm.iterations < naive.iterations,
+        "warm took {} iters, naive restart {} — the tolerance basis is not `‖b‖`",
+        warm.iterations,
+        naive.iterations
+    );
+}
+
+/// A zero RHS must not shadow warm-start validation: the same bad `x0` has to be
+/// rejected whether or not `b` short-circuits the solve.
+#[test]
+fn test_mlsmr_rejects_bad_warm_start_for_any_rhs() {
+    let op = IdentityOp { n: 3 };
+    for b in [[1.0, 2.0, 3.0], [0.0, 0.0, 0.0]] {
+        for x0 in [&[0.0, 0.0][..], &[0.0, f64::NAN, 0.0]] {
+            let options = MlsmrOptions {
+                warm_start: Some(x0),
+                ..Default::default()
+            };
+            assert!(matches!(
+                mlsmr(&op, &b, &op, 1e-8, 10, options),
+                Err(SolveError::InvalidInput { .. })
+            ));
+        }
+    }
+}
+
+/// Regression: `A·x₀` overflowing made `b - A·x₀` norm to NaN, which `init` read
+/// as β₁ = 0 and reported as a converged solve with `x = x₀` and a NaN residual.
+#[test]
+fn test_mlsmr_warm_rejects_overflowing_warm_start_residual() {
+    let op = DiagOp(vec![1e200; 3]);
+    let m = IdentityOp { n: 3 };
+    let x0 = [1e200; 3];
+    let options = MlsmrOptions {
+        warm_start: Some(&x0),
+        ..Default::default()
+    };
+    assert!(matches!(
+        mlsmr(&op, &[1.0, 2.0, 3.0], &m, 1e-8, 10, options),
+        Err(SolveError::InvalidInput { .. })
+    ));
+}
+
+#[test]
+fn test_mlsmr_zero_rhs_corrects_non_exact_warm_start() {
+    let op = IdentityOp { n: 3 };
+    let x0 = [1.0, 2.0, 3.0];
+    let options = MlsmrOptions {
+        warm_start: Some(&x0),
+        ..Default::default()
+    };
+    let result = mlsmr(&op, &[0.0, 0.0, 0.0], &op, 1e-10, 10, options).expect("warm correction");
+
+    assert!(result.converged);
+    assert!(vec_norm(&result.x) < 1e-12);
+    assert!(result.iterations > 0);
+}
+
+#[test]
+fn test_mlsmr_exact_warm_start_is_returned_untouched() {
+    let cases: [(&dyn Operator, &[f64], &[f64]); 2] = [
+        (&IdentityOp { n: 3 }, &[1.0, 2.0, 3.0], &[1.0, 2.0, 3.0]),
+        (&ZeroSecondRow, &[0.0, 0.0], &[0.0, 7.0]),
+    ];
+    for (op, b, x0) in cases {
+        let options = MlsmrOptions {
+            warm_start: Some(x0),
+            ..Default::default()
+        };
+        let m = IdentityOp { n: op.ncols() };
+        let result = mlsmr(op, b, &m, 1e-10, 50, options).expect("exact warm start");
+        assert_eq!(result.stop_reason, LsmrStopReason::WarmStartExact);
+        assert!(result.converged);
+        assert_eq!(result.x, x0);
+        assert_eq!(result.iterations, 0);
+    }
+}
+
+#[test]
+fn test_mlsmr_options_are_send_and_sync() {
+    fn assert_send_sync<T: Send + Sync>() {}
+
+    assert_send_sync::<MlsmrOptions<'static>>();
+}
+
+#[derive(Clone, Copy)]
+struct FixedIterations(usize);
+
+impl EscalationPolicy for FixedIterations {
+    fn handler(&self) -> Box<dyn EscalationHandler> {
+        Box::new(*self)
+    }
+}
+
+impl EscalationHandler for FixedIterations {
+    fn should_escalate(&mut self, progress: Progress) -> bool {
+        progress.iteration >= self.0
+    }
+}
+
+#[test]
+fn test_mlsmr_converged_solve_is_never_escalated() {
+    let opts = MlsmrOptions {
+        escalation: Some(&FixedIterations(1)),
+        ..Default::default()
+    };
+    let m = IdentityOp { n: 3 };
+    let result = mlsmr(&IdentityOp { n: 3 }, &[1.0, 2.0, 3.0], &m, 1e-10, 50, opts).expect("solve");
+    assert!(result.converged);
+    assert_ne!(result.stop_reason, LsmrStopReason::Escalated);
+}
+
+#[test]
+fn test_mlsmr_ladder_warm_starts_and_escalates() {
+    let op = DenseOp::vandermonde(30, 12);
+    let b: Vec<f64> = (0..op.rows)
+        .map(|i| (1.0 + i as f64 / (op.rows - 1) as f64).ln())
+        .collect();
+    let (tol, window) = (1e-9, Some(12));
+    let weak = IdentityOp { n: op.cols };
+    let strong = jacobi(&op);
+    let rung = MlsmrOptions {
+        escalation: Some(&FixedIterations(3)),
+        local_size: window,
+        ..Default::default()
+    };
+    let final_rung = MlsmrOptions {
+        local_size: window,
+        ..Default::default()
+    };
+
+    let first = mlsmr(&op, &b, &weak, tol, 200, rung).expect("first rung");
+    assert_eq!(first.stop_reason, LsmrStopReason::Escalated);
+
+    let middle = mlsmr(
+        &op,
+        &b,
+        &weak,
+        tol,
+        200,
+        MlsmrOptions {
+            warm_start: Some(&first.x),
+            ..rung
+        },
+    )
+    .expect("middle rung");
+    assert_eq!(middle.stop_reason, LsmrStopReason::Escalated);
+
+    let last = mlsmr(
+        &op,
+        &b,
+        &strong,
+        tol,
+        200,
+        MlsmrOptions {
+            warm_start: Some(&middle.x),
+            ..final_rung
+        },
+    )
+    .expect("last rung");
+    assert!(last.converged);
+
+    let cold = mlsmr(&op, &b, &strong, tol, 200, final_rung).expect("cold solve");
+    let ladder = normal_equation_residual(&op, &last.x, &b);
+    assert!(
+        ladder <= 10.0 * normal_equation_residual(&op, &cold.x, &b).max(1e-14),
+        "ladder landed short of a cold solve: {ladder}"
+    );
+}
+
+#[test]
+fn test_staleness_escalates_only_the_stalling_preconditioner() {
+    let rule = Staleness::try_new(4, 0.7).expect("valid staleness policy");
+    let progress = |iteration, normal_eq_residual| Progress {
+        iteration,
+        normal_eq_residual,
+    };
+    let mut stalled = rule.handler();
+    for (iteration, residual) in [1.0, 0.8, 0.64, 0.512].into_iter().enumerate() {
+        assert!(!stalled.should_escalate(progress(iteration + 1, residual)));
+    }
+    assert!(stalled.should_escalate(progress(5, 0.4096)));
+
+    let mut contracting = rule.handler();
+    for (iteration, residual) in [1.0, 0.5, 0.25, 0.125, 0.0625].into_iter().enumerate() {
+        assert!(!contracting.should_escalate(progress(iteration + 1, residual)));
+    }
+}
+
+#[test]
+fn test_staleness_rejects_invalid_configuration() {
+    assert!(matches!(
+        Staleness::try_new(0, 0.7),
+        Err(StalenessError::ZeroWindow)
+    ));
+    for threshold in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY, -0.1, 1.0, 1.5] {
+        assert!(matches!(
+            Staleness::try_new(4, threshold),
+            Err(StalenessError::InvalidThreshold { .. })
+        ));
+    }
 }
