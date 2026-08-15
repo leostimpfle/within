@@ -440,6 +440,12 @@ impl PyPreconditioner {
         }
     }
 
+    /// Time in seconds spent building this preconditioner.
+    #[getter]
+    fn build_time_seconds(&self) -> f64 {
+        self.inner.build_duration().as_secs_f64()
+    }
+
     fn __repr__(&self) -> String {
         let variant = match self.inner.config() {
             PreconditionerConfig::Additive { .. } => "Additive",
