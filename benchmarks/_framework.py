@@ -21,9 +21,8 @@ from typing import Any, Callable, Literal, TypeVar
 import numpy as np
 from numpy.typing import NDArray
 
-from within import LsmrOptions, solve
+from within import LsmrOptions, PreconditionerConfig, solve
 from within._within import (
-    AdditiveSchwarz,
     ApproxCholConfig,
     ApproxSchurConfig,
     Schur,
@@ -187,9 +186,11 @@ def benchmark_lsmr(
     )
 
 
-def make_additive_schwarz(local_solver: Any) -> AdditiveSchwarz:
+def make_additive_schwarz(local_solver: Any) -> PreconditionerConfig:
     """Construct additive Schwarz using the default Auto reduction mode."""
-    return AdditiveSchwarz(local_solver=local_solver, reduction=ReductionStrategy.Auto)
+    return PreconditionerConfig.additive(
+        local_solver=local_solver, reduction=ReductionStrategy.Auto
+    )
 
 
 def standard_solver_configs(

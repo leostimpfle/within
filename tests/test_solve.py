@@ -4,7 +4,7 @@ import warnings
 
 import numpy as np
 import pytest
-
+from conftest import as_solver_categories, generate_synthetic_data
 from within import (
     BatchSolveResult,
     CoefficientLayout,
@@ -15,9 +15,7 @@ from within import (
     Solver,
     solve,
 )
-from within.config import AdditiveSchwarz, LocalSolverConfig, ScalingConfig
-
-from conftest import as_solver_categories, generate_synthetic_data
+from within.config import LocalSolverConfig, ScalingConfig
 
 
 def assert_normal_equations_satisfied(cats, y, result, tol, weights=None):
@@ -112,7 +110,7 @@ def test_one_shot_solve_surfaces_build_warnings():
     from within import solve_batch
 
     design = [Effect(f, True, [z]), Effect(g, True)]
-    precond = AdditiveSchwarz(
+    precond = PreconditionerConfig.additive(
         local_solver=LocalSolverConfig(scaling=ScalingConfig(max_sweeps=0))
     )
 
@@ -185,13 +183,13 @@ class TestPreconditioners:
         assert result.converged
 
     def test_advanced_additive_schwarz(self, problem):
-        """Test advanced config via AdditiveSchwarz."""
+        """Test advanced config via PreconditionerConfig.additive()."""
         cats, y = problem
         result = solve(
             as_solver_categories(cats),
             y,
             options=LsmrOptions(),
-            preconditioner=AdditiveSchwarz(),
+            preconditioner=PreconditionerConfig.additive(),
         )
         assert result.converged
 
@@ -455,18 +453,6 @@ class TestSolverSerde:
         solver2 = Solver(categories, preconditioner=precond2)
         r2 = solver2.solve(y)
         np.testing.assert_allclose(r2.x, r1.x, atol=1e-10)
-
-
-# ---------------------------------------------------------------------------
-# Convenience alias tests
-# ---------------------------------------------------------------------------
-
-
-class TestAliases:
-    def test_additive_alias(self, problem):
-        cats, y = problem
-        result = solve(as_solver_categories(cats), y, preconditioner=AdditiveSchwarz())
-        assert result.converged
 
 
 class TestSolveBatchFreeFunction:

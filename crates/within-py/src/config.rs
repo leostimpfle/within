@@ -15,8 +15,9 @@ use within::{Preconditioner, PreconditionerInput};
 
 use crate::convert::IntoPyErr;
 
-#[pyclass(frozen, module = "within._within")]
+#[pyclass(frozen, eq, module = "within._within")]
 #[pyo3(name = "ApproxCholConfig")]
+#[derive(PartialEq, Eq)]
 pub struct PyApproxCholConfig {
     #[pyo3(get)]
     pub seed: u64,
@@ -42,8 +43,9 @@ impl PyApproxCholConfig {
     }
 }
 
-#[pyclass(frozen, module = "within._within")]
+#[pyclass(frozen, eq, module = "within._within")]
 #[pyo3(name = "ApproxSchurConfig")]
+#[derive(PartialEq, Eq)]
 pub struct PyApproxSchurConfig {
     #[pyo3(get)]
     pub seed: u64,
@@ -75,9 +77,9 @@ impl PyApproxSchurConfig {
 }
 
 /// Schur reduction mode: approximate (the library default) or exact.
-#[pyclass(frozen, skip_from_py_object, module = "within._within")]
+#[pyclass(frozen, eq, module = "within._within")]
 #[pyo3(name = "Schur")]
-#[derive(Clone)]
+#[derive(PartialEq)]
 pub struct PySchur {
     inner: SchurMode,
 }
@@ -104,6 +106,18 @@ impl PySchur {
         }
     }
 
+    /// Approximate-Schur settings, or `None` for the exact variant.
+    #[getter]
+    fn config(&self) -> Option<PyApproxSchurConfig> {
+        match &self.inner {
+            SchurMode::Approximate(config) => Some(PyApproxSchurConfig {
+                seed: config.seed,
+                split: config.split,
+            }),
+            SchurMode::Exact => None,
+        }
+    }
+
     fn __repr__(&self) -> String {
         match &self.inner {
             SchurMode::Approximate(cfg) => {
@@ -121,8 +135,9 @@ impl PySchur {
 }
 
 /// Certification policy for the diagonal scaling of signed components.
-#[pyclass(frozen, module = "within._within")]
+#[pyclass(frozen, eq, module = "within._within")]
 #[pyo3(name = "ScalingConfig")]
+#[derive(PartialEq)]
 pub struct PyScalingConfig {
     #[pyo3(get)]
     pub tolerance: f64,
@@ -177,16 +192,6 @@ impl PyScalingConfig {
     }
 }
 
-/// Preconditioner shortcut: ``Additive`` (default), ``Off``, or ``Diagonal``.
-#[pyclass(frozen, eq, eq_int, from_py_object, module = "within._within")]
-#[pyo3(name = "PreconditionerConfig")]
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub enum PyPreconditionerConfig {
-    Additive = 0,
-    Off = 1,
-    Diagonal = 2,
-}
-
 #[pyclass(frozen, eq, eq_int, from_py_object, module = "within._within")]
 #[pyo3(name = "ReductionStrategy")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -206,17 +211,11 @@ impl PyReductionStrategy {
     }
 }
 
-#[pyclass(frozen, module = "within._within")]
+#[pyclass(frozen, eq, module = "within._within")]
 #[pyo3(name = "LocalSolverConfig")]
+#[derive(PartialEq)]
 pub struct PyLocalSolverConfig {
-    #[pyo3(get)]
-    pub approx_chol: Option<Py<PyApproxCholConfig>>,
-    #[pyo3(get)]
-    pub schur: Option<Py<PySchur>>,
-    #[pyo3(get)]
-    pub dense_threshold: usize,
-    #[pyo3(get)]
-    pub scaling: Option<Py<PyScalingConfig>>,
+    inner: LocalSolverConfig,
 }
 
 #[pymethods]
@@ -224,65 +223,143 @@ impl PyLocalSolverConfig {
     #[new]
     #[pyo3(signature = (approx_chol=None, schur=None, dense_threshold=None, scaling=None))]
     fn new(
+        py: Python<'_>,
         approx_chol: Option<Py<PyApproxCholConfig>>,
         schur: Option<Py<PySchur>>,
         dense_threshold: Option<usize>,
         scaling: Option<Py<PyScalingConfig>>,
     ) -> Self {
+        let default = LocalSolverConfig::default();
         Self {
-            approx_chol,
-            schur,
-            dense_threshold: dense_threshold
-                .unwrap_or_else(|| LocalSolverConfig::default().dense_threshold),
-            scaling,
+            inner: LocalSolverConfig {
+                approx_chol: approx_chol
+                    .map(|c| c.bind(py).get().to_native())
+                    .unwrap_or(default.approx_chol),
+                schur: schur
+                    .map(|s| s.bind(py).get().to_native())
+                    .unwrap_or(default.schur),
+                dense_threshold: dense_threshold.unwrap_or(default.dense_threshold),
+                scaling: scaling
+                    .map(|c| c.bind(py).get().to_native())
+                    .unwrap_or(default.scaling),
+            },
+        }
+    }
+
+    #[getter]
+    fn approx_chol(&self) -> PyApproxCholConfig {
+        PyApproxCholConfig {
+            seed: self.inner.approx_chol.seed,
+            split_merge: self.inner.approx_chol.split_merge,
+        }
+    }
+
+    #[getter]
+    fn schur(&self) -> PySchur {
+        PySchur {
+            inner: self.inner.schur.clone(),
+        }
+    }
+
+    #[getter]
+    fn dense_threshold(&self) -> usize {
+        self.inner.dense_threshold
+    }
+
+    #[getter]
+    fn scaling(&self) -> PyScalingConfig {
+        PyScalingConfig {
+            tolerance: self.inner.scaling.tolerance,
+            max_sweeps: self.inner.scaling.max_sweeps,
+            on_failure: self.inner.scaling.on_failure,
         }
     }
 }
 
 impl PyLocalSolverConfig {
-    pub(crate) fn to_native(&self, py: Python<'_>) -> LocalSolverConfig {
-        let approx_chol = self
-            .approx_chol
-            .as_ref()
+    pub(crate) fn to_native(&self) -> LocalSolverConfig {
+        self.inner.clone()
+    }
+}
+
+/// Complete construction recipe for every supported preconditioner variant.
+#[pyclass(frozen, eq, module = "within._within")]
+#[pyo3(name = "PreconditionerConfig")]
+#[derive(PartialEq)]
+pub struct PyPreconditionerConfig {
+    inner: PreconditionerConfig,
+}
+
+#[pymethods]
+impl PyPreconditionerConfig {
+    #[classattr]
+    #[pyo3(name = "Additive")]
+    fn additive_default() -> Self {
+        Self {
+            inner: PreconditionerConfig::default(),
+        }
+    }
+
+    #[classattr]
+    #[pyo3(name = "Off")]
+    fn off() -> Self {
+        Self {
+            inner: PreconditionerConfig::Off,
+        }
+    }
+
+    #[classattr]
+    #[pyo3(name = "Diagonal")]
+    fn diagonal() -> Self {
+        Self {
+            inner: PreconditionerConfig::Diagonal,
+        }
+    }
+
+    #[staticmethod]
+    #[pyo3(signature = (local_solver=None, reduction=PyReductionStrategy::Auto))]
+    fn additive(
+        py: Python<'_>,
+        local_solver: Option<Py<PyLocalSolverConfig>>,
+        reduction: PyReductionStrategy,
+    ) -> Self {
+        let local_solver = local_solver
             .map(|c| c.bind(py).get().to_native())
-            .unwrap_or_else(|| LocalSolverConfig::default().approx_chol);
-        let schur = self
-            .schur
-            .as_ref()
-            .map(|s| s.bind(py).get().to_native())
             .unwrap_or_default();
-        let scaling = self
-            .scaling
-            .as_ref()
-            .map(|c| c.bind(py).get().to_native())
-            .unwrap_or_default();
-        LocalSolverConfig {
-            approx_chol,
-            schur,
-            dense_threshold: self.dense_threshold,
-            scaling,
+        Self {
+            inner: PreconditionerConfig::Additive {
+                local_solver,
+                reduction: reduction.to_native(),
+            },
+        }
+    }
+
+    #[getter]
+    fn local_solver(&self) -> Option<PyLocalSolverConfig> {
+        match &self.inner {
+            PreconditionerConfig::Additive { local_solver, .. } => Some(PyLocalSolverConfig {
+                inner: local_solver.clone(),
+            }),
+            _ => None,
+        }
+    }
+
+    #[getter]
+    fn reduction(&self) -> Option<PyReductionStrategy> {
+        match &self.inner {
+            PreconditionerConfig::Additive { reduction, .. } => Some(match reduction {
+                ReductionStrategy::Auto => PyReductionStrategy::Auto,
+                ReductionStrategy::AtomicScatter => PyReductionStrategy::AtomicScatter,
+                ReductionStrategy::ParallelReduction => PyReductionStrategy::ParallelReduction,
+            }),
+            _ => None,
         }
     }
 }
 
-#[pyclass(frozen, module = "within._within")]
-#[pyo3(name = "AdditiveSchwarz")]
-pub struct PyAdditiveSchwarz {
-    #[pyo3(get)]
-    pub local_solver: Option<Py<PyLocalSolverConfig>>,
-    #[pyo3(get)]
-    pub reduction: PyReductionStrategy,
-}
-
-#[pymethods]
-impl PyAdditiveSchwarz {
-    #[new]
-    #[pyo3(signature = (local_solver=None, reduction=PyReductionStrategy::Auto))]
-    fn new(local_solver: Option<Py<PyLocalSolverConfig>>, reduction: PyReductionStrategy) -> Self {
-        Self {
-            local_solver,
-            reduction,
-        }
+impl PyPreconditionerConfig {
+    pub(crate) fn to_native(&self) -> PreconditionerConfig {
+        self.inner.clone()
     }
 }
 
@@ -355,12 +432,21 @@ impl PyPreconditioner {
         self.inner.ncols()
     }
 
+    /// Complete normalized configuration used to build this preconditioner.
+    #[getter]
+    fn config(&self) -> PyPreconditionerConfig {
+        PyPreconditionerConfig {
+            inner: self.inner.config().clone(),
+        }
+    }
+
     fn __repr__(&self) -> String {
-        format!(
-            "Preconditioner({}, n={})",
-            self.inner.variant_name(),
-            self.inner.nrows()
-        )
+        let variant = match self.inner.config() {
+            PreconditionerConfig::Additive { .. } => "Additive",
+            PreconditionerConfig::Diagonal => "Diagonal",
+            _ => "Unknown",
+        };
+        format!("Preconditioner({variant}, n={})", self.inner.nrows())
     }
 
     /// Pickle support: serialize to ``(bytes,)`` constructor arg.
@@ -390,7 +476,6 @@ impl PyPreconditioner {
 
 /// Must run under the GIL; the result is all-native, so it can move into a released closure.
 pub(crate) fn resolve_precond_input(
-    py: Python<'_>,
     preconditioner: Option<&Bound<'_, PyAny>>,
 ) -> PyResult<PreconditionerInput> {
     if let Some(obj) = preconditioner {
@@ -398,43 +483,23 @@ pub(crate) fn resolve_precond_input(
             return Ok(PreconditionerInput::Prebuilt(built.get().inner.clone()));
         }
     }
-    Ok(extract_preconditioner_config(py, preconditioner)?
+    Ok(extract_preconditioner_config(preconditioner)?
         .map_or(PreconditionerInput::Default, PreconditionerInput::Config))
 }
 
 fn extract_preconditioner_config(
-    py: Python<'_>,
     preconditioner: Option<&Bound<'_, PyAny>>,
 ) -> PyResult<Option<PreconditionerConfig>> {
     let Some(obj) = preconditioner else {
         return Ok(None);
     };
 
-    if let Ok(p) = obj.extract::<PyPreconditionerConfig>() {
-        return Ok(Some(match p {
-            PyPreconditionerConfig::Off => PreconditionerConfig::Off,
-            PyPreconditionerConfig::Additive => PreconditionerConfig::default(),
-            PyPreconditionerConfig::Diagonal => PreconditionerConfig::Diagonal,
-        }));
-    }
-
-    if let Ok(schwarz) = obj.cast::<PyAdditiveSchwarz>() {
-        let s = schwarz.get();
-        let local = s
-            .local_solver
-            .as_ref()
-            .map(|c| c.bind(py).get().to_native(py))
-            .unwrap_or_default();
-        let reduction = s.reduction.to_native();
-        return Ok(Some(PreconditionerConfig::Additive {
-            local_solver: local,
-            reduction,
-        }));
+    if let Ok(config) = obj.cast::<PyPreconditionerConfig>() {
+        return Ok(Some(config.get().to_native()));
     }
 
     Err(PyErr::new::<pyo3::exceptions::PyTypeError, _>(
-        "preconditioner must be PreconditionerConfig.Additive, PreconditionerConfig.Off, \
-         PreconditionerConfig.Diagonal, AdditiveSchwarz(...), a pre-built Preconditioner, or None",
+        "preconditioner must be a PreconditionerConfig, a pre-built Preconditioner, or None",
     ))
 }
 

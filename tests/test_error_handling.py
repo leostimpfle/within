@@ -3,9 +3,8 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from within import Effect, Solver, solve, solve_batch
+from within import Effect, PreconditionerConfig, Solver, solve, solve_batch
 from within._within import ApproxSchurConfig
-from within.config import AdditiveSchwarz
 
 from conftest import as_solver_categories
 
@@ -82,7 +81,7 @@ class TestErrorHandling:
         y = np.array([1.0, 2.0, 3.0])
         with pytest.raises(TypeError) as exc:
             solve(cats, y, preconditioner="invalid")
-        assert "PreconditionerConfig.Diagonal" in str(exc.value)
+        assert "PreconditionerConfig" in str(exc.value)
 
     @pytest.mark.parametrize(
         "call",
@@ -98,10 +97,10 @@ class TestErrorHandling:
         with pytest.raises(TypeError, match="2-D uint32 array or a list of Effect"):
             call("invalid")
 
-    def test_additive_schwarz_rejects_local_solver_type(self):
+    def test_additive_config_rejects_local_solver_type(self):
         """A wrong-type local_solver should raise at construction, not at solve."""
         with pytest.raises(TypeError):
-            AdditiveSchwarz(local_solver="invalid")
+            PreconditionerConfig.additive(local_solver="invalid")
 
     def test_approx_schur_config_split_zero_raises(self):
         """ApproxSchurConfig(split=0) should raise ValueError."""

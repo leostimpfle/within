@@ -9,6 +9,10 @@ and this project follows [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+- **BREAKING:** Python preconditioner selection is unified under the immutable `PreconditionerConfig` value class: the existing `.Additive`, `.Off`, and `.Diagonal` values remain, while `.additive(...)` replaces the separate `AdditiveSchwarz` class for tuned configurations.
+- **BREAKING:** Python `LocalSolverConfig` getters now expose normalized defaults: when `approx_chol`, `schur`, or `scaling` is omitted, the corresponding property returns the effective default configuration instead of `None`. Solver behavior is unchanged.
+- **BREAKING:** The serialized `Preconditioner` wire format changed (v13 → v14) to retain its complete construction config and configured reduction strategy; older additive payloads no longer decode.
+- Rust and Python built `Preconditioner` objects expose the complete normalized construction config through `.config`; Python configs compare structurally for cache validation.
 - **BREAKING:** `schwarz_precond::mlsmr` takes an `MlsmrOptions` in place of its trailing `local_size`.
 - **BREAKING:** `LsmrStopReason` gains `Escalated` and `WarmStartExact`, breaking exhaustive `match`es.
 - A warm start that already solves the system reports `WarmStartExact` instead of `ZeroRhs`.

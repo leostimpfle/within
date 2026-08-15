@@ -4,15 +4,15 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use crate::config::{
-    ApproxCholConfig, ApproxSchurConfig, LocalSolverConfig, ScalingConfig, SchurMode,
-    DEFAULT_DENSE_SCHUR_THRESHOLD,
+    ApproxCholConfig, ApproxSchurConfig, LocalSolverConfig, PreconditionerConfig, ScalingConfig,
+    SchurMode, DEFAULT_DENSE_SCHUR_THRESHOLD,
 };
 use schwarz_precond::SubdomainCore;
 
 use crate::csr_block::CsrBlock;
 use crate::domain::{build_local_domains, Design, LocalDomain};
 use crate::domain::{CrossTab, LocalComponent};
-use crate::operator::schwarz::build_additive_with_strategy;
+use crate::operator::schwarz::{build_additive_with_strategy, FeSchwarz};
 use schwarz_precond::{LocalSolver, Operator, ReductionStrategy};
 
 const BLOCK_ELIM_NESTED_RAYON_CHILD_ENV: &str = "WITHIN_TEST_BLOCK_ELIM_NESTED_RAYON_CHILD";
@@ -210,6 +210,27 @@ fn test_build_additive_with_strategy() {
     let r = vec![1.0; design.n_dofs];
     let mut z = vec![0.0; design.n_dofs];
     schwarz.apply(&r, &mut z).expect("schwarz apply succeeds");
+}
+
+#[test]
+fn additive_deserialization_rejects_mismatched_reduction_config() {
+    let (design, domain_pairs) = make_test_data();
+    let local_solver = LocalSolverConfig::default();
+    let mut schwarz = build_additive_with_strategy(
+        domain_pairs,
+        &local_solver,
+        ReductionStrategy::AtomicScatter,
+        design.n_dofs,
+    )
+    .expect("build additive preconditioner");
+    schwarz.config = PreconditionerConfig::Additive {
+        local_solver,
+        reduction: ReductionStrategy::ParallelReduction,
+    };
+
+    let bytes = postcard::to_stdvec(&schwarz).expect("serialize inconsistent fixture");
+    postcard::from_bytes::<FeSchwarz>(&bytes)
+        .expect_err("mismatched reduction config must be rejected");
 }
 
 /// Three-entry eliminated stars, so clique sampling is not

@@ -17,32 +17,62 @@ use crate::{BuildError, BuildWarning};
 mod tests;
 
 /// Concrete additive Schwarz type used in the parent crate.
-#[derive(Clone, Serialize, Deserialize)]
-pub(crate) struct FeSchwarz(SchwarzPreconditioner<BlockElimSolver>);
+#[derive(Clone, Serialize)]
+pub(crate) struct FeSchwarz {
+    inner: SchwarzPreconditioner<BlockElimSolver>,
+    config: PreconditionerConfig,
+}
+
+impl<'de> Deserialize<'de> for FeSchwarz {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        struct Helper {
+            inner: SchwarzPreconditioner<BlockElimSolver>,
+            config: PreconditionerConfig,
+        }
+
+        let helper = Helper::deserialize(deserializer)?;
+        let PreconditionerConfig::Additive { reduction, .. } = &helper.config else {
+            return Err(serde::de::Error::custom(
+                "FeSchwarz must carry an additive preconditioner config",
+            ));
+        };
+        if helper.inner.configured_reduction_strategy() != *reduction {
+            return Err(serde::de::Error::custom(
+                "FeSchwarz config reduction does not match its built preconditioner",
+            ));
+        }
+        Ok(Self {
+            inner: helper.inner,
+            config: helper.config,
+        })
+    }
+}
 
 impl std::fmt::Debug for FeSchwarz {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("FeSchwarz")
-            .field("n_subdomains", &self.0.subdomains().len())
+            .field("n_subdomains", &self.inner.subdomains().len())
+            .field("config", &self.config)
             .finish()
     }
 }
 
 impl Operator for FeSchwarz {
     fn nrows(&self) -> usize {
-        self.0.nrows()
+        self.inner.nrows()
     }
 
     fn ncols(&self) -> usize {
-        self.0.ncols()
+        self.inner.ncols()
     }
 
     fn apply(&self, x: &[f64], y: &mut [f64]) -> Result<(), schwarz_precond::SolveError> {
-        self.0.apply(x, y)
+        self.inner.apply(x, y)
     }
 
     fn apply_adjoint(&self, x: &[f64], y: &mut [f64]) -> Result<(), schwarz_precond::SolveError> {
-        self.0.apply_adjoint(x, y)
+        self.inner.apply_adjoint(x, y)
     }
 }
 
@@ -97,9 +127,19 @@ pub(crate) fn build_additive_with_strategy(
         .into_par_iter()
         .map(|domain| build_entry(domain, config))
         .collect::<Result<Vec<_>, BuildError>>()?;
-    Ok(FeSchwarz(SchwarzPreconditioner::with_n_dofs(
-        entries, n_dofs, strategy,
-    )))
+    Ok(FeSchwarz {
+        inner: SchwarzPreconditioner::with_n_dofs(entries, n_dofs, strategy),
+        config: PreconditionerConfig::Additive {
+            local_solver: config.clone(),
+            reduction: strategy,
+        },
+    })
+}
+
+impl FeSchwarz {
+    fn config(&self) -> &PreconditionerConfig {
+        &self.config
+    }
 }
 
 /// Build a single `SubdomainEntry<BlockElimSolver>` from a pre-built CrossTab.
@@ -127,11 +167,12 @@ enum Variant {
 }
 
 impl Preconditioner {
-    /// Stable display name for the concrete preconditioner variant.
-    pub fn variant_name(&self) -> &'static str {
+    /// Complete configuration used to build this preconditioner.
+    pub fn config(&self) -> &PreconditionerConfig {
+        const DIAGONAL: PreconditionerConfig = PreconditionerConfig::Diagonal;
         match &self.inner {
-            Variant::Additive(_) => "Additive",
-            Variant::Diagonal(_) => "Diagonal",
+            Variant::Additive(p) => p.config(),
+            Variant::Diagonal(_) => &DIAGONAL,
         }
     }
 

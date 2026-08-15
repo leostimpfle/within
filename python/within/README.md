@@ -92,13 +92,16 @@ solver2 = Solver(fe, preconditioner=precond)   # skip re-factorization
 
 | Class | Description |
 |---|---|
-| `AdditiveSchwarz(local_solver?)` | Additive one-level Schwarz (import from `within.config`). |
+| `PreconditionerConfig.additive(local_solver?, reduction?)` | Tuned additive one-level Schwarz. |
 | `PreconditionerConfig.Off` | Disable preconditioning. |
 | `PreconditionerConfig.Additive` | Additive Schwarz shortcut (equivalent to `None`). |
 | `PreconditionerConfig.Diagonal` | Diagonal/Jacobi preconditioner using `diag(D^T W D)^{-1}`. |
 | `Preconditioner` (built) | Reuse a previously-built preconditioner across solvers. |
 
 Pass `None` (the default) to use additive Schwarz with the default local solver.
+
+Configuration values compare structurally. A built preconditioner exposes its
+normalized recipe as `.config`, including after a pickle round-trip.
 
 ### Local solver configuration (advanced)
 

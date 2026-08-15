@@ -1,5 +1,9 @@
 use ndarray::array;
-use within::{solve, Effect, LsmrOptions, Preconditioner, PreconditionerConfig, Solver};
+use within::{
+    solve, ApproxCholConfig, ApproxSchurConfig, Effect, LocalSolverConfig, LsmrOptions,
+    Preconditioner, PreconditionerConfig, ReductionStrategy, ScalingConfig, ScalingFailure,
+    SchurMode, Solver,
+};
 
 #[path = "common/orchestrate_helpers.rs"]
 mod common;
@@ -95,6 +99,36 @@ fn test_diagonal_preconditioner_single_factor_is_cached() {
         .expect("single-factor diagonal preconditioner should be cached");
     assert_eq!(cached.nrows(), 3);
     assert_eq!(cached.ncols(), 3);
+    assert_eq!(cached.config(), &precond);
+}
+
+#[test]
+fn test_additive_preconditioner_config_round_trips() {
+    let (categories, _) = categories_and_y();
+    let config = PreconditionerConfig::Additive {
+        local_solver: LocalSolverConfig {
+            approx_chol: ApproxCholConfig {
+                seed: 41,
+                split_merge: Some(3),
+            },
+            schur: SchurMode::Approximate(ApproxSchurConfig { seed: 17, split: 2 }),
+            dense_threshold: 0,
+            scaling: ScalingConfig {
+                tolerance: 1e-7,
+                max_sweeps: 123,
+                on_failure: ScalingFailure::Error,
+            },
+        },
+        reduction: ReductionStrategy::AtomicScatter,
+    };
+    let solver = Solver::new(categories.view(), None, &config).expect("solver build");
+    let built = solver.preconditioner().expect("additive preconditioner");
+    assert_eq!(built.config(), &config);
+
+    let bytes = postcard::to_stdvec(built).expect("serialize preconditioner");
+    let restored: Preconditioner =
+        postcard::from_bytes(&bytes).expect("deserialize preconditioner");
+    assert_eq!(restored.config(), &config);
 }
 
 #[test]

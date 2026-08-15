@@ -9,21 +9,20 @@ import numpy as np
 from numpy.typing import NDArray
 
 class PreconditionerConfig:
-    """Preconditioner selection shortcut for the LSMR solver.
-
-    Not an ``Enum``: the members below are class attributes (not iterable, so
-    ``list(PreconditionerConfig)`` raises). Use them for defaults, or pass an
-    ``AdditiveSchwarz`` instance for fine-grained control.
-
-    Attributes:
-        Additive: Additive Schwarz (default).
-        Off: No preconditioner. Useful for debugging or well-conditioned problems.
-        Diagonal: Diagonal/Jacobi preconditioner.
-    """
+    """Complete immutable construction recipe for a preconditioner."""
 
     Additive: PreconditionerConfig
     Off: PreconditionerConfig
     Diagonal: PreconditionerConfig
+    @staticmethod
+    def additive(
+        local_solver: LocalSolverConfig | None = None,
+        reduction: ReductionStrategy = ...,
+    ) -> PreconditionerConfig: ...
+    @property
+    def local_solver(self) -> LocalSolverConfig | None: ...
+    @property
+    def reduction(self) -> ReductionStrategy | None: ...
 
 class ReductionStrategy:
     """Strategy for combining subdomain contributions in additive Schwarz.
@@ -215,9 +214,7 @@ def solve(
     y: NDArray[np.float64],
     weights: NDArray[np.float64] | None = None,
     options: LsmrOptions | None = None,
-    preconditioner: (
-        PreconditionerConfig | AdditiveSchwarz | Preconditioner | None
-    ) = None,
+    preconditioner: (PreconditionerConfig | Preconditioner | None) = None,
 ) -> SolveResult:
     """Solve fixed-effects normal equations for a single response vector.
 
@@ -234,13 +231,13 @@ def solve(
             Default: unit weights (unweighted).
         options: LSMR solver tuning. Pass ``LsmrOptions(...)`` to override
             defaults. Default: ``LsmrOptions(tol=1e-8, maxiter=1000)``.
-        preconditioner: Controls preconditioning. Five input forms are accepted:
+        preconditioner: Controls preconditioning. Three input types are accepted:
             ``None`` (default) builds the additive Schwarz preconditioner with
-            default settings. ``PreconditionerConfig.Off`` disables it.
-            ``PreconditionerConfig.Diagonal`` uses diagonal/Jacobi scaling.
-            ``AdditiveSchwarz(...)`` overrides the local-solver / reduction
-            settings. A previously-built ``Preconditioner`` instance reuses an
-            existing factorisation.
+            default settings. ``PreconditionerConfig.Off`` disables it;
+            ``PreconditionerConfig.Diagonal`` uses diagonal/Jacobi scaling;
+            ``PreconditionerConfig.additive(...)`` tunes the local solver and
+            reduction settings. A previously-built ``Preconditioner`` instance
+            reuses an existing factorisation.
 
     Returns:
         A ``SolveResult`` with coefficients, demeaned response, convergence
@@ -277,9 +274,7 @@ def solve_batch(
     Y: NDArray[np.float64],
     weights: NDArray[np.float64] | None = None,
     options: LsmrOptions | None = None,
-    preconditioner: (
-        PreconditionerConfig | AdditiveSchwarz | Preconditioner | None
-    ) = None,
+    preconditioner: (PreconditionerConfig | Preconditioner | None) = None,
 ) -> BatchSolveResult:
     """Solve fixed-effects normal equations for multiple response vectors.
 
@@ -325,6 +320,8 @@ class Preconditioner:
     def nrows(self) -> int: ...
     @property
     def ncols(self) -> int: ...
+    @property
+    def config(self) -> PreconditionerConfig: ...
     def __repr__(self) -> str: ...
     def __reduce__(self) -> tuple: ...
 
@@ -339,9 +336,7 @@ class Solver:
         self,
         design: NDArray[np.uint32] | list[Effect],
         weights: NDArray[np.float64] | None = None,
-        preconditioner: (
-            PreconditionerConfig | AdditiveSchwarz | Preconditioner | None
-        ) = None,
+        preconditioner: (PreconditionerConfig | Preconditioner | None) = None,
     ) -> None: ...
     def solve(
         self,
@@ -399,6 +394,8 @@ class Schur:
     def approximate(config: ApproxSchurConfig | None = None) -> Schur: ...
     @staticmethod
     def exact() -> Schur: ...
+    @property
+    def config(self) -> ApproxSchurConfig | None: ...
 
 class ScalingConfig:
     """Certification policy for the diagonal scaling of signed components.
@@ -428,30 +425,17 @@ class LocalSolverConfig:
     """
 
     @property
-    def approx_chol(self) -> ApproxCholConfig | None: ...
+    def approx_chol(self) -> ApproxCholConfig: ...
     @property
-    def schur(self) -> Schur | None: ...
+    def schur(self) -> Schur: ...
     @property
     def dense_threshold(self) -> int: ...
     @property
-    def scaling(self) -> ScalingConfig | None: ...
+    def scaling(self) -> ScalingConfig: ...
     def __init__(
         self,
         approx_chol: ApproxCholConfig | None = None,
         schur: Schur | None = None,
         dense_threshold: int | None = None,
         scaling: ScalingConfig | None = None,
-    ) -> None: ...
-
-class AdditiveSchwarz:
-    """Additive Schwarz preconditioner with configurable local solver."""
-
-    @property
-    def local_solver(self) -> LocalSolverConfig | None: ...
-    @property
-    def reduction(self) -> ReductionStrategy: ...
-    def __init__(
-        self,
-        local_solver: LocalSolverConfig | None = None,
-        reduction: ReductionStrategy = ReductionStrategy.Auto,
     ) -> None: ...
