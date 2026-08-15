@@ -7,7 +7,6 @@ import pytest
 
 from within import LsmrOptions, Preconditioner, PreconditionerConfig, Solver, solve
 from within._within import (
-    AdditiveSchwarz,
     ApproxCholConfig,
     ApproxSchurConfig,
     LocalSolverConfig,
@@ -88,7 +87,7 @@ class TestAdvancedConfigs:
                 cats,
                 y,
                 options=LsmrOptions(maxiter=2000),
-                preconditioner=AdditiveSchwarz(local_solver=local),
+                preconditioner=PreconditionerConfig.additive(local_solver=local),
             )
             assert result.converged
 
@@ -98,7 +97,9 @@ class TestAdvancedConfigs:
             as_solver_categories(cats),
             y,
             options=LsmrOptions(),
-            preconditioner=AdditiveSchwarz(local_solver=LocalSolverConfig()),
+            preconditioner=PreconditionerConfig.additive(
+                local_solver=LocalSolverConfig()
+            ),
         )
         assert result.converged
 

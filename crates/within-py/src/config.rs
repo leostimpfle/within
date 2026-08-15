@@ -316,27 +316,6 @@ impl PyLocalSolverConfig {
 }
 
 #[pyclass(frozen, module = "within._within")]
-#[pyo3(name = "AdditiveSchwarz")]
-pub struct PyAdditiveSchwarz {
-    #[pyo3(get)]
-    pub local_solver: Option<Py<PyLocalSolverConfig>>,
-    #[pyo3(get)]
-    pub reduction: PyReductionStrategy,
-}
-
-#[pymethods]
-impl PyAdditiveSchwarz {
-    #[new]
-    #[pyo3(signature = (local_solver=None, reduction=PyReductionStrategy::Auto))]
-    fn new(local_solver: Option<Py<PyLocalSolverConfig>>, reduction: PyReductionStrategy) -> Self {
-        Self {
-            local_solver,
-            reduction,
-        }
-    }
-}
-
-#[pyclass(frozen, module = "within._within")]
 #[pyo3(name = "LsmrOptions")]
 pub struct PyLsmrOptions {
     #[pyo3(get)]
@@ -454,7 +433,6 @@ impl PyPreconditioner {
 
 /// Must run under the GIL; the result is all-native, so it can move into a released closure.
 pub(crate) fn resolve_precond_input(
-    py: Python<'_>,
     preconditioner: Option<&Bound<'_, PyAny>>,
 ) -> PyResult<PreconditionerInput> {
     if let Some(obj) = preconditioner {
@@ -462,12 +440,11 @@ pub(crate) fn resolve_precond_input(
             return Ok(PreconditionerInput::Prebuilt(built.get().inner.clone()));
         }
     }
-    Ok(extract_preconditioner_config(py, preconditioner)?
+    Ok(extract_preconditioner_config(preconditioner)?
         .map_or(PreconditionerInput::Default, PreconditionerInput::Config))
 }
 
 fn extract_preconditioner_config(
-    py: Python<'_>,
     preconditioner: Option<&Bound<'_, PyAny>>,
 ) -> PyResult<Option<PreconditionerConfig>> {
     let Some(obj) = preconditioner else {
@@ -478,23 +455,8 @@ fn extract_preconditioner_config(
         return Ok(Some(config.get().to_native()));
     }
 
-    if let Ok(schwarz) = obj.cast::<PyAdditiveSchwarz>() {
-        let s = schwarz.get();
-        let local = s
-            .local_solver
-            .as_ref()
-            .map(|c| c.bind(py).get().to_native(py))
-            .unwrap_or_default();
-        let reduction = s.reduction.to_native();
-        return Ok(Some(PreconditionerConfig::Additive {
-            local_solver: local,
-            reduction,
-        }));
-    }
-
     Err(PyErr::new::<pyo3::exceptions::PyTypeError, _>(
-        "preconditioner must be PreconditionerConfig.Additive, PreconditionerConfig.Off, \
-         PreconditionerConfig.Diagonal, AdditiveSchwarz(...), a pre-built Preconditioner, or None",
+        "preconditioner must be a PreconditionerConfig, a pre-built Preconditioner, or None",
     ))
 }
 

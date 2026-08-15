@@ -9,6 +9,7 @@ and this project follows [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+- **BREAKING:** Python preconditioner selection is unified under the immutable `PreconditionerConfig` value class: the existing `.Additive`, `.Off`, and `.Diagonal` values remain, while `.additive(...)` replaces the separate `AdditiveSchwarz` class for tuned configurations.
 - **BREAKING:** The serialized `Preconditioner` wire format changed (v13 → v14) to retain its complete construction config and configured reduction strategy; older additive payloads no longer decode.
 - **BREAKING:** The serialized `Preconditioner` wire format changed (v14 → v15) to retain its original build duration; older payloads no longer decode.
 - Rust `Preconditioner` objects expose their normalized construction configuration through `Preconditioner::config()`.

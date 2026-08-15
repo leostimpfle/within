@@ -141,7 +141,6 @@ The `preconditioner` argument accepts any of:
 | `PreconditionerConfig.Additive` | Additive Schwarz shortcut, equivalent to `None`. |
 | `PreconditionerConfig.Diagonal` | Diagonal/Jacobi preconditioner using `diag(D^T W D)^{-1}`. |
 | `PreconditionerConfig.additive(local_solver?, reduction?)` | Tuned additive Schwarz configuration. Advanced argument types are available from `within.config`. |
-| `AdditiveSchwarz(local_solver?, reduction?)` | Existing tuned Schwarz configuration API — import from `within.config`. |
 | `Preconditioner` instance | Reuse a previously-built preconditioner across solvers. |
 
 `PreconditionerConfig` instances compare by value. A built preconditioner exposes
